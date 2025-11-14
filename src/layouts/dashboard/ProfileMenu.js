@@ -1,32 +1,45 @@
 import React from "react";
 import { Avatar, Box, Fade, Menu, MenuItem, Stack } from "@mui/material";
-
-import { faker } from "@faker-js/faker";
-
 import { Profile_Menu } from "../../data";
 import { useDispatch, useSelector } from "react-redux";
-import { LogoutUser } from "../../redux/slices/auth";
+import { signOut } from "../../redux/slices/auth";
 import { socket } from "../../socket";
 import { useNavigate } from "react-router-dom";
 import { AWS_S3_REGION, S3_BUCKET_NAME } from "../../config";
+import { useKeycloak } from "@react-keycloak/web";
 
 const ProfileMenu = () => {
-  const {user} = useSelector((state) => state.app);
-  const navigate = useNavigate();
+  const { user } = useSelector((state) => state.app);
   const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const { keycloak } = useKeycloak();
+
   const [anchorEl, setAnchorEl] = React.useState(null);
   const openMenu = Boolean(anchorEl);
-  const handleClick = (event) => {
-    setAnchorEl(event.currentTarget);
-  };
-  const handleClose = () => {
-    setAnchorEl(null);
-  };
+
+  const handleClick = (event) => setAnchorEl(event.currentTarget);
+  const handleClose = () => setAnchorEl(null);
 
   const user_id = window.localStorage.getItem("user_id");
+  const user_name = user?.firstName || "User";
+  const user_img = user?.avatar
+    ? `https://${S3_BUCKET_NAME}.s3.${AWS_S3_REGION}.amazonaws.com/${user.avatar}`
+    : "";
 
-  const user_name = user?.firstName;
-  const user_img = `https://${S3_BUCKET_NAME}.s3.${AWS_S3_REGION}.amazonaws.com/${user?.avatar}`;
+  const handleLogout = () => {
+    handleClose();
+
+    // 1️⃣ Reset Redux state
+    dispatch(signOut());
+
+    // 2️⃣ Emit end socket
+    socket.emit("end", { user_id });
+
+    // 3️⃣ Logout Keycloak và redirect về homepage
+    keycloak.logout({
+      redirectUri: window.location.origin,
+    });
+  };
 
   return (
     <>
@@ -39,50 +52,36 @@ const ProfileMenu = () => {
         src={user_img}
         onClick={handleClick}
       />
+
       <Menu
-        MenuListProps={{
-          "aria-labelledby": "fade-button",
-        }}
+        MenuListProps={{ "aria-labelledby": "fade-button" }}
         TransitionComponent={Fade}
         id="profile-positioned-menu"
         aria-labelledby="profile-positioned-button"
         anchorEl={anchorEl}
         open={openMenu}
         onClose={handleClose}
-        anchorOrigin={{
-          vertical: "bottom",
-          horizontal: "right",
-        }}
-        transformOrigin={{
-          vertical: "bottom",
-          horizontal: "left",
-        }}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "bottom", horizontal: "left" }}
       >
         <Box p={1}>
           <Stack spacing={1}>
             {Profile_Menu.map((el, idx) => (
-              <MenuItem onClick={handleClose}>
+              <MenuItem key={idx} onClick={handleClose}>
                 <Stack
                   onClick={() => {
-                    if(idx === 0) {
-                      navigate("/profile");
-                    }
-                    else if(idx === 1) {
-                      navigate("/settings");
-                    }
-                    else {
-                      dispatch(LogoutUser());
-                      socket.emit("end", {user_id});
-                    }
+                    if (idx === 0) navigate("/profile");
+                    else if (idx === 1) navigate("/settings");
+                    else handleLogout(); // 🔹 dùng hàm logout mới
                   }}
                   sx={{ width: 100 }}
                   direction="row"
-                  alignItems={"center"}
+                  alignItems="center"
                   justifyContent="space-between"
                 >
                   <span>{el.title}</span>
                   {el.icon}
-                </Stack>{" "}
+                </Stack>
               </MenuItem>
             ))}
           </Stack>

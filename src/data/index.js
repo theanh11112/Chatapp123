@@ -8,6 +8,7 @@ import {
   User,
   Users,
 } from "phosphor-react";
+import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 
 const Profile_Menu = [
   {
@@ -28,14 +29,22 @@ const Nav_Buttons = [
   {
     index: 0,
     icon: <ChatCircleDots />,
+    roles: ["user", "admin", "moderator", "guest"],
   },
   {
     index: 1,
     icon: <Users />,
+    roles: ["user", "admin", "moderator", "guest"],
   },
   {
     index: 2,
     icon: <Phone />,
+    roles: ["user", "admin", "moderator", "guest"],
+  },
+   {
+    index: 4,
+    icon: <AdminPanelSettingsIcon />,
+    roles: ["admin"], // chỉ admin thấy
   },
 ];
 
@@ -43,6 +52,7 @@ const Nav_Setting = [
   {
     index: 3,
     icon: <GearSix />,
+    roles: ["user", "admin", "moderator", "guest"],
   },
 ];
 

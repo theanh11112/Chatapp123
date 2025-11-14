@@ -11,6 +11,7 @@ import SettingsProvider from "./contexts/SettingsContext";
 import { AuthProvider } from "./contexts/AuthContext";
 import { ReactKeycloakProvider } from "@react-keycloak/web"; // ✅ thêm dòng này
 import keycloak from "./auth/keycloak"; // ✅ import instance
+import './locales/i18n';
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 
@@ -26,12 +27,12 @@ root.render(
     >
       <HelmetProvider>
         <ReduxProvider store={store}>
-          <SettingsProvider>
+          <SettingsProvider> 
+          <BrowserRouter>
             <AuthProvider>
-              <BrowserRouter>
-                <App />
-              </BrowserRouter>
+                <App />       
             </AuthProvider>
+            </BrowserRouter>
           </SettingsProvider>
         </ReduxProvider>
       </HelmetProvider>

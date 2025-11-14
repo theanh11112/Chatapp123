@@ -1,33 +1,30 @@
-import { Link as RouterLink } from "react-router-dom";
-// sections
-import { Stack, Typography, Link } from "@mui/material";
-import AuthSocial from "../../sections/auth/AuthSocial";
-import Login from "../../sections/auth/LoginForm";
+import { useContext } from "react";
+import { Stack, Typography, Button } from "@mui/material";
+import { AuthContext } from "../../contexts/AuthContext";
 
 // ----------------------------------------------------------------------
 
 export default function LoginPage() {
+  const { login } = useContext(AuthContext);
+
   return (
     <>
       <Stack spacing={2} sx={{ mb: 5, position: "relative" }}>
-        <Typography variant="h4">Login to Tawk111</Typography>
-
-        <Stack direction="row" spacing={0.5}>
-          <Typography variant="body2">New user?</Typography>
-
-          <Link
-            to={"/auth/register"}
-            component={RouterLink}
-            variant="subtitle2"
-          >
-            Create an account
-          </Link>
-        </Stack>
+        <Typography variant="h4">Login to Tawk</Typography>
+        <Typography variant="body2">
+          Sign in using your Keycloak account
+        </Typography>
       </Stack>
-      {/* Form */}
-      <Login />
 
-      <AuthSocial />
+      {/* Nút đăng nhập Keycloak */}
+      <Button
+        variant="contained"
+        color="primary"
+        size="large"
+        onClick={login}
+      >
+        🔐 Login with Keycloak
+      </Button>
     </>
   );
 }

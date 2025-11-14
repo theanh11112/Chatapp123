@@ -1,14 +1,19 @@
-import axios from 'axios';
-// config
-import { BASE_URL } from '../config';
+// src/utils/axios.js
+import axios from "axios";
+import keycloak from "../auth/keycloak";
+import { BASE_URL } from "../config";
 
-// ----------------------------------------------------------------------
+const api = axios.create({ baseURL: BASE_URL });
 
-const axiosInstance = axios.create({ baseURL: BASE_URL });
-
-axiosInstance.interceptors.response.use(
-  (response) => response,
-  (error) => Promise.reject((error.response && error.response.data) || 'Something went wrong')
+api.interceptors.request.use(
+  async (config) => {
+    if (keycloak?.authenticated) {
+      await keycloak.updateToken(60);
+      config.headers.Authorization = `Bearer ${keycloak.token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
 );
 
-export default axiosInstance;
+export default api;

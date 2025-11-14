@@ -14,7 +14,6 @@ import { socket } from "./socket";
 const vertical = "bottom";
 const horizontal = "center";
 
-console.log("Router:", Router);
 
 const Alert = React.forwardRef((props, ref) => (
   <MuiAlert elevation={6} ref={ref} variant="filled" {...props} />
