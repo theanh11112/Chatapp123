@@ -41,7 +41,7 @@ const GeneralApp = () => {
         >
           {chat_type === "individual" &&
           room_id !== null ? (
-            {/* <ChatComponent /> */}
+            <ChatComponent />
           ) : (
             <Stack
               spacing={2}

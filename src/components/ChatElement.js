@@ -3,13 +3,17 @@ import React from "react";
 import { Box, Badge, Stack, Avatar, Typography } from "@mui/material";
 import { styled, useTheme, alpha } from "@mui/material/styles";
 import { useDispatch, useSelector } from "react-redux";
-import { FetchCurrentMessages, SetCurrentConversation } from "../redux/slices/conversation";
-import { getSocket, socketEvents } from "../socket"; // socket helpers
+import {
+  FetchCurrentMessages,
+  SetCurrentConversation,
+} from "../redux/slices/conversation";
+import { SelectConversation } from "../redux/slices/app";
 
-const truncateText = (string, n) => {
-  return string?.length > n ? `${string?.slice(0, n)}...` : string;
-};
+// Hàm rút ngắn nội dung tin nhắn
+const truncateText = (text, n) =>
+  text?.length > n ? `${text.slice(0, n)}...` : text;
 
+// Styled components
 const StyledChatBox = styled(Box)(({ theme }) => ({
   "&:hover": { cursor: "pointer" },
 }));
@@ -37,43 +41,43 @@ const StyledBadge = styled(Badge)(({ theme }) => ({
   },
 }));
 
-const ChatElement = ({ img, name, msg, time, unread, online, id, conversation }) => {
+const ChatElement = ({
+  img,
+  name,
+  msg,
+  time,
+  unread,
+  online,
+  currentRoomId,
+  conversation,
+}) => {
   const dispatch = useDispatch();
+  const theme = useTheme();
   const { room_id } = useSelector((state) => state.app);
   const selectedChatId = room_id?.toString();
-  const theme = useTheme();
-  const isSelected = selectedChatId === id;
+  const isSelected = selectedChatId === currentRoomId?.toString();
 
-  const handleClick = async () => {
-    let socket = getSocket();
+  const { keycloak } = useSelector((state) => state.auth || {});
+  const currentUserId = keycloak?.sub || null;
 
-    if (!socket || !socket.connected) {
-      console.log("🟡 Socket chưa kết nối, chờ ready...");
-      await new Promise((resolve) => {
-        const onReady = () => {
-          socketEvents.off("socket_ready", onReady);
-          resolve();
-        };
-        socketEvents.on("socket_ready", onReady);
-      });
-      socket = getSocket();
-    }
+  // Khi click vào chat
+  const handleClick = () => {
+    if (room_id === currentRoomId) return; // Nếu đã chọn rồi thì không làm gì
 
-    console.log("➡️ Chọn cuộc trò chuyện:", id,conversation);
-    console.log("🟢 Socket đã kết nối.");
+    // Dispatch messages hiện có trong props conversation
+    dispatch(FetchCurrentMessages({ messages: conversation, currentUserId }));
+    console.log("✅ Dispatch FetchCurrentMessages từ conversation props");
 
-    if (!socket) {
-      console.warn("⚠️ Socket vẫn chưa sẵn sàng!");
-      return;
-    }
-
-    // 1️⃣ Gọi socket để lấy messages
-    socket.emit("get_direct_messages", { conversation_id: id }, (messages) => {
-      dispatch(FetchCurrentMessages({ messages })); // cập nhật vào conversation slice
-    });
-
-    // 2️⃣ Cập nhật conversation hiện tại
+    // Cập nhật conversation hiện tại
     dispatch(SetCurrentConversation(conversation));
+    console.log(
+      "✅ Dispatch SetCurrentConversation với conversation:",
+      conversation
+    );
+
+    // ✅ Cập nhật room_id trong app slice
+    dispatch(SelectConversation({ room_id: currentRoomId }));
+    console.log("✅ Dispatch SelectConversation với room_id:", currentRoomId);
   };
 
   return (

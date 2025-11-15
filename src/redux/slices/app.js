@@ -27,7 +27,7 @@ const initialState = {
   chat_type: null,
   room_id: null,
   call_logs: [],
-  messages: [],            // <-- thêm dòng này
+  messages: [], // <-- thêm dòng này
 };
 
 // ----------------------------------------------------------------------
@@ -87,6 +87,9 @@ const slice = createSlice({
     // --------------------------------------------------------
     setMessages(state, action) {
       state.messages = action.payload.messages;
+    },
+    resetAppState(state) {
+      return initialState;
     },
   },
 });
@@ -166,9 +169,12 @@ export const FetchFriendRequests = () => async (dispatch) => {
 };
 
 // select conversation
-export const SelectConversation = ({ room_id }) => (dispatch) => {
-  dispatch(slice.actions.selectConversation({ room_id }));
-};
+export const SelectConversation =
+  ({ room_id }) =>
+  (dispatch) => {
+    console.log("888", room_id);
+    dispatch(slice.actions.selectConversation({ room_id }));
+  };
 
 // call logs
 export const FetchCallLogs = () => async (dispatch) => {
@@ -224,6 +230,8 @@ export const UpdateUserProfile = (formValues) => async (dispatch) => {
 // 👉 EXPORT ACTION SetMessages
 // ----------------------------------------------------------------------
 
-export const SetMessages = ({ messages }) => (dispatch) => {
-  dispatch(slice.actions.setMessages({ messages }));
-};
+export const SetMessages =
+  ({ messages }) =>
+  (dispatch) => {
+    dispatch(slice.actions.setMessages({ messages }));
+  };
