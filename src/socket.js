@@ -1,6 +1,8 @@
 // src/socket.js
 import { io } from "socket.io-client";
 import { EventEmitter } from "events";
+import { store } from "./redux/store";
+import { updateUserPresence } from "./redux/slices/conversation";
 
 let socket = null;
 export const socketEvents = new EventEmitter(); // dùng để emit "ready"
@@ -20,6 +22,10 @@ export const connectSocket = (token) => {
     socket.on("connect", () => {
       console.log("✅ Socket connected → id:", socket.id);
       socketEvents.emit("socket_ready", socket); // phát event khi connect
+    });
+
+    socket.on("presence_update", ({ userId, status, lastSeen }) => {
+      store.dispatch(updateUserPresence({ userId, status, lastSeen }));
     });
 
     socket.on("disconnect", (reason) => {

@@ -1,7 +1,20 @@
-// conversationSlice.js
 import { createSlice } from "@reduxjs/toolkit";
 import { faker } from "@faker-js/faker";
 import { AWS_S3_REGION, S3_BUCKET_NAME } from "../../config";
+import { timeAgo } from "../../utils/timeAgo";
+
+const parseTimestamp = (ts) => {
+  const t = new Date(ts).getTime();
+  return isNaN(t) ? null : t;
+};
+
+const formatMessageTime = (ts) =>
+  ts
+    ? new Date(ts).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
 
 const initialState = {
   direct_chat: {
@@ -18,166 +31,94 @@ const slice = createSlice({
   name: "conversation",
   initialState,
   reducers: {
+    // ---------------- Loading & Error ----------------
     fetchDirectConversationsStart(state) {
       state.direct_chat.isLoading = true;
       state.direct_chat.error = null;
     },
-
     fetchDirectConversationsSuccess(state, action) {
       const { conversations, currentUserId } = action.payload;
 
-      state.direct_chat.conversations = conversations.map((el) => {
-        const user = el.participants.find(
-          (p) => p?.keycloakId?.toString() !== currentUserId
+      state.direct_chat.conversations = conversations.map((conv) => {
+        const user = conv.participants.find(
+          (p) => p.keycloakId !== currentUserId
         );
-        const lastMessageObj = el.messages?.length
-          ? el.messages.slice(-1)[0]
-          : null;
+        const lastMsg = conv.messages?.slice(-1)[0];
 
-        let time = "";
-        if (lastMessageObj?.createdAt) {
-          let timestamp;
-          if (
-            typeof lastMessageObj.createdAt === "object" &&
-            lastMessageObj.createdAt.$date?.$numberLong
-          ) {
-            timestamp = parseInt(
-              lastMessageObj.createdAt.$date.$numberLong,
-              10
-            );
-          } else {
-            timestamp = new Date(lastMessageObj.createdAt).getTime();
-          }
-          time = new Date(timestamp).toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          });
-        }
+        const lastSeenTs = parseTimestamp(user?.lastSeen);
 
         return {
-          id: el._id,
-          user_id: user?._id || null,
+          id: conv._id,
+          user_id: user?.keycloakId || null,
           name: `${user?.username || ""} ${user?.lastName || ""}`,
           online: user?.status === "Online",
           img: user?.avatar
             ? `https://${S3_BUCKET_NAME}.s3.${AWS_S3_REGION}.amazonaws.com/${user.avatar}`
-            : faker.image.avatar(),
-          msg: lastMessageObj?.content || "",
-          time,
+            : `https://i.pravatar.cc/150?u=${user?.keycloakId}`,
+          msg: lastMsg?.content || lastMsg?.text || "",
+          time: formatMessageTime(lastMsg?.createdAt),
           unread: 0,
           pinned: false,
           about: user?.about || "",
-          messages: el.messages || [], // <-- thêm messages vào đây
+          messages: conv.messages || [],
+          lastSeen: lastSeenTs ? timeAgo(lastSeenTs) : "",
         };
       });
+      state.direct_chat.current_conversation =
+        state.direct_chat.conversations.find(
+          (c) => c.id === conversations[0]._id
+        ) ||
+        state.direct_chat.conversations[0] ||
+        null;
 
       state.direct_chat.isLoading = false;
     },
-
     fetchDirectConversationsFail(state, action) {
       state.direct_chat.isLoading = false;
       state.direct_chat.error = action.payload.error;
     },
 
-    updateDirectConversation(state, action) {
+    // ---------------- Conversation Updates ----------------
+    addOrUpdateConversation(state, action) {
       const { conversation, currentUserId } = action.payload;
 
-      state.direct_chat.conversations = state.direct_chat.conversations.map(
-        (el) => {
-          if (el?.id !== conversation._id) return el;
-
-          const user = conversation.participants.find(
-            (p) => p?.keycloakId?.toString() !== currentUserId
-          );
-          const lastMessageObj = conversation.messages?.length
-            ? conversation.messages.slice(-1)[0]
-            : null;
-
-          let time = "";
-          if (lastMessageObj?.createdAt) {
-            let timestamp;
-            if (
-              typeof lastMessageObj.createdAt === "object" &&
-              lastMessageObj.createdAt.$date?.$numberLong
-            ) {
-              timestamp = parseInt(
-                lastMessageObj.createdAt.$date.$numberLong,
-                10
-              );
-            } else {
-              timestamp = new Date(lastMessageObj.createdAt).getTime();
-            }
-            time = new Date(timestamp).toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            });
-          }
-
-          return {
-            id: conversation._id,
-            user_id: user?._id || null,
-            name: `${user?.username || ""} ${user?.lastName || ""}`,
-            online: user?.status === "Online",
-            img: user?.avatar
-              ? `https://${S3_BUCKET_NAME}.s3.${AWS_S3_REGION}.amazonaws.com/${user.avatar}`
-              : faker.image.avatar(),
-            msg: lastMessageObj?.content || "",
-            time,
-            unread: 0,
-            pinned: false,
-            about: user?.about || "",
-            messages: conversation.messages || [], // <-- thêm messages
-          };
-        }
+      const existingConvIndex = state.direct_chat.conversations.findIndex(
+        (c) => c.id === conversation._id
       );
-    },
 
-    addDirectConversation(state, action) {
-      const { conversation, currentUserId } = action.payload;
-
-      const user = conversation.participants.find(
-        (p) => p?.keycloakId?.toString() !== currentUserId
-      );
-      const lastMessageObj = conversation.messages?.length
-        ? conversation.messages.slice(-1)[0]
-        : null;
-
-      let time = "";
-      if (lastMessageObj?.createdAt) {
-        let timestamp;
-        if (
-          typeof lastMessageObj.createdAt === "object" &&
-          lastMessageObj.createdAt.$date?.$numberLong
-        ) {
-          timestamp = parseInt(lastMessageObj.createdAt.$date.$numberLong, 10);
-        } else {
-          timestamp = new Date(lastMessageObj.createdAt).getTime();
-        }
-        time = new Date(timestamp).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        });
+      // Nếu participants undefined, fallback user_id từ conversation
+      let user = null;
+      if (conversation.participants) {
+        user = conversation.participants.find(
+          (p) => p.keycloakId !== currentUserId
+        );
       }
 
-      state.direct_chat.conversations = state.direct_chat.conversations.filter(
-        (el) => el?.id !== conversation._id
-      );
+      const lastMsg = conversation.messages?.slice(-1)[0];
+      const lastSeenTs = parseTimestamp(user?.lastSeen);
 
-      state.direct_chat.conversations.push({
+      const convData = {
         id: conversation._id,
-        user_id: user?._id || null,
-        name: `${user?.username || ""} ${user?.lastName || ""}`,
-        online: user?.status === "Online",
+        user_id: user?.keycloakId || conversation.user_id || null, // fallback
+        name: user ? `${user.username} ${user.lastName || ""}` : "Unknown",
+        online: user?.status === "Online" || false,
         img: user?.avatar
           ? `https://${S3_BUCKET_NAME}.s3.${AWS_S3_REGION}.amazonaws.com/${user.avatar}`
           : faker.image.avatar(),
-        msg: lastMessageObj?.content || "",
-        time,
+        msg: lastMsg?.content || lastMsg?.text || "",
+        time: formatMessageTime(lastMsg?.createdAt),
         unread: 0,
         pinned: false,
         about: user?.about || "",
-        messages: conversation.messages || [], // <-- thêm messages
-      });
+        messages: conversation.messages || [],
+        lastSeen: lastSeenTs ? timeAgo(lastSeenTs) : "",
+      };
+
+      if (existingConvIndex !== -1) {
+        state.direct_chat.conversations[existingConvIndex] = convData;
+      } else {
+        state.direct_chat.conversations.push(convData);
+      }
     },
 
     setCurrentConversation(state, action) {
@@ -186,97 +127,144 @@ const slice = createSlice({
 
     fetchCurrentMessages(state, action) {
       const { messages, currentUserId } = action.payload;
-
-      const formatted = messages.map((m) => {
-        // Xử lý timestamp
-        let timestamp = 0;
-        if (m.createdAt) {
-          if (
-            typeof m.createdAt === "object" &&
-            m.createdAt.$date?.$numberLong
-          ) {
-            timestamp = parseInt(m.createdAt.$date.$numberLong, 10);
-          } else {
-            timestamp = new Date(m.createdAt).getTime();
-          }
-        }
-
-        const time = new Date(timestamp).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        });
-        const fromId = m.from?.toString();
-        const toId = m.to?.toString();
-
-        return {
-          id: m._id,
-          type: "msg",
-          subtype: m.type || "text",
-          message: m.content || "",
-          incoming: toId === currentUserId, // Tin nhắn tới mình
-          outgoing: fromId === currentUserId, // Tin nhắn của mình
-          time, // Giờ gửi
-          attachments: m.attachments || [], // giữ nguyên attachments nếu có
-        };
-      });
-
-      state.direct_chat.current_messages = formatted;
+      state.direct_chat.current_messages = messages.map((m) => ({
+        id: m._id,
+        type: "msg",
+        subtype: m.type || "text",
+        message: m.content || "",
+        incoming: m.to?.toString() === currentUserId,
+        outgoing: m.from?.toString() === currentUserId,
+        time: formatMessageTime(m.createdAt),
+        attachments: m.attachments || [],
+      }));
     },
+
     addDirectMessage(state, action) {
-      if (action.payload?.message) {
-        state.direct_chat.current_messages.push(action.payload.message);
+      const { message, conversation_id } = action.payload;
+
+      if (!message) return;
+
+      // 1️⃣ Append vào current_messages
+      state.direct_chat.current_messages.push(message);
+
+      // 2️⃣ Append vào đúng conversation
+      const conv = state.direct_chat.conversations.find(
+        (c) =>
+          c.id === state.direct_chat.current_conversation?.id ||
+          c.id === conversation_id
+      );
+      console.log(
+        "➡️ Thêm message vào conversation:",
+        conv._id,
+        conv.message,
+        conv,
+        state.direct_chat.conversations
+      );
+      if (conv) {
+        if (!conv.messages) conv.messages = [];
+
+        conv.messages.push({
+          _id: message.id,
+          content: message.message,
+          type: message.subtype,
+          from: message.outgoing ? message.from : message.to,
+          to: message.incoming ? message.to : message.from,
+          createdAt: new Date().toISOString(),
+          attachments: message.attachments || [],
+        });
+
+        conv.msg = message.message;
+        conv.time = message.time;
       }
+    },
+
+    updateUserPresence(state, action) {
+      const { userId, status, lastSeen } = action.payload;
+      const lastSeenTs = parseTimestamp(lastSeen);
+
+      state.direct_chat.conversations = state.direct_chat.conversations.map(
+        (c) =>
+          c.user_id === userId
+            ? {
+                ...c,
+                online: status === "Online",
+                lastSeen: lastSeenTs ? timeAgo(lastSeenTs) : c.lastSeen,
+              }
+            : c
+      );
+
+      if (state.direct_chat.current_conversation?.user_id === userId) {
+        state.direct_chat.current_conversation.online = status === "Online";
+        state.direct_chat.current_conversation.lastSeen = lastSeenTs
+          ? timeAgo(lastSeenTs)
+          : state.direct_chat.current_conversation.lastSeen;
+      }
+    },
+
+    resetConversationState(state) {
+      state.direct_chat = {
+        conversations: [],
+        current_conversation: null,
+        current_messages: [],
+        isLoading: false,
+        error: null,
+      };
+      state.group_chat = {};
     },
   },
 });
 
 export default slice.reducer;
 
-// ---------------- Action Creators ----------------
-export const FetchDirectConversations =
+export const {
+  fetchDirectConversationsStart,
+  fetchDirectConversationsSuccess,
+  fetchDirectConversationsFail,
+  addOrUpdateConversation,
+  setCurrentConversation,
+  fetchCurrentMessages,
+  addDirectMessage,
+  updateUserPresence,
+  resetConversationState,
+} = slice.actions;
+
+// ---------------- Thunks ----------------
+export const fetchDirectConversations =
   ({ conversations, currentUserId }) =>
   async (dispatch) => {
+    dispatch(fetchDirectConversationsStart());
     try {
-      dispatch(slice.actions.fetchDirectConversationsStart());
       dispatch(
-        slice.actions.fetchDirectConversationsSuccess({
-          conversations,
-          currentUserId,
-        })
+        fetchDirectConversationsSuccess({ conversations, currentUserId })
       );
     } catch (error) {
-      dispatch(slice.actions.fetchDirectConversationsFail({ error }));
+      dispatch(fetchDirectConversationsFail({ error }));
     }
   };
 
-export const AddDirectConversation =
+export const addDirectConversation =
   ({ conversation, currentUserId }) =>
   async (dispatch) => {
-    dispatch(
-      slice.actions.addDirectConversation({ conversation, currentUserId })
-    );
+    dispatch(addOrUpdateConversation({ conversation, currentUserId }));
   };
 
-export const UpdateDirectConversation =
+export const updateDirectConversation =
   ({ conversation, currentUserId }) =>
   async (dispatch) => {
-    dispatch(
-      slice.actions.updateDirectConversation({ conversation, currentUserId })
-    );
+    dispatch(addOrUpdateConversation({ conversation, currentUserId }));
   };
 
-export const SetCurrentConversation =
+export const setCurrentDirectConversation =
   (current_conversation) => async (dispatch) => {
-    console.log("222", current_conversation);
-    dispatch(slice.actions.setCurrentConversation(current_conversation));
+    dispatch(setCurrentConversation(current_conversation));
   };
 
-export const FetchCurrentMessages =
+export const fetchCurrentDirectMessages =
   ({ messages, currentUserId }) =>
   async (dispatch) => {
-    dispatch(slice.actions.fetchCurrentMessages({ messages, currentUserId }));
+    dispatch(fetchCurrentMessages({ messages, currentUserId }));
   };
 
-export const AddDirectMessage = (message) => async (dispatch) => {
-  dispatch(slice.actions.addDirectMessage({ message }));
+export const addDirectMessageThunk = (message) => async (dispatch) => {
+  dispatch(addDirectMessage({ message }));
 };

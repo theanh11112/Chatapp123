@@ -14,8 +14,8 @@ import {
 } from "../../sections/dashboard/Conversation";
 import { useDispatch, useSelector } from "react-redux";
 import {
-  FetchCurrentMessages,
-  SetCurrentConversation,
+  fetchCurrentMessages,
+  setCurrentConversation,
 } from "../../redux/slices/conversation";
 import { useKeycloak } from "@react-keycloak/web";
 
@@ -47,9 +47,9 @@ const Conversation = ({ isMobile, menu }) => {
     const current = conversations.find((el) => el?.id === room_id);
     if (!current) return;
     dispatch(
-      FetchCurrentMessages({ messages: current.messages, currentUserId })
+      fetchCurrentMessages({ messages: current.messages, currentUserId })
     );
-    dispatch(SetCurrentConversation(current));
+    dispatch(setCurrentConversation(current));
   }, [room_id, conversations, currentUserId, dispatch]);
 
   // --- Drag handlers ---

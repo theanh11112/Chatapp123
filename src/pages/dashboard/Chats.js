@@ -25,7 +25,7 @@ import {
 } from "../../components/Search";
 import Friends from "../../sections/dashboard/Friends";
 import { useDispatch, useSelector } from "react-redux";
-import { FetchDirectConversations } from "../../redux/slices/conversation";
+import { fetchDirectConversations } from "../../redux/slices/conversation";
 import { useKeycloak } from "@react-keycloak/web";
 import { getSocket, socketEvents } from "../../socket";
 
@@ -45,7 +45,6 @@ const Chats = () => {
     initialized && keycloak.authenticated ? keycloak.tokenParsed?.sub : null;
 
   // Fetch conversations via socket
-  console.log("444", conversations);
   useEffect(() => {
     if (!keycloakId) return;
 
@@ -55,8 +54,12 @@ const Chats = () => {
         "get_direct_conversations",
         { keycloakId: currentUserId },
         (conversations) => {
-          dispatch(FetchDirectConversations({ conversations, currentUserId }));
           console.log("📥 Conversations received from server:", conversations);
+          dispatch(fetchDirectConversations({ conversations, currentUserId }));
+          console.log(
+            "📥 Conversations received from server:1111",
+            conversations
+          );
         }
       );
     };

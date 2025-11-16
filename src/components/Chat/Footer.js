@@ -24,7 +24,8 @@ import useResponsive from "../../hooks/useResponsive";
 import data from "@emoji-mart/data";
 import Picker from "@emoji-mart/react";
 import { socket } from "../../socket";
-import { useSelector } from "react-redux";
+import { useSelector, useDispatch } from "react-redux";
+import { addDirectMessage } from "../../redux/slices/conversation";
 
 const StyledInput = styled(TextField)(({ theme }) => ({
   "& .MuiInputBase-input": {
@@ -34,36 +35,11 @@ const StyledInput = styled(TextField)(({ theme }) => ({
 }));
 
 const Actions = [
-  {
-    color: "#4da5fe",
-    icon: <Image size={24} />,
-    y: 102,
-    title: "Photo/Video",
-  },
-  {
-    color: "#1b8cfe",
-    icon: <Sticker size={24} />,
-    y: 172,
-    title: "Stickers",
-  },
-  {
-    color: "#0172e4",
-    icon: <Camera size={24} />,
-    y: 242,
-    title: "Image",
-  },
-  {
-    color: "#0159b2",
-    icon: <File size={24} />,
-    y: 312,
-    title: "Document",
-  },
-  {
-    color: "#013f7f",
-    icon: <User size={24} />,
-    y: 382,
-    title: "Contact",
-  },
+  { color: "#4da5fe", icon: <Image size={24} />, y: 102, title: "Photo/Video" },
+  { color: "#1b8cfe", icon: <Sticker size={24} />, y: 172, title: "Stickers" },
+  { color: "#0172e4", icon: <Camera size={24} />, y: 242, title: "Image" },
+  { color: "#0159b2", icon: <File size={24} />, y: 312, title: "Document" },
+  { color: "#013f7f", icon: <User size={24} />, y: 382, title: "Contact" },
 ];
 
 const ChatInput = ({
@@ -72,8 +48,9 @@ const ChatInput = ({
   setValue,
   value,
   inputRef,
+  handleSendMessage,
 }) => {
-  const [openActions, setOpenActions] = React.useState(false);
+  const [openActions, setOpenActions] = useState(false);
 
   return (
     <StyledInput
@@ -81,6 +58,12 @@ const ChatInput = ({
       value={value}
       onChange={(event) => {
         setValue(event.target.value);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          handleSendMessage();
+        }
       }}
       fullWidth
       placeholder="Write a message..."
@@ -96,17 +79,14 @@ const ChatInput = ({
               }}
             >
               {Actions.map((el) => (
-                <Tooltip placement="right" title={el.title}>
+                <Tooltip placement="right" title={el.title} key={el.title}>
                   <Fab
-                    onClick={() => {
-                      setOpenActions(!openActions);
-                    }}
+                    onClick={() => setOpenActions(!openActions)}
                     sx={{
                       position: "absolute",
                       top: -el.y,
                       backgroundColor: el.color,
                     }}
-                    aria-label="add"
                   >
                     {el.icon}
                   </Fab>
@@ -115,11 +95,7 @@ const ChatInput = ({
             </Stack>
 
             <InputAdornment>
-              <IconButton
-                onClick={() => {
-                  setOpenActions(!openActions);
-                }}
-              >
+              <IconButton onClick={() => setOpenActions(!openActions)}>
                 <LinkSimple />
               </IconButton>
             </InputAdornment>
@@ -128,11 +104,7 @@ const ChatInput = ({
         endAdornment: (
           <Stack sx={{ position: "relative" }}>
             <InputAdornment>
-              <IconButton
-                onClick={() => {
-                  setOpenPicker(!openPicker);
-                }}
-              >
+              <IconButton onClick={() => setOpenPicker(!openPicker)}>
                 <Smiley />
               </IconButton>
             </InputAdornment>
@@ -156,52 +128,87 @@ function containsUrl(text) {
   return urlRegex.test(text);
 }
 
+// ----------------------------------------------------------------------
 const Footer = () => {
   const theme = useTheme();
+  const dispatch = useDispatch();
 
   const { current_conversation } = useSelector(
     (state) => state.conversation.direct_chat
   );
+  const conversationId = current_conversation?.id;
+
+  const { sideBar, room_id } = useSelector((state) => state.app);
 
   const user_id = window.localStorage.getItem("user_id");
 
   const isMobile = useResponsive("between", "md", "xs", "sm");
 
-  const { sideBar, room_id } = useSelector((state) => state.app);
-
-  const [openPicker, setOpenPicker] = React.useState(false);
-
+  const [openPicker, setOpenPicker] = useState(false);
   const [value, setValue] = useState("");
   const inputRef = useRef(null);
 
-  function handleEmojiClick(emoji) {
+  const handleEmojiClick = (emoji) => {
     const input = inputRef.current;
-
     if (input) {
-      const selectionStart = input.selectionStart;
-      const selectionEnd = input.selectionEnd;
+      const start = input.selectionStart;
+      const end = input.selectionEnd;
 
-      setValue(
-        value.substring(0, selectionStart) +
-          emoji +
-          value.substring(selectionEnd)
-      );
+      setValue(value.slice(0, start) + emoji + value.slice(end));
 
-      // Move the cursor to the end of the inserted emoji
-      input.selectionStart = input.selectionEnd = selectionStart + 1;
+      input.selectionStart = input.selectionEnd = start + emoji.length;
     }
-  }
+  };
+
+  const handleSendMessage = () => {
+    if (!value.trim() || !current_conversation) return;
+
+    // -----------------------------
+    // 1️⃣ Format chuẩn theo slice mới
+    // -----------------------------
+    const messageData = {
+      id: Date.now(),
+      type: "msg",
+      subtype: containsUrl(value) ? "Link" : "Text",
+      message: value,
+      incoming: false,
+      outgoing: true,
+      time: new Date().toISOString(),
+      attachments: [],
+    };
+
+    // -----------------------------
+    // 2️⃣ Cập nhật UI ngay lập tức
+    // -----------------------------
+
+    dispatch(
+      addDirectMessage({
+        message: messageData,
+        conversation_id: conversationId,
+      })
+    );
+
+    // -----------------------------
+    // 3️⃣ Gửi lên server
+    // -----------------------------
+    socket.emit("text_message", {
+      message: linkify(value),
+      conversation_id: current_conversation?.id || room_id,
+      from: user_id,
+      to: current_conversation?.user_id,
+      type: containsUrl(value) ? "Link" : "Text",
+    });
+
+    setValue("");
+  };
 
   return (
     <Box
-      sx={{
-        position: "relative",
-        backgroundColor: "transparent !important",
-      }}
+      sx={{ position: "relative", backgroundColor: "transparent !important" }}
     >
       <Box
         p={isMobile ? 1 : 2}
-        width={"100%"}
+        width="100%"
         sx={{
           backgroundColor:
             theme.palette.mode === "light"
@@ -210,34 +217,35 @@ const Footer = () => {
           boxShadow: "0px 0px 2px rgba(0, 0, 0, 0.25)",
         }}
       >
-        <Stack direction="row" alignItems={"center"} spacing={isMobile ? 1 : 3}>
+        <Stack direction="row" alignItems="center" spacing={isMobile ? 1 : 3}>
           <Stack sx={{ width: "100%" }}>
-            <Box
-              style={{
-                zIndex: 10,
-                position: "fixed",
-                display: openPicker ? "inline" : "none",
-                bottom: 81,
-                right: isMobile ? 20 : sideBar.open ? 420 : 100,
-              }}
-            >
-              <Picker
-                theme={theme.palette.mode}
-                data={data}
-                onEmojiSelect={(emoji) => {
-                  handleEmojiClick(emoji.native);
+            {openPicker && (
+              <Box
+                sx={{
+                  zIndex: 10,
+                  position: "fixed",
+                  bottom: 81,
+                  right: isMobile ? 20 : sideBar.open ? 420 : 100,
                 }}
-              />
-            </Box>
-            {/* Chat Input */}
+              >
+                <Picker
+                  theme={theme.palette.mode}
+                  data={data}
+                  onEmojiSelect={(e) => handleEmojiClick(e.native)}
+                />
+              </Box>
+            )}
+
             <ChatInput
               inputRef={inputRef}
               value={value}
               setValue={setValue}
               openPicker={openPicker}
               setOpenPicker={setOpenPicker}
+              handleSendMessage={handleSendMessage}
             />
           </Stack>
+
           <Box
             sx={{
               height: 48,
@@ -248,21 +256,11 @@ const Footer = () => {
           >
             <Stack
               sx={{ height: "100%" }}
-              alignItems={"center"}
+              alignItems="center"
               justifyContent="center"
             >
-              <IconButton
-                onClick={() => {
-                  socket.emit("text_message", {
-                    message: linkify(value),
-                    conversation_id: room_id,
-                    from: user_id,
-                    to: current_conversation.user_id,
-                    type: containsUrl(value) ? "Link" : "Text",
-                  });
-                }}
-              >
-                <PaperPlaneTilt color="#ffffff" />
+              <IconButton onClick={handleSendMessage}>
+                <PaperPlaneTilt color="#fff" />
               </IconButton>
             </Stack>
           </Box>

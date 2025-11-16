@@ -20,6 +20,7 @@ import { ToggleSidebar } from "../../redux/slices/app";
 import { useDispatch, useSelector } from "react-redux";
 import { StartAudioCall } from "../../redux/slices/audioCall";
 import { StartVideoCall } from "../../redux/slices/videoCall";
+import { timeAgo } from "../../utils/timeAgo";
 
 const StyledBadge = styled(Badge)(({ theme }) => ({
   "& .MuiBadge-badge": {
@@ -70,7 +71,9 @@ const ChatHeader = () => {
   const isMobile = useResponsive("between", "md", "xs", "sm");
   const theme = useTheme();
 
-  const {current_conversation} = useSelector((state) => state.conversation.direct_chat);
+  const { current_conversation } = useSelector(
+    (state) => state.conversation.direct_chat
+  );
 
   const [conversationMenuAnchorEl, setConversationMenuAnchorEl] =
     React.useState(null);
@@ -78,6 +81,7 @@ const ChatHeader = () => {
   const handleClickConversationMenu = (event) => {
     setConversationMenuAnchorEl(event.currentTarget);
   };
+  console.log("conversationMenuAnchorEl", current_conversation);
   const handleCloseConversationMenu = () => {
     setConversationMenuAnchorEl(null);
   };
@@ -111,11 +115,8 @@ const ChatHeader = () => {
             <Box>
               <StyledBadge
                 overlap="circular"
-                anchorOrigin={{
-                  vertical: "bottom",
-                  horizontal: "right",
-                }}
-                variant="dot"
+                anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+                variant={current_conversation?.online ? "dot" : undefined}
               >
                 <Avatar
                   alt={current_conversation?.name}
@@ -127,7 +128,11 @@ const ChatHeader = () => {
               <Typography variant="subtitle2">
                 {current_conversation?.name}
               </Typography>
-              <Typography variant="caption">Online</Typography>
+              <Typography variant="caption">
+                {current_conversation?.status === "Online"
+                  ? "Online"
+                  : `Last seen  ${current_conversation.lastSeen}`}
+              </Typography>
             </Stack>
           </Stack>
           <Stack
@@ -135,14 +140,15 @@ const ChatHeader = () => {
             alignItems="center"
             spacing={isMobile ? 1 : 3}
           >
-            <IconButton onClick={() => {
-              dispatch(StartVideoCall(current_conversation.user_id));
-            }}>
+            <IconButton
+              onClick={() => {
+                dispatch(StartVideoCall(current_conversation.user_id));
+              }}
+            >
               <VideoCamera />
             </IconButton>
             <IconButton
               onClick={() => {
-                
                 dispatch(StartAudioCall(current_conversation.user_id));
               }}
             >
@@ -206,8 +212,6 @@ const ChatHeader = () => {
           </Stack>
         </Stack>
       </Box>
-
-      
     </>
   );
 };

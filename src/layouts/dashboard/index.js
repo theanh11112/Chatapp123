@@ -11,9 +11,10 @@ import { setKeycloakUser } from "../../redux/slices/auth";
 import { connectSocket, getSocket } from "../../socket";
 
 import {
-  AddDirectConversation,
-  AddDirectMessage,
-  UpdateDirectConversation,
+  addDirectConversation,
+  addDirectMessage,
+  updateDirectConversation,
+  updateUserPresence,
 } from "../../redux/slices/conversation";
 
 import { SelectConversation, showSnackbar } from "../../redux/slices/app";
@@ -22,7 +23,6 @@ import {
   PushToAudioCallQueue,
   UpdateAudioCallDialog,
 } from "../../redux/slices/audioCall";
-
 import AudioCallNotification from "../../sections/dashboard/Audio/CallNotification";
 import AudioCallDialog from "../../sections/dashboard/Audio/CallDialog";
 
@@ -30,7 +30,6 @@ import {
   PushToVideoCallQueue,
   UpdateVideoCallDialog,
 } from "../../redux/slices/videoCall";
-
 import VideoCallNotification from "../../sections/dashboard/video/CallNotification";
 import VideoCallDialog from "../../sections/dashboard/video/CallDialog";
 
@@ -54,9 +53,7 @@ const DashboardLayout = () => {
     (s) => s.videoCall
   );
 
-  // -------------------------------------------
-  // 1️⃣ Đồng bộ Keycloak vào Redux
-  // -------------------------------------------
+  // ---------------- 1️⃣ Đồng bộ Keycloak vào Redux ----------------
   useEffect(() => {
     if (!initialized || !keycloak.authenticated) return;
 
@@ -68,7 +65,7 @@ const DashboardLayout = () => {
 
     const allRoles = [...new Set([...realmRoles, ...clientRoles])];
 
-    const filtered = allRoles.filter(
+    const filteredRoles = allRoles.filter(
       (r) =>
         ![
           "offline_access",
@@ -81,7 +78,7 @@ const DashboardLayout = () => {
     );
 
     const userRole =
-      filtered.find((r) =>
+      filteredRoles.find((r) =>
         ["admin", "moderator", "bot", "guest"].includes(r)
       ) || "user";
 
@@ -96,54 +93,52 @@ const DashboardLayout = () => {
     setIsReady(true);
   }, [initialized, keycloak, dispatch]);
 
-  // -------------------------------------------
-  // 2️⃣ Kết nối Socket once
-  // -------------------------------------------
+  // ---------------- 2️⃣ Kết nối Socket và lắng nghe realtime ----------------
   useEffect(() => {
     if (!isReady || !isLoggedIn || !keycloak.token) return;
-
     let active = true;
 
-    const setup = async () => {
+    const setupSocket = async () => {
       const sock = await connectSocket(keycloak.token);
       if (!active) return;
 
       console.log("🔗 Socket connected:", sock.id);
       setSocketReady(true);
 
-      // -----------------------------------------------------
-      //  🔥 Lắng nghe sự kiện realtime
-      // -----------------------------------------------------
-      sock.on("audio_call_notification", (data) =>
-        dispatch(PushToAudioCallQueue(data))
-      );
-
-      sock.on("video_call_notification", (data) =>
-        dispatch(PushToVideoCallQueue(data))
-      );
-
+      // ---------------- Chat Events ----------------
       sock.on("new_message", (data) => {
         const msg = data.message;
 
+        // Thêm message vào conversation hiện tại
         if (current_conversation?.id === data.conversation_id) {
           dispatch(
-            AddDirectMessage({
+            addDirectMessage({
               id: msg._id,
               type: "msg",
               subtype: msg.type,
-              message: msg.text,
+              message: msg.content || msg.text,
               incoming: msg.to === user_id,
               outgoing: msg.from === user_id,
+              attachments: msg.attachments || [],
+              time: msg.createdAt,
             })
           );
         }
+
+        // Update conversation last message
+        dispatch(
+          updateDirectConversation({
+            conversation: { _id: data.conversation_id, messages: [msg] },
+            currentUserId: user_id,
+          })
+        );
       });
 
       sock.on("start_chat", (data) => {
         const existed = conversations.find((c) => c.id === data._id);
 
-        if (existed) dispatch(UpdateDirectConversation({ conversation: data }));
-        else dispatch(AddDirectConversation({ conversation: data }));
+        if (existed) dispatch(updateDirectConversation({ conversation: data }));
+        else dispatch(addDirectConversation({ conversation: data }));
 
         dispatch(SelectConversation({ room_id: data._id }));
       });
@@ -156,9 +151,39 @@ const DashboardLayout = () => {
           })
         )
       );
+
+      // ---------------- Multi-device Presence ----------------
+      sock.on("user_online", ({ userId, lastSeen }) => {
+        dispatch(
+          updateUserPresence({
+            userId,
+            status: "Online",
+            lastSeen: lastSeen || null,
+          })
+        );
+      });
+
+      sock.on("user_offline", ({ userId, lastSeen }) => {
+        dispatch(
+          updateUserPresence({
+            userId,
+            status: "Offline",
+            lastSeen: lastSeen || null,
+          })
+        );
+      });
+
+      // ---------------- Audio/Video Call ----------------
+      sock.on("audio_call_notification", (data) =>
+        dispatch(PushToAudioCallQueue(data))
+      );
+
+      sock.on("video_call_notification", (data) =>
+        dispatch(PushToVideoCallQueue(data))
+      );
     };
 
-    setup();
+    setupSocket();
 
     return () => {
       active = false;
@@ -182,6 +207,7 @@ const DashboardLayout = () => {
       <SideBar role={role} />
       <Outlet />
 
+      {/* Audio Call */}
       {open_audio_notification_dialog && (
         <AudioCallNotification open={open_audio_notification_dialog} />
       )}
@@ -192,6 +218,7 @@ const DashboardLayout = () => {
         />
       )}
 
+      {/* Video Call */}
       {open_video_notification_dialog && (
         <VideoCallNotification open={open_video_notification_dialog} />
       )}

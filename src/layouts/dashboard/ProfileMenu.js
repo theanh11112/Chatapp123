@@ -2,7 +2,7 @@ import React from "react";
 import { Avatar, Box, Fade, Menu, MenuItem, Stack } from "@mui/material";
 import { Profile_Menu } from "../../data";
 import { useDispatch, useSelector } from "react-redux";
-import { signOut } from "../../redux/slices/auth";
+import { logoutAll } from "../../redux/slices/actions/logout";
 import { socket } from "../../socket";
 import { useNavigate } from "react-router-dom";
 import { AWS_S3_REGION, S3_BUCKET_NAME } from "../../config";
@@ -29,8 +29,8 @@ const ProfileMenu = () => {
   const handleLogout = () => {
     handleClose();
 
-    // 1️⃣ Reset Redux state
-    dispatch(signOut());
+    // 1️⃣ Reset Redux state, conversation state, app
+    dispatch(logoutAll());
 
     // 2️⃣ Emit end socket
     socket.emit("end", { user_id });

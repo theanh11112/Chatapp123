@@ -4,8 +4,8 @@ import { Box, Badge, Stack, Avatar, Typography } from "@mui/material";
 import { styled, useTheme, alpha } from "@mui/material/styles";
 import { useDispatch, useSelector } from "react-redux";
 import {
-  FetchCurrentMessages,
-  SetCurrentConversation,
+  fetchCurrentMessages,
+  setCurrentConversation,
 } from "../redux/slices/conversation";
 import { SelectConversation } from "../redux/slices/app";
 
@@ -65,11 +65,11 @@ const ChatElement = ({
     if (room_id === currentRoomId) return; // Nếu đã chọn rồi thì không làm gì
 
     // Dispatch messages hiện có trong props conversation
-    dispatch(FetchCurrentMessages({ messages: conversation, currentUserId }));
+    dispatch(fetchCurrentMessages({ messages: conversation, currentUserId }));
     console.log("✅ Dispatch FetchCurrentMessages từ conversation props");
 
     // Cập nhật conversation hiện tại
-    dispatch(SetCurrentConversation(conversation));
+    dispatch(setCurrentConversation(conversation));
     console.log(
       "✅ Dispatch SetCurrentConversation với conversation:",
       conversation

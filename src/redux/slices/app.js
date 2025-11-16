@@ -235,3 +235,5 @@ export const SetMessages =
   (dispatch) => {
     dispatch(slice.actions.setMessages({ messages }));
   };
+
+export const { resetAppState } = slice.actions;
