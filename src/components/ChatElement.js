@@ -1,4 +1,3 @@
-// ChatElement.jsx
 import React from "react";
 import { Box, Badge, Stack, Avatar, Typography } from "@mui/material";
 import { styled, useTheme, alpha } from "@mui/material/styles";
@@ -9,11 +8,9 @@ import {
 } from "../redux/slices/conversation";
 import { SelectConversation } from "../redux/slices/app";
 
-// Hàm rút ngắn nội dung tin nhắn
 const truncateText = (text, n) =>
   text?.length > n ? `${text.slice(0, n)}...` : text;
 
-// Styled components
 const StyledChatBox = styled(Box)(({ theme }) => ({
   "&:hover": { cursor: "pointer" },
 }));
@@ -60,24 +57,23 @@ const ChatElement = ({
   const { keycloak } = useSelector((state) => state.auth || {});
   const currentUserId = keycloak?.sub || null;
 
-  // Khi click vào chat
   const handleClick = () => {
-    if (room_id === currentRoomId) return; // Nếu đã chọn rồi thì không làm gì
+    if (!conversation) return;
+    if (room_id === currentRoomId) return;
 
-    // Dispatch messages hiện có trong props conversation
-    dispatch(fetchCurrentMessages({ messages: conversation, currentUserId }));
-    console.log("✅ Dispatch FetchCurrentMessages từ conversation props");
-
-    // Cập nhật conversation hiện tại
-    dispatch(setCurrentConversation(conversation));
-    console.log(
-      "✅ Dispatch SetCurrentConversation với conversation:",
-      conversation
+    // Dispatch messages hiện có trong conversation
+    dispatch(
+      fetchCurrentMessages({
+        messages: conversation.messages || [],
+        currentUserId,
+      })
     );
 
-    // ✅ Cập nhật room_id trong app slice
+    // Cập nhật current_conversation
+    dispatch(setCurrentConversation(conversation));
+
+    // Cập nhật room_id trong app slice
     dispatch(SelectConversation({ room_id: currentRoomId }));
-    console.log("✅ Dispatch SelectConversation với room_id:", currentRoomId);
   };
 
   return (

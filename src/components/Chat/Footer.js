@@ -26,6 +26,7 @@ import Picker from "@emoji-mart/react";
 import { socket } from "../../socket";
 import { useSelector, useDispatch } from "react-redux";
 import { addDirectMessage } from "../../redux/slices/conversation";
+import { v4 as uuidv4 } from "uuid";
 
 const StyledInput = styled(TextField)(({ theme }) => ({
   "& .MuiInputBase-input": {
@@ -161,13 +162,12 @@ const Footer = () => {
   };
 
   const handleSendMessage = () => {
-    if (!value.trim() || !current_conversation) return;
+    if (!value.trim() || !current_conversation || !current_conversation.user_id)
+      return;
 
-    // -----------------------------
-    // 1️⃣ Format chuẩn theo slice mới
-    // -----------------------------
+    const messageId = uuidv4();
     const messageData = {
-      id: Date.now(),
+      id: messageId,
       type: "msg",
       subtype: containsUrl(value) ? "Link" : "Text",
       message: value,
@@ -177,25 +177,21 @@ const Footer = () => {
       attachments: [],
     };
 
-    // -----------------------------
-    // 2️⃣ Cập nhật UI ngay lập tức
-    // -----------------------------
-
+    // 1️⃣ Cập nhật UI ngay
     dispatch(
       addDirectMessage({
         message: messageData,
-        conversation_id: conversationId,
+        conversation_id: current_conversation.id,
       })
     );
 
-    // -----------------------------
-    // 3️⃣ Gửi lên server
-    // -----------------------------
+    // 2️⃣ Emit lên server
     socket.emit("text_message", {
+      id: messageId, // ⚡ gửi id đồng bộ
       message: linkify(value),
-      conversation_id: current_conversation?.id || room_id,
+      conversation_id: current_conversation.id,
       from: user_id,
-      to: current_conversation?.user_id,
+      to: current_conversation.user_id,
       type: containsUrl(value) ? "Link" : "Text",
     });
 

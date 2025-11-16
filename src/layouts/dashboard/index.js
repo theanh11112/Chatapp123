@@ -53,7 +53,7 @@ const DashboardLayout = () => {
     (s) => s.videoCall
   );
 
-  // ---------------- 1️⃣ Đồng bộ Keycloak vào Redux ----------------
+  // 1️⃣ Đồng bộ Keycloak vào Redux
   useEffect(() => {
     if (!initialized || !keycloak.authenticated) return;
 
@@ -64,7 +64,6 @@ const DashboardLayout = () => {
     );
 
     const allRoles = [...new Set([...realmRoles, ...clientRoles])];
-
     const filteredRoles = allRoles.filter(
       (r) =>
         ![
@@ -93,7 +92,7 @@ const DashboardLayout = () => {
     setIsReady(true);
   }, [initialized, keycloak, dispatch]);
 
-  // ---------------- 2️⃣ Kết nối Socket và lắng nghe realtime ----------------
+  // 2️⃣ Kết nối Socket và lắng nghe realtime
   useEffect(() => {
     if (!isReady || !isLoggedIn || !keycloak.token) return;
     let active = true;
@@ -105,15 +104,21 @@ const DashboardLayout = () => {
       console.log("🔗 Socket connected:", sock.id);
       setSocketReady(true);
 
-      // ---------------- Chat Events ----------------
+      // Chat events
       sock.on("new_message", (data) => {
         const msg = data.message;
+        // ⚡ Nếu message.id đã tồn tại trong current_messages → bỏ qua
+        const existing = conversations
+          .find((c) => c.id === data.conversation_id)
+          ?.messages.some((m) => m._id === msg.id);
 
-        // Thêm message vào conversation hiện tại
-        if (current_conversation?.id === data.conversation_id) {
-          dispatch(
-            addDirectMessage({
-              id: msg._id,
+        if (existing) return;
+
+        // Cập nhật conversation UI qua slice
+        dispatch(
+          addDirectMessage({
+            message: {
+              id: msg.id,
               type: "msg",
               subtype: msg.type,
               message: msg.content || msg.text,
@@ -121,11 +126,11 @@ const DashboardLayout = () => {
               outgoing: msg.from === user_id,
               attachments: msg.attachments || [],
               time: msg.createdAt,
-            })
-          );
-        }
+            },
+            conversation_id: data.conversation_id,
+          })
+        );
 
-        // Update conversation last message
         dispatch(
           updateDirectConversation({
             conversation: { _id: data.conversation_id, messages: [msg] },
@@ -136,7 +141,6 @@ const DashboardLayout = () => {
 
       sock.on("start_chat", (data) => {
         const existed = conversations.find((c) => c.id === data._id);
-
         if (existed) dispatch(updateDirectConversation({ conversation: data }));
         else dispatch(addDirectConversation({ conversation: data }));
 
@@ -152,7 +156,7 @@ const DashboardLayout = () => {
         )
       );
 
-      // ---------------- Multi-device Presence ----------------
+      // Multi-device Presence
       sock.on("user_online", ({ userId, lastSeen }) => {
         dispatch(
           updateUserPresence({
@@ -173,11 +177,10 @@ const DashboardLayout = () => {
         );
       });
 
-      // ---------------- Audio/Video Call ----------------
+      // Audio/Video Call
       sock.on("audio_call_notification", (data) =>
         dispatch(PushToAudioCallQueue(data))
       );
-
       sock.on("video_call_notification", (data) =>
         dispatch(PushToVideoCallQueue(data))
       );
@@ -190,15 +193,7 @@ const DashboardLayout = () => {
       const sock = getSocket();
       sock?.removeAllListeners();
     };
-  }, [
-    isReady,
-    isLoggedIn,
-    keycloak.token,
-    user_id,
-    conversations,
-    current_conversation,
-    dispatch,
-  ]);
+  }, [isReady, isLoggedIn, keycloak.token, user_id, conversations, dispatch]);
 
   if (!isReady || !isLoggedIn || !socketReady) return <LoadingScreen />;
 

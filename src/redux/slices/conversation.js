@@ -19,7 +19,7 @@ const formatMessageTime = (ts) =>
 const initialState = {
   direct_chat: {
     conversations: [],
-    current_conversation: null,
+    current_conversation: { id: null, messages: [] }, // ⚡ Khởi tạo mặc định
     current_messages: [],
     isLoading: false,
     error: null,
@@ -40,11 +40,10 @@ const slice = createSlice({
       const { conversations, currentUserId } = action.payload;
 
       state.direct_chat.conversations = conversations.map((conv) => {
-        const user = conv.participants.find(
+        const user = conv.participants?.find(
           (p) => p.keycloakId !== currentUserId
         );
         const lastMsg = conv.messages?.slice(-1)[0];
-
         const lastSeenTs = parseTimestamp(user?.lastSeen);
 
         return {
@@ -64,12 +63,10 @@ const slice = createSlice({
           lastSeen: lastSeenTs ? timeAgo(lastSeenTs) : "",
         };
       });
-      state.direct_chat.current_conversation =
-        state.direct_chat.conversations.find(
-          (c) => c.id === conversations[0]._id
-        ) ||
-        state.direct_chat.conversations[0] ||
-        null;
+
+      // ⚡ Init current_conversation nếu có conversation
+      state.direct_chat.current_conversation = state.direct_chat
+        .conversations[0] || { id: null, messages: [] };
 
       state.direct_chat.isLoading = false;
     },
@@ -86,7 +83,6 @@ const slice = createSlice({
         (c) => c.id === conversation._id
       );
 
-      // Nếu participants undefined, fallback user_id từ conversation
       let user = null;
       if (conversation.participants) {
         user = conversation.participants.find(
@@ -99,7 +95,7 @@ const slice = createSlice({
 
       const convData = {
         id: conversation._id,
-        user_id: user?.keycloakId || conversation.user_id || null, // fallback
+        user_id: user?.keycloakId || conversation.user_id || null,
         name: user ? `${user.username} ${user.lastName || ""}` : "Unknown",
         online: user?.status === "Online" || false,
         img: user?.avatar
@@ -118,6 +114,11 @@ const slice = createSlice({
         state.direct_chat.conversations[existingConvIndex] = convData;
       } else {
         state.direct_chat.conversations.push(convData);
+      }
+
+      // ⚡ Nếu chưa có current_conversation, set mặc định
+      if (!state.direct_chat.current_conversation?.id) {
+        state.direct_chat.current_conversation = convData;
       }
     },
 
@@ -141,41 +142,35 @@ const slice = createSlice({
 
     addDirectMessage(state, action) {
       const { message, conversation_id } = action.payload;
-
       if (!message) return;
 
-      // 1️⃣ Append vào current_messages
+      const conv =
+        state.direct_chat.conversations.find((c) => c.id === conversation_id) ||
+        state.direct_chat.current_conversation;
+      if (!conv) return;
+
+      // ⚡ Check duplicate by id
+      const existsInCurrent = state.direct_chat.current_messages.find(
+        (m) => m.id === message.id
+      );
+      const existsInConv = conv.messages.find((m) => m._id === message.id);
+      if (existsInCurrent || existsInConv) return;
+
       state.direct_chat.current_messages.push(message);
 
-      // 2️⃣ Append vào đúng conversation
-      const conv = state.direct_chat.conversations.find(
-        (c) =>
-          c.id === state.direct_chat.current_conversation?.id ||
-          c.id === conversation_id
-      );
-      console.log(
-        "➡️ Thêm message vào conversation:",
-        conv._id,
-        conv.message,
-        conv,
-        state.direct_chat.conversations
-      );
-      if (conv) {
-        if (!conv.messages) conv.messages = [];
+      if (!conv.messages) conv.messages = [];
+      conv.messages.push({
+        _id: message.id,
+        content: message.message,
+        type: message.subtype,
+        from: message.outgoing ? message.from : message.to,
+        to: message.incoming ? message.to : message.from,
+        createdAt: message.time || new Date().toISOString(),
+        attachments: message.attachments || [],
+      });
 
-        conv.messages.push({
-          _id: message.id,
-          content: message.message,
-          type: message.subtype,
-          from: message.outgoing ? message.from : message.to,
-          to: message.incoming ? message.to : message.from,
-          createdAt: new Date().toISOString(),
-          attachments: message.attachments || [],
-        });
-
-        conv.msg = message.message;
-        conv.time = message.time;
-      }
+      conv.msg = message.message;
+      conv.time = message.time;
     },
 
     updateUserPresence(state, action) {
@@ -204,7 +199,7 @@ const slice = createSlice({
     resetConversationState(state) {
       state.direct_chat = {
         conversations: [],
-        current_conversation: null,
+        current_conversation: { id: null, messages: [] },
         current_messages: [],
         isLoading: false,
         error: null,
@@ -265,6 +260,7 @@ export const fetchCurrentDirectMessages =
     dispatch(fetchCurrentMessages({ messages, currentUserId }));
   };
 
-export const addDirectMessageThunk = (message) => async (dispatch) => {
-  dispatch(addDirectMessage({ message }));
-};
+export const addDirectMessageThunk =
+  (message, conversation_id) => async (dispatch) => {
+    dispatch(addDirectMessage({ message, conversation_id }));
+  };
