@@ -33,7 +33,7 @@ import {
 import VideoCallNotification from "../../sections/dashboard/video/CallNotification";
 import VideoCallDialog from "../../sections/dashboard/video/CallDialog";
 
-const DashboardLayout = () => {
+const DashboardLayout = ({ showChat = false, children }) => {
   const dispatch = useDispatch();
   const { keycloak, initialized } = useKeycloak();
 
@@ -92,7 +92,7 @@ const DashboardLayout = () => {
     setIsReady(true);
   }, [initialized, keycloak, dispatch]);
 
-  // 2️⃣ Kết nối Socket và lắng nghe realtime
+  // 2️⃣ Kết nối Socket và lắng nghe realtime - ĐÃ SỬA
   useEffect(() => {
     if (!isReady || !isLoggedIn || !keycloak.token) return;
     let active = true;
@@ -106,13 +106,30 @@ const DashboardLayout = () => {
 
       // Chat events
       sock.on("new_message", (data) => {
+        console.log("🔌 Socket: new_message received", data);
+
         const msg = data.message;
+
+        // ⚡ VALIDATE: Kiểm tra dữ liệu message
+        if (!msg || !data.conversation_id) {
+          console.warn("🚨 Socket: Invalid message data", data);
+          return;
+        }
+        // 🔥 QUAN TRỌNG: BỎ QUA TIN NHẮN TỪ CHÍNH MÌNH
+        if (msg.from === user_id) {
+          console.log("🔄 Ignoring own message from socket");
+          return;
+        }
+
         // ⚡ Nếu message.id đã tồn tại trong current_messages → bỏ qua
         const existing = conversations
           .find((c) => c.id === data.conversation_id)
-          ?.messages.some((m) => m._id === msg.id);
+          ?.messages?.some((m) => m._id === msg.id);
 
-        if (existing) return;
+        if (existing) {
+          console.log("⚠️ Message already exists, skipping");
+          return;
+        }
 
         // Cập nhật conversation UI qua slice
         dispatch(
@@ -122,29 +139,96 @@ const DashboardLayout = () => {
               type: "msg",
               subtype: msg.type,
               message: msg.content || msg.text,
-              incoming: msg.to === user_id,
-              outgoing: msg.from === user_id,
+              incoming: true,
+              outgoing: false,
               attachments: msg.attachments || [],
               time: msg.createdAt,
             },
             conversation_id: data.conversation_id,
+            currentUserId: user_id,
           })
         );
 
-        dispatch(
-          updateDirectConversation({
-            conversation: { _id: data.conversation_id, messages: [msg] },
-            currentUserId: user_id,
-          })
+        // ⚡ QUAN TRỌNG: Không gọi updateDirectConversation với dữ liệu không đầy đủ
+        // Vì nó sẽ reset current_conversation
+        console.log(
+          "✅ Message added to Redux, skipping conversation update to prevent reset"
         );
       });
 
       sock.on("start_chat", (data) => {
+        console.log("🔌 Socket: start_chat received", {
+          conversation_id: data._id,
+          has_participants: !!data.participants,
+          participants_count: data.participants?.length,
+        });
+
+        // ⚡ VALIDATE: Kiểm tra conversation có participants hợp lệ
+        if (!data.participants || data.participants.length === 0) {
+          console.warn("🚨 Socket: Conversation has no participants", data);
+          return;
+        }
+
         const existed = conversations.find((c) => c.id === data._id);
-        if (existed) dispatch(updateDirectConversation({ conversation: data }));
-        else dispatch(addDirectConversation({ conversation: data }));
+        if (existed) {
+          console.log("🔄 Updating existing conversation");
+          dispatch(
+            updateDirectConversation({
+              conversation: data,
+              currentUserId: user_id,
+            })
+          );
+        } else {
+          console.log("➕ Adding new conversation");
+          dispatch(
+            addDirectConversation({
+              conversation: data,
+              currentUserId: user_id,
+            })
+          );
+        }
 
         dispatch(SelectConversation({ room_id: data._id }));
+      });
+
+      // ⚡ THÊM: Lắng nghe sự kiện update_conversation và validate
+      sock.on("update_conversation", (conversation) => {
+        console.log("🔌 Socket: update_conversation received", {
+          conversation_id: conversation._id,
+          has_participants: !!conversation.participants,
+          participants: conversation.participants,
+        });
+
+        // ⚡ VALIDATE: Chỉ update nếu có participants hợp lệ
+        if (
+          !conversation.participants ||
+          conversation.participants.length === 0
+        ) {
+          console.warn(
+            "🚨 Socket: Invalid conversation data - no participants",
+            conversation
+          );
+          return;
+        }
+
+        const hasValidUser = conversation.participants.some(
+          (p) => p.keycloakId
+        );
+        if (!hasValidUser) {
+          console.warn(
+            "🚨 Socket: Conversation has no valid user_id",
+            conversation
+          );
+          return;
+        }
+
+        console.log("✅ Valid conversation, updating Redux");
+        dispatch(
+          updateDirectConversation({
+            conversation,
+            currentUserId: user_id,
+          })
+        );
       });
 
       sock.on("new_friend_request", () =>
@@ -158,6 +242,7 @@ const DashboardLayout = () => {
 
       // Multi-device Presence
       sock.on("user_online", ({ userId, lastSeen }) => {
+        console.log("👤 Socket: user_online", { userId, lastSeen });
         dispatch(
           updateUserPresence({
             userId,
@@ -168,6 +253,7 @@ const DashboardLayout = () => {
       });
 
       sock.on("user_offline", ({ userId, lastSeen }) => {
+        console.log("👤 Socket: user_offline", { userId, lastSeen });
         dispatch(
           updateUserPresence({
             userId,
@@ -178,12 +264,26 @@ const DashboardLayout = () => {
       });
 
       // Audio/Video Call
-      sock.on("audio_call_notification", (data) =>
-        dispatch(PushToAudioCallQueue(data))
-      );
-      sock.on("video_call_notification", (data) =>
-        dispatch(PushToVideoCallQueue(data))
-      );
+      sock.on("audio_call_notification", (data) => {
+        console.log("📞 Socket: audio_call_notification", data);
+        dispatch(PushToAudioCallQueue(data));
+      });
+
+      sock.on("video_call_notification", (data) => {
+        console.log("🎥 Socket: video_call_notification", data);
+        dispatch(PushToVideoCallQueue(data));
+      });
+
+      // Debug: Log tất cả socket events để theo dõi
+      sock.onAny((eventName, ...args) => {
+        if (
+          eventName !== "new_message" &&
+          eventName !== "user_online" &&
+          eventName !== "user_offline"
+        ) {
+          console.log("🔌 Socket event:", eventName, args);
+        }
+      });
     };
 
     setupSocket();
@@ -191,9 +291,22 @@ const DashboardLayout = () => {
     return () => {
       active = false;
       const sock = getSocket();
-      sock?.removeAllListeners();
+      if (sock) {
+        console.log("🔌 Cleaning up socket listeners");
+        sock.removeAllListeners();
+      }
     };
   }, [isReady, isLoggedIn, keycloak.token, user_id, conversations, dispatch]);
+
+  // Debug current_conversation changes
+  useEffect(() => {
+    console.log("🔍 DashboardLayout - current_conversation:", {
+      id: current_conversation?.id,
+      user_id: current_conversation?.user_id,
+      name: current_conversation?.name,
+      messages_count: current_conversation?.messages?.length,
+    });
+  }, [current_conversation]);
 
   if (!isReady || !isLoggedIn || !socketReady) return <LoadingScreen />;
 

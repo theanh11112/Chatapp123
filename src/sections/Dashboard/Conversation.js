@@ -11,20 +11,15 @@ import {
 import { useTheme, alpha } from "@mui/material/styles";
 import { DotsThreeVertical, DownloadSimple, Image } from "phosphor-react";
 import { Message_options } from "../../data";
-import { Link } from "react-router-dom";
-import truncateString from "../../utils/truncate";
-import { LinkPreview } from "@dhaiwat10/react-link-preview";
 import Embed from "react-embed";
 
+// =======================
+//  MESSAGE OPTION MENU
+// =======================
 const MessageOption = () => {
   const [anchorEl, setAnchorEl] = React.useState(null);
   const open = Boolean(anchorEl);
-  const handleClick = (event) => {
-    setAnchorEl(event.currentTarget);
-  };
-  const handleClose = () => {
-    setAnchorEl(null);
-  };
+
   return (
     <>
       <DotsThreeVertical
@@ -33,20 +28,22 @@ const MessageOption = () => {
         aria-controls={open ? "basic-menu" : undefined}
         aria-haspopup="true"
         aria-expanded={open ? "true" : undefined}
-        onClick={handleClick}
+        onClick={(e) => setAnchorEl(e.currentTarget)}
       />
       <Menu
         id="basic-menu"
         anchorEl={anchorEl}
         open={open}
-        onClose={handleClose}
+        onClose={() => setAnchorEl(null)}
         MenuListProps={{
           "aria-labelledby": "basic-button",
         }}
       >
         <Stack spacing={1} px={1}>
-          {Message_options.map((el) => (
-            <MenuItem onClick={handleClose}>{el.title}</MenuItem>
+          {Message_options.map((el, index) => (
+            <MenuItem key={el.id || index} onClick={() => setAnchorEl(null)}>
+              {el.title}
+            </MenuItem>
           ))}
         </Stack>
       </Menu>
@@ -54,8 +51,12 @@ const MessageOption = () => {
   );
 };
 
+// =======================
+//  TEXT MESSAGE
+// =======================
 const TextMsg = ({ el, menu }) => {
   const theme = useTheme();
+
   return (
     <Stack direction="row" justifyContent={el.incoming ? "start" : "end"}>
       <Box
@@ -80,8 +81,13 @@ const TextMsg = ({ el, menu }) => {
     </Stack>
   );
 };
+
+// =======================
+//  MEDIA MESSAGE
+// =======================
 const MediaMsg = ({ el, menu }) => {
   const theme = useTheme();
+
   return (
     <Stack direction="row" justifyContent={el.incoming ? "start" : "end"}>
       <Box
@@ -113,8 +119,13 @@ const MediaMsg = ({ el, menu }) => {
     </Stack>
   );
 };
+
+// =======================
+//  DOCUMENT MESSAGE
+// =======================
 const DocMsg = ({ el, menu }) => {
   const theme = useTheme();
+
   return (
     <Stack direction="row" justifyContent={el.incoming ? "start" : "end"}>
       <Box
@@ -157,8 +168,13 @@ const DocMsg = ({ el, menu }) => {
     </Stack>
   );
 };
+
+// =======================
+//  LINK MESSAGE
+// =======================
 const LinkMsg = ({ el, menu }) => {
   const theme = useTheme();
+
   return (
     <Stack direction="row" justifyContent={el.incoming ? "start" : "end"}>
       <Box
@@ -177,25 +193,19 @@ const LinkMsg = ({ el, menu }) => {
             p={2}
             direction="column"
             spacing={3}
-            alignItems="start"
             sx={{
               backgroundColor: theme.palette.background.paper,
               borderRadius: 1,
             }}
           >
-            <Stack direction={"column"} spacing={2}>
-              <Embed
-                width="300px"
-                isDark
-                url={`https://youtu.be/xoWxBR34qLE`}
-              />
-            </Stack>
+            <Embed width="300px" isDark url={`https://youtu.be/xoWxBR34qLE`} />
           </Stack>
+
           <Typography
             variant="body2"
             color={el.incoming ? theme.palette.text : "#fff"}
           >
-            <div dangerouslySetInnerHTML={{ __html: el.message }}></div>
+            <div dangerouslySetInnerHTML={{ __html: el.message }} />
           </Typography>
         </Stack>
       </Box>
@@ -203,8 +213,13 @@ const LinkMsg = ({ el, menu }) => {
     </Stack>
   );
 };
+
+// =======================
+//  REPLY MESSAGE
+// =======================
 const ReplyMsg = ({ el, menu }) => {
   const theme = useTheme();
+
   return (
     <Stack direction="row" justifyContent={el.incoming ? "start" : "end"}>
       <Box
@@ -223,10 +238,8 @@ const ReplyMsg = ({ el, menu }) => {
             p={2}
             direction="column"
             spacing={3}
-            alignItems="center"
             sx={{
               backgroundColor: alpha(theme.palette.background.paper, 1),
-
               borderRadius: 1,
             }}
           >
@@ -234,6 +247,7 @@ const ReplyMsg = ({ el, menu }) => {
               {el.message}
             </Typography>
           </Stack>
+
           <Typography
             variant="body2"
             color={el.incoming ? theme.palette.text : "#fff"}
@@ -246,10 +260,15 @@ const ReplyMsg = ({ el, menu }) => {
     </Stack>
   );
 };
+
+// =======================
+//  TIMELINE
+// =======================
 const Timeline = ({ el }) => {
   const theme = useTheme();
+
   return (
-    <Stack direction="row" alignItems={"center"} justifyContent="space-between">
+    <Stack direction="row" alignItems="center" justifyContent="space-between">
       <Divider width="46%" />
       <Typography variant="caption" sx={{ color: theme.palette.text }}>
         {el.text}

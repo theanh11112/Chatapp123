@@ -14,13 +14,11 @@ import {
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import { CaretDown, MagnifyingGlass, Phone, VideoCamera } from "phosphor-react";
-import { faker } from "@faker-js/faker";
 import useResponsive from "../../hooks/useResponsive";
 import { ToggleSidebar } from "../../redux/slices/app";
 import { useDispatch, useSelector } from "react-redux";
 import { StartAudioCall } from "../../redux/slices/audioCall";
 import { StartVideoCall } from "../../redux/slices/videoCall";
-import { timeAgo } from "../../utils/timeAgo";
 
 const StyledBadge = styled(Badge)(({ theme }) => ({
   "& .MuiBadge-badge": {
@@ -53,15 +51,19 @@ const StyledBadge = styled(Badge)(({ theme }) => ({
 
 const Conversation_Menu = [
   {
+    id: 1,
     title: "Contact info",
   },
   {
+    id: 2,
     title: "Mute notifications",
   },
   {
+    id: 3,
     title: "Clear messages",
   },
   {
+    id: 4,
     title: "Delete chat",
   },
 ];
@@ -75,114 +77,141 @@ const ChatHeader = () => {
     (state) => state.conversation.direct_chat
   );
 
-  const [conversationMenuAnchorEl, setConversationMenuAnchorEl] =
-    React.useState(null);
-  const openConversationMenu = Boolean(conversationMenuAnchorEl);
-  const handleClickConversationMenu = (event) => {
-    setConversationMenuAnchorEl(event.currentTarget);
-  };
-  console.log("conversationMenuAnchorEl", current_conversation);
-  const handleCloseConversationMenu = () => {
-    setConversationMenuAnchorEl(null);
-  };
+  const [anchorEl, setAnchorEl] = React.useState(null);
+  const open = Boolean(anchorEl);
 
-  return (
-    <>
+  // Debug current_conversation
+  React.useEffect(() => {
+    console.log("🔍 ChatHeader - current_conversation:", current_conversation);
+  }, [current_conversation]);
+
+  // Nếu không có current_conversation, hiển thị placeholder
+  if (!current_conversation?.id) {
+    return (
       <Box
         p={2}
-        width={"100%"}
+        width="100%"
         sx={{
           backgroundColor:
             theme.palette.mode === "light"
               ? "#F8FAFF"
               : theme.palette.background,
-          boxShadow: "0px 0px 2px rgba(0, 0, 0, 0.25)",
+          boxShadow: "0px 0px 2px rgba(0,0,0,0.25)",
+        }}
+      >
+        <Stack alignItems="center" justifyContent="center">
+          <Typography variant="subtitle2" color="text.secondary">
+            Select a conversation to start chatting
+          </Typography>
+        </Stack>
+      </Box>
+    );
+  }
+
+  return (
+    <>
+      <Box
+        p={2}
+        width="100%"
+        sx={{
+          backgroundColor:
+            theme.palette.mode === "light"
+              ? "#F8FAFF"
+              : theme.palette.background,
+          boxShadow: "0px 0px 2px rgba(0,0,0,0.25)",
         }}
       >
         <Stack
-          alignItems={"center"}
-          direction={"row"}
-          sx={{ width: "100%", height: "100%" }}
+          alignItems="center"
+          direction="row"
           justifyContent="space-between"
+          sx={{ width: "100%" }}
         >
           <Stack
             onClick={() => {
-              dispatch(ToggleSidebar());
+              if (isMobile) {
+                dispatch(ToggleSidebar());
+              }
             }}
             spacing={2}
             direction="row"
+            sx={{ cursor: isMobile ? "pointer" : "default" }}
           >
-            <Box>
-              <StyledBadge
-                overlap="circular"
-                anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-                variant={current_conversation?.online ? "dot" : undefined}
-              >
-                <Avatar
-                  alt={current_conversation?.name}
-                  src={current_conversation?.img}
-                />
-              </StyledBadge>
-            </Box>
+            <StyledBadge
+              overlap="circular"
+              anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+              variant={current_conversation?.online ? "dot" : undefined}
+            >
+              <Avatar
+                alt={current_conversation?.name}
+                src={current_conversation?.img}
+                sx={{ width: 40, height: 40 }}
+              />
+            </StyledBadge>
+
             <Stack spacing={0.2}>
               <Typography variant="subtitle2">
-                {current_conversation?.name}
+                {current_conversation?.name || "Unknown User"}
               </Typography>
+
               <Typography variant="caption">
-                {current_conversation?.status === "Online"
+                {current_conversation?.online
                   ? "Online"
-                  : `Last seen  ${current_conversation.lastSeen}`}
+                  : current_conversation?.lastSeen
+                  ? `Last seen ${current_conversation.lastSeen}`
+                  : "Offline"}
               </Typography>
             </Stack>
           </Stack>
-          <Stack
-            direction={"row"}
-            alignItems="center"
-            spacing={isMobile ? 1 : 3}
-          >
+
+          <Stack direction="row" spacing={isMobile ? 1 : 3} alignItems="center">
             <IconButton
               onClick={() => {
-                dispatch(StartVideoCall(current_conversation.user_id));
+                if (current_conversation?.user_id) {
+                  dispatch(StartVideoCall(current_conversation.user_id));
+                }
               }}
+              disabled={!current_conversation?.user_id}
             >
               <VideoCamera />
             </IconButton>
+
             <IconButton
               onClick={() => {
-                dispatch(StartAudioCall(current_conversation.user_id));
+                if (current_conversation?.user_id) {
+                  dispatch(StartAudioCall(current_conversation.user_id));
+                }
               }}
+              disabled={!current_conversation?.user_id}
             >
               <Phone />
             </IconButton>
+
             {!isMobile && (
               <IconButton>
                 <MagnifyingGlass />
               </IconButton>
             )}
+
             <Divider orientation="vertical" flexItem />
+
             <IconButton
-              id="conversation-positioned-button"
-              aria-controls={
-                openConversationMenu
-                  ? "conversation-positioned-menu"
-                  : undefined
-              }
+              id="conversation-menu-button"
+              aria-controls={open ? "conversation-menu" : undefined}
               aria-haspopup="true"
-              aria-expanded={openConversationMenu ? "true" : undefined}
-              onClick={handleClickConversationMenu}
+              aria-expanded={open ? "true" : undefined}
+              onClick={(event) => setAnchorEl(event.currentTarget)}
             >
               <CaretDown />
             </IconButton>
+
             <Menu
-              MenuListProps={{
-                "aria-labelledby": "fade-button",
-              }}
+              id="conversation-menu"
+              aria-labelledby="conversation-menu-button"
+              anchorEl={anchorEl}
+              open={open}
+              onClose={() => setAnchorEl(null)}
               TransitionComponent={Fade}
-              id="conversation-positioned-menu"
-              aria-labelledby="conversation-positioned-button"
-              anchorEl={conversationMenuAnchorEl}
-              open={openConversationMenu}
-              onClose={handleCloseConversationMenu}
               anchorOrigin={{
                 vertical: "bottom",
                 horizontal: "right",
@@ -195,15 +224,14 @@ const ChatHeader = () => {
               <Box p={1}>
                 <Stack spacing={1}>
                   {Conversation_Menu.map((el) => (
-                    <MenuItem onClick={handleCloseConversationMenu}>
-                      <Stack
-                        sx={{ minWidth: 100 }}
-                        direction="row"
-                        alignItems={"center"}
-                        justifyContent="space-between"
-                      >
-                        <span>{el.title}</span>
-                      </Stack>{" "}
+                    <MenuItem
+                      key={el.id}
+                      onClick={() => {
+                        setAnchorEl(null);
+                        console.log(`Clicked: ${el.title}`);
+                      }}
+                    >
+                      {el.title}
                     </MenuItem>
                   ))}
                 </Stack>

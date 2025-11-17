@@ -1,3 +1,4 @@
+// SideBar.js - Sửa pathToTabMap
 import React from "react";
 import { useTheme } from "@mui/material/styles";
 import { Box, Divider, IconButton, Stack } from "@mui/material";
@@ -6,43 +7,69 @@ import Logo from "../../assets/Images/logo.ico";
 import useSettings from "../../hooks/useSettings";
 import { Nav_Buttons, Nav_Setting } from "../../data";
 import ProfileMenu from "./ProfileMenu";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import { UpdateTab } from "../../redux/slices/app";
 
-
-// 🎯 Sidebar có thể nhận role động (default là "user")
 const SideBar = ({ role }) => {
   const theme = useTheme();
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const { tab } = useSelector((state) => state.app);
   const { onToggleMode } = useSettings();
 
-  // 🔗 Sinh đường dẫn động theo role
+  // 🔗 Sinh đường dẫn ĐÚNG theo cấu trúc route mới
   const getPath = (index) => {
     switch (index) {
-      case 0:
+      case 0: // Chat
         return `/${role}/app`;
-      case 1:
+      case 1: // Group
         return `/${role}/group`;
-      case 2:
+      case 2: // Call
         return `/${role}/call`;
-      case 3:
+      case 3: // Settings
         return `/${role}/settings`;
-      case 4:
+      case 4: // Dashboard
         return `/${role}/dashboard`;
       default:
-        return `/${role}`;
+        return `/${role}/dashboard`;
     }
   };
 
+  // 🔥 SỬA: Cập nhật tab active dựa trên current path - FIXED
+  React.useEffect(() => {
+    const pathToTabMap = {
+      [`/${role}/app`]: 0,
+      [`/${role}/group`]: 1,
+      [`/${role}/call`]: 2,
+      [`/${role}/settings`]: 3,
+      [`/${role}/dashboard`]: 4,
+      // 🔥 THÊM: Conversation và Chats cũng là chat (tab 0)
+      [`/${role}/conversation`]: 0,
+      [`/${role}/chats`]: 0,
+    };
+
+    const currentTab = pathToTabMap[location.pathname];
+
+    // 🔥 CHỈ update tab nếu path được map và khác với tab hiện tại
+    if (currentTab !== undefined && currentTab !== tab) {
+      console.log(
+        "🔄 Auto-updating tab to:",
+        currentTab,
+        "for path:",
+        location.pathname
+      );
+      dispatch(UpdateTab({ tab: currentTab }));
+    }
+  }, [location.pathname, role, tab, dispatch]);
+
   const handleChangeTab = (index) => {
-    console.log(getPath(index));
+    const path = getPath(index);
+    console.log("🔄 Navigating to:", path, "from tab:", index);
     dispatch(UpdateTab({ tab: index }));
-    navigate(getPath(index));
-    console.log("✅ navigate() executed successfully");
+    navigate(path);
   };
 
   return (

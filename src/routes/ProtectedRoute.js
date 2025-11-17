@@ -1,68 +1,82 @@
-import React, { useEffect, useState } from "react";
+// ProtectedRoute.js
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useKeycloak } from "@react-keycloak/web";
 import LoadingScreen from "../components/LoadingScreen";
 
 const ProtectedRoute = ({ children, allowedRoles = [] }) => {
   const { keycloak, initialized } = useKeycloak();
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const location = useLocation();
+  const [ready, setReady] = useState(false);
+  const authCheckedRef = useRef(false);
+  const loginRedirectRef = useRef(false);
 
-  console.log("🔁 ProtectedRoute mounted:", location.pathname);
-
+  // Debug re-render
   useEffect(() => {
-    console.log("🔐 ProtectedRoute render:", {
-      initialized,
-      authenticated: keycloak?.authenticated,
-      currentPath: location.pathname,
-    });
+    console.log("🔵 ProtectedRoute MOUNT", location.pathname);
+    return () => console.log("🔴 ProtectedRoute UNMOUNT", location.pathname);
+  }, [location.pathname]);
 
+  // Check login - OPTIMIZED
+  useEffect(() => {
     if (!initialized) return;
+    if (authCheckedRef.current) return;
 
-    if (!keycloak.authenticated && !isLoggingIn) {
-      console.warn("🚪 Not authenticated → Redirecting to Keycloak login");
-      setIsLoggingIn(true);
-      localStorage.setItem("postLoginRedirect", window.location.pathname);
-      keycloak.login({ redirectUri: window.location.href });
+    authCheckedRef.current = true;
+
+    if (!keycloak.authenticated) {
+      if (!loginRedirectRef.current) {
+        console.log("🔄 Redirecting to login...");
+        loginRedirectRef.current = true;
+        localStorage.setItem("postLoginRedirect", location.pathname);
+        keycloak.login({
+          redirectUri: window.location.origin + location.pathname,
+        });
+      }
+    } else {
+      console.log("✅ User authenticated, setting ready");
+      setReady(true);
     }
-  }, [initialized, keycloak, isLoggingIn, location.pathname]);
+  }, [initialized, keycloak.authenticated]); // QUAN TRỌNG: chỉ theo dõi authenticated
 
-  if (!initialized || !keycloak.authenticated) {
-    console.log("⏳ ProtectedRoute waiting (LoadingScreen)...");
+  // Reset refs khi authenticated thay đổi
+  useEffect(() => {
+    if (keycloak.authenticated) {
+      authCheckedRef.current = false;
+      loginRedirectRef.current = false;
+    }
+  }, [keycloak.authenticated]);
+
+  // Kiểm tra role với useCallback để tránh re-render
+  const hasRequiredRole = useCallback(() => {
+    if (allowedRoles.length === 0) return true;
+
+    const token = keycloak.tokenParsed;
+    if (!token) return false;
+
+    const realmRoles = token?.realm_access?.roles || [];
+    const clientRoles = Object.values(token?.resource_access || {}).flatMap(
+      (c) => c.roles || []
+    );
+    const allRoles = [...new Set([...realmRoles, ...clientRoles])];
+
+    return allowedRoles.some((r) => allRoles.includes(r));
+  }, [keycloak.tokenParsed, allowedRoles]);
+
+  if (!initialized) {
     return <LoadingScreen />;
   }
 
-  // ✅ Role check
-  if (allowedRoles.length > 0) {
-    const tokenParsed = keycloak.tokenParsed || {};
-    const realmRoles = tokenParsed.realm_access?.roles || [];
-    const clientRoles = Object.values(tokenParsed.resource_access || {})
-      .flatMap((client) => client.roles || []);
-
-    const allRoles = [...new Set([...realmRoles, ...clientRoles])];
-    const filteredRoles = allRoles.filter(
-      (r) =>
-        !["offline_access", "uma_authorization", "default-roles-chat-app"].includes(r)
-    );
-
-    const hasRole = allowedRoles.some((role) => filteredRoles.includes(role));
-
-    console.log("🧩 Role check:", {
-      allowedRoles,
-      allRoles,
-      filteredRoles,
-      hasRole,
-      path: location.pathname,
-    });
-
-    if (!hasRole) {
-      console.warn("⛔ No access → redirect to /404");
-      return <Navigate to="/404" replace />;
-    }
+  if (!keycloak.authenticated || !ready) {
+    return <LoadingScreen />;
   }
 
-  console.log("✅ Access granted → render children for", location.pathname);
-  return <>{children}</>;
+  // Kiểm tra role
+  if (allowedRoles.length > 0 && !hasRequiredRole()) {
+    return <Navigate to="/404" replace />;
+  }
+
+  return children;
 };
 
-export default ProtectedRoute;
+export default React.memo(ProtectedRoute);

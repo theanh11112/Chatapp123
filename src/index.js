@@ -9,35 +9,41 @@ import { Provider as ReduxProvider } from "react-redux";
 import { store } from "./redux/store";
 import SettingsProvider from "./contexts/SettingsContext";
 import { AuthProvider } from "./contexts/AuthContext";
-import { ReactKeycloakProvider } from "@react-keycloak/web"; // ✅ thêm dòng này
-import keycloak from "./auth/keycloak"; // ✅ import instance
-import './locales/i18n';
+import { ReactKeycloakProvider } from "@react-keycloak/web";
+import keycloak from "./auth/keycloak";
+import "./locales/i18n";
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 
-root.render(
-  <React.StrictMode>
-    <ReactKeycloakProvider
-      authClient={keycloak}
-      initOptions={{
-        onLoad: "login-required",
-        checkLoginIframe: false,
-        pkceMethod: "S256",
-      }}
-    >
-      <HelmetProvider>
-        <ReduxProvider store={store}>
-          <SettingsProvider> 
+// Loại bỏ React.StrictMode trong development để tránh double render
+const isDevelopment = process.env.NODE_ENV === "development";
+
+const appContent = (
+  <ReactKeycloakProvider
+    authClient={keycloak}
+    initOptions={{
+      onLoad: "login-required",
+      checkLoginIframe: false,
+      pkceMethod: "S256",
+    }}
+    LoadingComponent={<div>Loading Keycloak...</div>}
+  >
+    <HelmetProvider>
+      <ReduxProvider store={store}>
+        <SettingsProvider>
           <BrowserRouter>
             <AuthProvider>
-                <App />       
+              <App />
             </AuthProvider>
-            </BrowserRouter>
-          </SettingsProvider>
-        </ReduxProvider>
-      </HelmetProvider>
-    </ReactKeycloakProvider>
-  </React.StrictMode>
+          </BrowserRouter>
+        </SettingsProvider>
+      </ReduxProvider>
+    </HelmetProvider>
+  </ReactKeycloakProvider>
+);
+
+root.render(
+  isDevelopment ? appContent : <React.StrictMode>{appContent}</React.StrictMode>
 );
 
 reportWebVitals();

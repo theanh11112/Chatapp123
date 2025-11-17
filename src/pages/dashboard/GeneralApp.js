@@ -39,8 +39,7 @@ const GeneralApp = () => {
                 : "6px solid #0162C4",
           }}
         >
-          {chat_type === "individual" &&
-          room_id !== null ? (
+          {chat_type === "individual" && room_id !== null ? (
             <ChatComponent />
           ) : (
             <Stack

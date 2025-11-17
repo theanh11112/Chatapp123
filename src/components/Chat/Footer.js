@@ -18,8 +18,9 @@ import {
   User,
 } from "phosphor-react";
 import { useTheme, styled } from "@mui/material/styles";
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useCallback, useEffect } from "react";
 import useResponsive from "../../hooks/useResponsive";
+import { useKeycloak } from "@react-keycloak/web";
 
 import data from "@emoji-mart/data";
 import Picker from "@emoji-mart/react";
@@ -43,79 +44,80 @@ const Actions = [
   { color: "#013f7f", icon: <User size={24} />, y: 382, title: "Contact" },
 ];
 
-const ChatInput = ({
-  openPicker,
-  setOpenPicker,
-  setValue,
-  value,
-  inputRef,
-  handleSendMessage,
-}) => {
-  const [openActions, setOpenActions] = useState(false);
+// ----------------------------- CHAT INPUT -----------------------------
+const ChatInput = React.memo(
+  ({
+    openPicker,
+    setOpenPicker,
+    setValue,
+    value,
+    inputRef,
+    handleSendMessage,
+  }) => {
+    const [openActions, setOpenActions] = useState(false);
 
-  return (
-    <StyledInput
-      inputRef={inputRef}
-      value={value}
-      onChange={(event) => {
-        setValue(event.target.value);
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
-          handleSendMessage();
-        }
-      }}
-      fullWidth
-      placeholder="Write a message..."
-      variant="filled"
-      InputProps={{
-        disableUnderline: true,
-        startAdornment: (
-          <Stack sx={{ width: "max-content" }}>
-            <Stack
-              sx={{
-                position: "relative",
-                display: openActions ? "inline-block" : "none",
-              }}
-            >
-              {Actions.map((el) => (
-                <Tooltip placement="right" title={el.title} key={el.title}>
-                  <Fab
-                    onClick={() => setOpenActions(!openActions)}
-                    sx={{
-                      position: "absolute",
-                      top: -el.y,
-                      backgroundColor: el.color,
-                    }}
-                  >
-                    {el.icon}
-                  </Fab>
-                </Tooltip>
-              ))}
-            </Stack>
-
-            <InputAdornment>
-              <IconButton onClick={() => setOpenActions(!openActions)}>
-                <LinkSimple />
-              </IconButton>
+    return (
+      <StyledInput
+        inputRef={inputRef}
+        value={value}
+        onChange={(event) => {
+          setValue(event.target.value);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            handleSendMessage();
+          }
+        }}
+        fullWidth
+        placeholder="Write a message..."
+        variant="filled"
+        InputProps={{
+          disableUnderline: true,
+          startAdornment: (
+            <InputAdornment position="start">
+              <Stack sx={{ width: "max-content" }}>
+                <Stack
+                  sx={{
+                    position: "relative",
+                    display: openActions ? "inline-block" : "none",
+                  }}
+                >
+                  {Actions.map((el, idx) => (
+                    <Tooltip placement="right" title={el.title} key={idx}>
+                      <Fab
+                        sx={{
+                          position: "absolute",
+                          top: -el.y,
+                          backgroundColor: el.color,
+                        }}
+                        onClick={() => setOpenActions(false)}
+                      >
+                        {el.icon}
+                      </Fab>
+                    </Tooltip>
+                  ))}
+                </Stack>
+                <IconButton onClick={() => setOpenActions(!openActions)}>
+                  <LinkSimple />
+                </IconButton>
+              </Stack>
             </InputAdornment>
-          </Stack>
-        ),
-        endAdornment: (
-          <Stack sx={{ position: "relative" }}>
-            <InputAdornment>
+          ),
+          endAdornment: (
+            <InputAdornment position="end">
               <IconButton onClick={() => setOpenPicker(!openPicker)}>
                 <Smiley />
               </IconButton>
             </InputAdornment>
-          </Stack>
-        ),
-      }}
-    />
-  );
-};
+          ),
+        }}
+      />
+    );
+  }
+);
 
+// ----------------------------- UTIL -----------------------------
 function linkify(text) {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
   return text.replace(
@@ -125,49 +127,160 @@ function linkify(text) {
 }
 
 function containsUrl(text) {
-  const urlRegex = /(https?:\/\/[^\s]+)/g;
-  return urlRegex.test(text);
+  return /(https?:\/\/[^\s]+)/g.test(text);
 }
 
-// ----------------------------------------------------------------------
+// ----------------------------- FOOTER MAIN -----------------------------
 const Footer = () => {
   const theme = useTheme();
   const dispatch = useDispatch();
+  const { keycloak, initialized } = useKeycloak();
 
+  // Lấy current_conversation từ Redux
   const { current_conversation } = useSelector(
     (state) => state.conversation.direct_chat
   );
-  const conversationId = current_conversation?.id;
 
-  const { sideBar, room_id } = useSelector((state) => state.app);
+  // Lấy room_id từ app slice để backup
+  const { room_id } = useSelector((state) => state.app);
 
-  const user_id = window.localStorage.getItem("user_id");
+  // Lấy conversations để tìm current_conversation nếu bị null
+  const { conversations } = useSelector(
+    (state) => state.conversation.direct_chat
+  );
 
+  const { sideBar } = useSelector((state) => state.app);
   const isMobile = useResponsive("between", "md", "xs", "sm");
 
   const [openPicker, setOpenPicker] = useState(false);
   const [value, setValue] = useState("");
   const inputRef = useRef(null);
 
-  const handleEmojiClick = (emoji) => {
-    const input = inputRef.current;
-    if (input) {
+  // Lấy user_id từ Keycloak - FIXED
+  const user_id =
+    initialized && keycloak?.authenticated ? keycloak?.subject : null;
+
+  // Tìm current_conversation từ room_id nếu current_conversation bị null hoặc mất user_id
+  const getCurrentConversation = useCallback(() => {
+    // Nếu current_conversation hợp lệ, sử dụng nó
+    if (current_conversation?.id && current_conversation?.user_id) {
+      return current_conversation;
+    }
+
+    // Nếu current_conversation có id nhưng mất user_id, tìm trong conversations
+    if (current_conversation?.id && !current_conversation.user_id) {
+      console.log(
+        "🔄 Current conversation lost user_id, searching in conversations..."
+      );
+      const foundConversation = conversations.find(
+        (conv) => conv.id === current_conversation.id
+      );
+      if (foundConversation && foundConversation.user_id) {
+        console.log("🔍 Found conversation with user_id:", foundConversation);
+        return foundConversation;
+      }
+    }
+
+    // Fallback: tìm từ room_id
+    if (room_id) {
+      const foundConversation = conversations.find(
+        (conv) => conv.id === room_id
+      );
+      if (foundConversation && foundConversation.user_id) {
+        console.log("🔄 Found conversation from room_id:", foundConversation);
+        return foundConversation;
+      }
+    }
+
+    console.log("❌ No valid conversation found");
+    return null;
+  }, [current_conversation, room_id, conversations]);
+
+  // Debug để theo dõi current_conversation
+  useEffect(() => {
+    const currentConv = getCurrentConversation();
+    console.log("🔍 Footer Debug:", {
+      current_conversation: currentConv,
+      room_id,
+      conversations_count: conversations.length,
+      user_id,
+      keycloak_authenticated: keycloak?.authenticated,
+    });
+
+    // Log khi conversation bị reset
+    if (current_conversation?.id && !current_conversation.user_id) {
+      console.warn(
+        "🚨 REDUX ALERT: Current conversation lost user_id!",
+        current_conversation
+      );
+    }
+  }, [
+    current_conversation,
+    room_id,
+    conversations,
+    user_id,
+    keycloak,
+    getCurrentConversation,
+  ]);
+
+  // -------------------- HANDLE EMOJI INSERT --------------------
+  const handleEmojiClick = useCallback(
+    (emoji) => {
+      const input = inputRef.current;
+      if (!input) return;
+
       const start = input.selectionStart;
       const end = input.selectionEnd;
+      const newValue = value.slice(0, start) + emoji + value.slice(end);
 
-      setValue(value.slice(0, start) + emoji + value.slice(end));
+      setValue(newValue);
 
-      input.selectionStart = input.selectionEnd = start + emoji.length;
-    }
-  };
+      setTimeout(() => {
+        input.selectionStart = input.selectionEnd = start + emoji.length;
+      }, 1);
+    },
+    [value]
+  );
 
-  const handleSendMessage = () => {
-    if (!value.trim() || !current_conversation || !current_conversation.user_id)
+  // -------------------- SEND MESSAGE --------------------
+  const handleSendMessage = useCallback(() => {
+    console.log("📤 Attempting to send message...");
+
+    const currentConv = getCurrentConversation();
+
+    console.log("🔍 Send Message Debug:", {
+      currentConv,
+      value: value.trim(),
+      user_id,
+      room_id,
+      has_user_id: !!user_id,
+      has_conv_user_id: !!currentConv?.user_id,
+    });
+
+    if (!value.trim()) {
+      console.log("❌ Message is empty");
       return;
+    }
 
-    const messageId = uuidv4();
-    const messageData = {
-      id: messageId,
+    if (!currentConv?.id) {
+      console.log("❌ No valid conversation found");
+      return;
+    }
+
+    if (!currentConv.user_id) {
+      console.log("❌ No user_id in conversation");
+      return;
+    }
+
+    if (!user_id) {
+      console.log("❌ No user_id available");
+      return;
+    }
+
+    const msgId = uuidv4();
+
+    const localMessage = {
+      id: msgId,
       type: "msg",
       subtype: containsUrl(value) ? "Link" : "Text",
       message: value,
@@ -177,39 +290,64 @@ const Footer = () => {
       attachments: [],
     };
 
-    // 1️⃣ Cập nhật UI ngay
+    console.log("📝 Dispatching message:", {
+      conversation_id: currentConv.id,
+      to_user_id: currentConv.user_id,
+      from_user_id: user_id,
+      message: localMessage,
+    });
+
+    // Dispatch message to Redux
     dispatch(
       addDirectMessage({
-        message: messageData,
-        conversation_id: current_conversation.id,
+        message: localMessage,
+        conversation_id: currentConv.id,
+        currentUserId: user_id,
       })
     );
 
-    // 2️⃣ Emit lên server
+    // Emit socket event
     socket.emit("text_message", {
-      id: messageId, // ⚡ gửi id đồng bộ
+      id: msgId,
       message: linkify(value),
-      conversation_id: current_conversation.id,
       from: user_id,
-      to: current_conversation.user_id,
+      to: currentConv.user_id,
+      conversation_id: currentConv.id,
       type: containsUrl(value) ? "Link" : "Text",
     });
 
     setValue("");
-  };
+  }, [value, getCurrentConversation, dispatch, user_id]);
+
+  // Nếu không có conversation được chọn, ẩn input
+  const validConversation = getCurrentConversation();
+  if (!validConversation) {
+    console.log("🚫 Footer: No valid conversation available");
+    return (
+      <Box
+        sx={{
+          width: "100%",
+          backgroundColor: theme.palette.background.paper,
+          padding: 2,
+          textAlign: "center",
+          color: theme.palette.text.secondary,
+        }}
+      >
+        Select a conversation to start messaging
+      </Box>
+    );
+  }
 
   return (
-    <Box
-      sx={{ position: "relative", backgroundColor: "transparent !important" }}
-    >
+    <Box sx={{ position: "relative" }}>
       <Box
         p={isMobile ? 1 : 2}
-        width="100%"
         sx={{
+          width: "100%",
           backgroundColor:
             theme.palette.mode === "light"
               ? "#F8FAFF"
-              : theme.palette.background,
+              : theme.palette.background.paper,
           boxShadow: "0px 0px 2px rgba(0, 0, 0, 0.25)",
         }}
       >
@@ -242,6 +380,7 @@ const Footer = () => {
             />
           </Stack>
 
+          {/* SEND BUTTON */}
           <Box
             sx={{
               height: 48,
@@ -255,7 +394,10 @@ const Footer = () => {
               alignItems="center"
               justifyContent="center"
             >
-              <IconButton onClick={handleSendMessage}>
+              <IconButton
+                onClick={handleSendMessage}
+                disabled={!validConversation?.user_id || !user_id}
+              >
                 <PaperPlaneTilt color="#fff" />
               </IconButton>
             </Stack>
@@ -266,4 +408,4 @@ const Footer = () => {
   );
 };
 
-export default Footer;
+export default React.memo(Footer);
