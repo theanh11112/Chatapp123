@@ -1,4 +1,4 @@
-// ProtectedRoute.js
+// ProtectedRoute.js - THÊM FALLBACK
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useKeycloak } from "@react-keycloak/web";
@@ -37,7 +37,7 @@ const ProtectedRoute = ({ children, allowedRoles = [] }) => {
       console.log("✅ User authenticated, setting ready");
       setReady(true);
     }
-  }, [initialized, keycloak.authenticated]); // QUAN TRỌNG: chỉ theo dõi authenticated
+  }, [initialized, keycloak.authenticated]);
 
   // Reset refs khi authenticated thay đổi
   useEffect(() => {
@@ -60,6 +60,11 @@ const ProtectedRoute = ({ children, allowedRoles = [] }) => {
     );
     const allRoles = [...new Set([...realmRoles, ...clientRoles])];
 
+    // 🆕 THÊM: Nếu user không có role nào, mặc định là "user"
+    if (allRoles.length === 0 && allowedRoles.includes("user")) {
+      return true;
+    }
+
     return allowedRoles.some((r) => allRoles.includes(r));
   }, [keycloak.tokenParsed, allowedRoles]);
 
@@ -73,6 +78,11 @@ const ProtectedRoute = ({ children, allowedRoles = [] }) => {
 
   // Kiểm tra role
   if (allowedRoles.length > 0 && !hasRequiredRole()) {
+    console.warn("🚨 User không có role phù hợp:", {
+      path: location.pathname,
+      allowedRoles,
+      userRoles: keycloak.tokenParsed?.realm_access?.roles || [],
+    });
     return <Navigate to="/404" replace />;
   }
 

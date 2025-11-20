@@ -3,6 +3,7 @@ import {
   Avatar,
   Badge,
   Box,
+  Chip,
   Divider,
   Fade,
   IconButton,
@@ -13,7 +14,13 @@ import {
   Typography,
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
-import { CaretDown, MagnifyingGlass, Phone, VideoCamera } from "phosphor-react";
+import {
+  CaretDown,
+  MagnifyingGlass,
+  Phone,
+  VideoCamera,
+  Users,
+} from "phosphor-react";
 import useResponsive from "../../hooks/useResponsive";
 import { ToggleSidebar } from "../../redux/slices/app";
 import { useDispatch, useSelector } from "react-redux";
@@ -49,7 +56,20 @@ const StyledBadge = styled(Badge)(({ theme }) => ({
   },
 }));
 
-const Conversation_Menu = [
+const GroupBadge = styled(Badge)(({ theme }) => ({
+  "& .MuiBadge-badge": {
+    backgroundColor: theme.palette.primary.main,
+    color: theme.palette.primary.contrastText,
+    boxShadow: `0 0 0 2px ${theme.palette.background.paper}`,
+    fontSize: "0.6rem",
+    height: 16,
+    minWidth: 16,
+    padding: "0 4px",
+  },
+}));
+
+// Menu items for different conversation types
+const Direct_Conversation_Menu = [
   {
     id: 1,
     title: "Contact info",
@@ -68,25 +88,107 @@ const Conversation_Menu = [
   },
 ];
 
+const Group_Conversation_Menu = [
+  {
+    id: 1,
+    title: "Group info",
+  },
+  {
+    id: 2,
+    title: "Mute notifications",
+  },
+  {
+    id: 3,
+    title: "Clear messages",
+  },
+  {
+    id: 4,
+    title: "Exit group",
+  },
+  {
+    id: 5,
+    title: "Report group",
+  },
+];
+
 const ChatHeader = () => {
   const dispatch = useDispatch();
   const isMobile = useResponsive("between", "md", "xs", "sm");
   const theme = useTheme();
 
+  // Lấy cả direct conversation và group room từ state
   const { current_conversation } = useSelector(
     (state) => state.conversation.direct_chat
+  );
+  const { current_room } = useSelector(
+    (state) => state.conversation.group_chat
   );
 
   const [anchorEl, setAnchorEl] = React.useState(null);
   const open = Boolean(anchorEl);
 
-  // Debug current_conversation
+  // Debug current conversations
   React.useEffect(() => {
     console.log("🔍 ChatHeader - current_conversation:", current_conversation);
-  }, [current_conversation]);
+    console.log("🔍 ChatHeader - current_room:", current_room);
+  }, [current_conversation, current_room]);
 
-  // Nếu không có current_conversation, hiển thị placeholder
-  if (!current_conversation?.id) {
+  // Xác định loại chat hiện tại
+  const isGroupChat = Boolean(current_room?.id);
+  const isDirectChat = Boolean(current_conversation?.id);
+  const currentChat = isGroupChat ? current_room : current_conversation;
+  const menuItems = isGroupChat
+    ? Group_Conversation_Menu
+    : Direct_Conversation_Menu;
+
+  // Lấy thông tin avatar
+  const getChatAvatar = () => {
+    if (isGroupChat) {
+      return (
+        current_room?.img ||
+        `https://ui-avatars.com/api/?name=${encodeURIComponent(
+          current_room?.name || "Group"
+        )}&background=random`
+      );
+    } else {
+      return (
+        current_conversation?.img ||
+        `https://i.pravatar.cc/150?u=${current_conversation?.user_id}`
+      );
+    }
+  };
+
+  // Lấy tên chat
+  const getChatName = () => {
+    if (isGroupChat) {
+      return current_room?.name || "Unnamed Group";
+    } else if (isDirectChat) {
+      return current_conversation?.name || "Unknown User";
+    }
+    return "";
+  };
+
+  // Lấy trạng thái
+  const getStatusText = () => {
+    if (isGroupChat) {
+      const membersCount = current_room?.membersCount || 0;
+      const onlineCount = current_room?.onlineMembers || 0;
+      return `${membersCount} members • ${onlineCount} online`;
+    } else if (isDirectChat) {
+      return current_conversation?.online
+        ? "Online"
+        : current_conversation?.lastSeen
+        ? `Last seen ${current_conversation.lastSeen}`
+        : "Offline";
+    }
+    return "";
+  };
+
+  // Kiểm tra có chat nào active không
+  const hasActiveChat = isGroupChat || isDirectChat;
+
+  // Nếu không có conversation nào active, hiển thị placeholder
+  if (!hasActiveChat) {
     return (
       <Box
         p={2}
@@ -137,56 +239,96 @@ const ChatHeader = () => {
             direction="row"
             sx={{ cursor: isMobile ? "pointer" : "default" }}
           >
-            <StyledBadge
-              overlap="circular"
-              anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-              variant={current_conversation?.online ? "dot" : undefined}
-            >
-              <Avatar
-                alt={current_conversation?.name}
-                src={current_conversation?.img}
-                sx={{ width: 40, height: 40 }}
-              />
-            </StyledBadge>
+            {isGroupChat ? (
+              <GroupBadge
+                overlap="circular"
+                anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+                badgeContent={<Users size={10} />}
+              >
+                <Avatar
+                  alt={getChatName()}
+                  src={getChatAvatar()}
+                  sx={{ width: 40, height: 40 }}
+                >
+                  {getChatName().charAt(0)}
+                </Avatar>
+              </GroupBadge>
+            ) : (
+              <StyledBadge
+                overlap="circular"
+                anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+                variant={current_conversation?.online ? "dot" : undefined}
+              >
+                <Avatar
+                  alt={getChatName()}
+                  src={getChatAvatar()}
+                  sx={{ width: 40, height: 40 }}
+                />
+              </StyledBadge>
+            )}
 
             <Stack spacing={0.2}>
-              <Typography variant="subtitle2">
-                {current_conversation?.name || "Unknown User"}
-              </Typography>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Typography variant="subtitle2">{getChatName()}</Typography>
+                {isGroupChat && (
+                  <Chip
+                    label="Group"
+                    size="small"
+                    color="primary"
+                    variant="outlined"
+                    sx={{ height: 20, fontSize: "0.6rem" }}
+                  />
+                )}
+              </Stack>
 
-              <Typography variant="caption">
-                {current_conversation?.online
-                  ? "Online"
-                  : current_conversation?.lastSeen
-                  ? `Last seen ${current_conversation.lastSeen}`
-                  : "Offline"}
+              <Typography variant="caption" color="text.secondary">
+                {getStatusText()}
               </Typography>
             </Stack>
           </Stack>
 
           <Stack direction="row" spacing={isMobile ? 1 : 3} alignItems="center">
-            <IconButton
-              onClick={() => {
-                if (current_conversation?.user_id) {
-                  dispatch(StartVideoCall(current_conversation.user_id));
-                }
-              }}
-              disabled={!current_conversation?.user_id}
-            >
-              <VideoCamera />
-            </IconButton>
+            {/* Video call - only for direct chats */}
+            {!isGroupChat && isDirectChat && (
+              <IconButton
+                onClick={() => {
+                  if (current_conversation?.user_id) {
+                    dispatch(StartVideoCall(current_conversation.user_id));
+                  }
+                }}
+                disabled={!current_conversation?.user_id}
+              >
+                <VideoCamera />
+              </IconButton>
+            )}
 
-            <IconButton
-              onClick={() => {
-                if (current_conversation?.user_id) {
-                  dispatch(StartAudioCall(current_conversation.user_id));
-                }
-              }}
-              disabled={!current_conversation?.user_id}
-            >
-              <Phone />
-            </IconButton>
+            {/* Audio call - only for direct chats */}
+            {!isGroupChat && isDirectChat && (
+              <IconButton
+                onClick={() => {
+                  if (current_conversation?.user_id) {
+                    dispatch(StartAudioCall(current_conversation.user_id));
+                  }
+                }}
+                disabled={!current_conversation?.user_id}
+              >
+                <Phone />
+              </IconButton>
+            )}
 
+            {/* Group call options */}
+            {isGroupChat && (
+              <IconButton
+                onClick={() => {
+                  // TODO: Implement group call functionality
+                  console.log("Start group call");
+                }}
+              >
+                <VideoCamera />
+              </IconButton>
+            )}
+
+            {/* Search icon for both types */}
             {!isMobile && (
               <IconButton>
                 <MagnifyingGlass />
@@ -223,12 +365,15 @@ const ChatHeader = () => {
             >
               <Box p={1}>
                 <Stack spacing={1}>
-                  {Conversation_Menu.map((el) => (
+                  {menuItems.map((el) => (
                     <MenuItem
                       key={el.id}
                       onClick={() => {
                         setAnchorEl(null);
-                        console.log(`Clicked: ${el.title}`);
+                        console.log(`Clicked: ${el.title}`, {
+                          isGroupChat,
+                          chatId: currentChat.id,
+                        });
                       }}
                     >
                       {el.title}

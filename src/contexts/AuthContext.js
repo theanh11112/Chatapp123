@@ -1,77 +1,93 @@
-import { createContext, useContext, useEffect, useState } from "react";
+// AuthContext.js - ĐÃ SỬA (FOCUS VÀO USER INFO, KHÔNG NAVIGATION)
+import { createContext, useContext, useEffect, useState, useRef } from "react";
 import { useKeycloak } from "@react-keycloak/web";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import api from "../api/axiosInstance";
 
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
-  const { keycloak } = useKeycloak();
+  const { keycloak, initialized } = useKeycloak();
   const navigate = useNavigate();
+  const location = useLocation();
   const [user, setUser] = useState(null);
 
-  // Khi Keycloak xác thực thành công
+  // 🆕 SỬA: Chỉ xử lý user info, không xử lý navigation
   useEffect(() => {
-    if (keycloak?.authenticated) {
+    if (initialized && keycloak?.authenticated && keycloak.tokenParsed) {
       const token = keycloak.tokenParsed;
       const roles = [
         ...(token.realm_access?.roles || []),
-        ...(Object.values(token.resource_access || {}).flatMap(
-          (r) => r.roles
-        ) || []),
+        ...Object.values(token.resource_access || {}).flatMap(
+          (r) => r.roles || []
+        ),
       ];
 
-      setUser({
-        username: token.preferred_username,
+      const userInfo = {
+        id: token.sub,
+        username: token.preferred_username || token.name,
         email: token.email,
+        firstName: token.given_name,
+        lastName: token.family_name,
         roles,
-      });
+        fullName: token.name,
+      };
 
-      // 🚀 Điều hướng theo role
-      if (roles.includes("admin")) navigate("/admin/dashboard");
-      else if (roles.includes("moderator")) navigate("/moderator/dashboard");
-      else if (roles.includes("bot")) navigate("/bot/info");
-      else if (roles.includes("guest")) navigate("/guest/info");
-      else navigate("/user/dashboard");
+      console.log("👤 AuthContext - User authenticated:", userInfo);
+      setUser(userInfo);
+    } else if (initialized && !keycloak?.authenticated) {
+      console.log("🚪 AuthContext - User logged out");
+      setUser(null);
     }
-  }, [keycloak?.authenticated, keycloak?.tokenParsed, navigate]);
+  }, [initialized, keycloak?.authenticated, keycloak?.tokenParsed]);
 
-  // 🔁 Refresh token định kỳ
+  // 🆕 ĐƠN GIẢN HÓA: Token refresh
   useEffect(() => {
-    const refreshInterval = setInterval(() => {
-      if (keycloak?.authenticated) {
-        keycloak
-          .updateToken(60)
-          .then((refreshed) => {
-            if (refreshed) console.log("🔄 Token refreshed");
-          })
-          .catch(() => {
-            console.warn("❌ Token expired → login lại");
-            keycloak.login({ redirectUri: window.location.origin });
-          });
-      }
-    }, 60000);
-    return () => clearInterval(refreshInterval);
+    if (keycloak?.authenticated) {
+      keycloak.onTokenExpired = () => {
+        console.log("🔄 AuthContext - Token expired, refreshing...");
+        keycloak.updateToken(30).catch((error) => {
+          console.error("❌ AuthContext - Token refresh failed:", error);
+        });
+      };
+    }
   }, [keycloak]);
 
-  const login = () => keycloak.login({ redirectUri: window.location.origin });
-  const logout = () => keycloak.logout({ redirectUri: window.location.origin });
-  const hasRole = (role) => user?.roles?.includes(role);
+  const login = () => {
+    console.log("🔐 AuthContext - Manual login triggered");
+    keycloak.login();
+  };
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        authenticated: keycloak?.authenticated,
-        login,
-        logout,
-        hasRole,
-        api,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
+  const logout = () => {
+    console.log("🚪 AuthContext - Manual logout triggered");
+    keycloak.logout();
+  };
+
+  const hasRole = (role) => user?.roles?.includes(role);
+  const hasAnyRole = (roles) =>
+    roles.some((role) => user?.roles?.includes(role));
+  const hasAllRoles = (roles) =>
+    roles.every((role) => user?.roles?.includes(role));
+
+  const value = {
+    user,
+    authenticated: keycloak?.authenticated,
+    initialized,
+    login,
+    logout,
+    hasRole,
+    hasAnyRole,
+    hasAllRoles,
+    api,
+  };
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
-export const useAuth = () => useContext(AuthContext);
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error("useAuth must be used within an AuthProvider");
+  }
+  return context;
+};

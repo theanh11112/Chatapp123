@@ -24,10 +24,11 @@ const initialState = {
   all_users: [],
   friends: [],
   friendRequests: [],
-  chat_type: null,
+  chat_type: null, // "individual" | "group"
   room_id: null,
   call_logs: [],
-  messages: [], // <-- thêm dòng này
+  messages: [],
+  current_chat_info: {}, // 🆕 Thông tin chat hiện tại
 };
 
 // ----------------------------------------------------------------------
@@ -77,17 +78,35 @@ const slice = createSlice({
       state.friendRequests = action.payload.requests;
     },
 
+    // 🆕 Cập nhật để hỗ trợ cả direct và group chat
     selectConversation(state, action) {
-      state.chat_type = "individual";
-      state.room_id = action.payload.room_id;
+      const {
+        room_id,
+        chat_type = "individual",
+        chat_info = {},
+      } = action.payload;
+      state.chat_type = chat_type;
+      state.room_id = room_id;
+      state.current_chat_info = chat_info;
+      console.log("🔄 Selected conversation:", {
+        room_id,
+        chat_type,
+        chat_info,
+      });
     },
 
-    // --------------------------------------------------------
-    // 👉 Thêm reducer SetMessages (dùng khi click vào 1 chat)
-    // --------------------------------------------------------
+    // 🆕 Cập nhật thông tin chat hiện tại
+    updateCurrentChatInfo(state, action) {
+      state.current_chat_info = {
+        ...state.current_chat_info,
+        ...action.payload,
+      };
+    },
+
     setMessages(state, action) {
       state.messages = action.payload.messages;
     },
+
     resetAppState(state) {
       return initialState;
     },
@@ -168,12 +187,18 @@ export const FetchFriendRequests = () => async (dispatch) => {
   }
 };
 
-// select conversation
+// 🆕 Cập nhật SelectConversation để hỗ trợ cả group
 export const SelectConversation =
-  ({ room_id }) =>
+  ({ room_id, chat_type = "individual", chat_info = {} }) =>
   (dispatch) => {
-    console.log("888", room_id);
-    dispatch(slice.actions.selectConversation({ room_id }));
+    console.log("🔍 Selecting conversation:", {
+      room_id,
+      chat_type,
+      chat_info,
+    });
+    dispatch(
+      slice.actions.selectConversation({ room_id, chat_type, chat_info })
+    );
   };
 
 // call logs

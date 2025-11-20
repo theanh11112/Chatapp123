@@ -1,6 +1,7 @@
-// Router.js - BỎ RoleLayout, dùng DashboardLayout cho tất cả routes
+// routes.js - ĐÃ CẬP NHẬT VỚI GENERALBASE
 import { Suspense, lazy, useMemo } from "react";
 import { Navigate, useRoutes } from "react-router-dom";
+import { useKeycloak } from "@react-keycloak/web";
 import ProtectedRoute from "./ProtectedRoute";
 import DashboardLayout from "../layouts/dashboard";
 import LoadingScreen from "../components/LoadingScreen";
@@ -15,8 +16,11 @@ const Loadable = (Component) => (props) =>
 // ==========================
 // Pages
 // ==========================
-const GeneralApp = Loadable(
-  lazy(() => import("../pages/dashboard/GeneralApp"))
+const GeneralChat = Loadable(
+  lazy(() => import("../pages/dashboard/GeneralChat"))
+);
+const GeneralGroup = Loadable(
+  lazy(() => import("../pages/dashboard/GeneralGroup"))
 );
 const Conversation = Loadable(
   lazy(() => import("../pages/dashboard/Conversation"))
@@ -43,14 +47,51 @@ const UserDashboard = Loadable(
   lazy(() => import("../pages/roles/UserDashboard"))
 );
 
+// 🆕 TẠO: Root Redirect Component
+const RootRedirect = () => {
+  const { keycloak, initialized } = useKeycloak();
+
+  if (!initialized) {
+    return <LoadingScreen />;
+  }
+
+  if (keycloak.authenticated) {
+    const roles = keycloak.tokenParsed?.realm_access?.roles || [];
+
+    console.log("🔄 RootRedirect - User roles:", roles);
+
+    if (roles.includes("admin")) {
+      return <Navigate to="/admin/dashboard" replace />;
+    } else if (roles.includes("moderator")) {
+      return <Navigate to="/moderator/dashboard" replace />;
+    } else if (roles.includes("bot")) {
+      return <Navigate to="/bot/info" replace />;
+    } else if (roles.includes("guest")) {
+      return <Navigate to="/guest/info" replace />;
+    } else {
+      return <Navigate to="/user/dashboard" replace />;
+    }
+  } else {
+    console.log(
+      "🔐 RootRedirect - Not authenticated, redirecting to Keycloak login..."
+    );
+    keycloak.login();
+    return <LoadingScreen />;
+  }
+};
+
 // ==========================
 // Router Component
 // ==========================
 export default function Router() {
+  const { keycloak, initialized } = useKeycloak();
+
   const routes = useMemo(
     () => [
-      // Root redirect
-      { path: "/", element: <Navigate to="/user/dashboard" replace /> },
+      {
+        path: "/",
+        element: <RootRedirect />,
+      },
 
       // 🧱 USER routes
       {
@@ -63,12 +104,18 @@ export default function Router() {
         children: [
           { path: "", element: <Navigate to="dashboard" replace /> },
           { path: "dashboard", element: <UserDashboard /> },
-          { path: "group", element: <Group /> },
+
+          // 🆕 CẬP NHẬT: Sử dụng GeneralGroup thay vì Group
+          { path: "group", element: <GeneralGroup /> },
+
           { path: "settings", element: <Settings /> },
           { path: "contact", element: <Contact /> },
           { path: "profile", element: <Profile /> },
           { path: "call", element: <CallPage /> },
-          { path: "app", element: <GeneralApp /> },
+
+          // 🆕 CẬP NHẬT: Sử dụng GeneralChat cho individual chat
+          { path: "app", element: <GeneralChat /> },
+
           { path: "conversation", element: <Conversation /> },
           { path: "chats", element: <Chats /> },
         ],
@@ -85,12 +132,18 @@ export default function Router() {
         children: [
           { path: "", element: <Navigate to="dashboard" replace /> },
           { path: "dashboard", element: <AdminDashboard /> },
-          { path: "group", element: <Group /> },
+
+          // 🆕 CẬP NHẬT: Sử dụng GeneralGroup thay vì Group
+          { path: "group", element: <GeneralGroup /> },
+
           { path: "settings", element: <Settings /> },
           { path: "contact", element: <Contact /> },
           { path: "profile", element: <Profile /> },
           { path: "call", element: <CallPage /> },
-          { path: "app", element: <GeneralApp /> },
+
+          // 🆕 CẬP NHẬT: Sử dụng GeneralChat cho individual chat
+          { path: "app", element: <GeneralChat /> },
+
           { path: "conversation", element: <Conversation /> },
           { path: "chats", element: <Chats /> },
         ],
@@ -107,9 +160,18 @@ export default function Router() {
         children: [
           { path: "", element: <Navigate to="dashboard" replace /> },
           { path: "dashboard", element: <ModeratorDashboard /> },
-          { path: "group", element: <Group /> },
+
+          // 🆕 CẬP NHẬT: Sử dụng GeneralGroup thay vì Group
+          { path: "group", element: <GeneralGroup /> },
+
+          { path: "settings", element: <Settings /> },
           { path: "contact", element: <Contact /> },
           { path: "profile", element: <Profile /> },
+          { path: "call", element: <CallPage /> },
+
+          // 🆕 CẬP NHẬT: Sử dụng GeneralChat cho individual chat
+          { path: "app", element: <GeneralChat /> },
+
           { path: "conversation", element: <Conversation /> },
           { path: "chats", element: <Chats /> },
         ],
@@ -152,5 +214,11 @@ export default function Router() {
     []
   );
 
-  return useRoutes(routes);
+  const routing = useRoutes(routes);
+
+  if (!initialized) {
+    return <LoadingScreen />;
+  }
+
+  return routing;
 }

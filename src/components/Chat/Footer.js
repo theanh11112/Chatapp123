@@ -1,3 +1,4 @@
+// Footer.js - HOÀN CHỈNH - ĐÃ SỬA LỖI RESET MESSAGES
 import {
   Box,
   Fab,
@@ -26,7 +27,10 @@ import data from "@emoji-mart/data";
 import Picker from "@emoji-mart/react";
 import { socket } from "../../socket";
 import { useSelector, useDispatch } from "react-redux";
-import { addDirectMessage } from "../../redux/slices/conversation";
+import {
+  addDirectMessage,
+  addGroupMessage,
+} from "../../redux/slices/conversation";
 import { v4 as uuidv4 } from "uuid";
 
 const StyledInput = styled(TextField)(({ theme }) => ({
@@ -136,18 +140,16 @@ const Footer = () => {
   const dispatch = useDispatch();
   const { keycloak, initialized } = useKeycloak();
 
-  // Lấy current_conversation từ Redux
+  // Lấy cả direct và group state từ Redux
   const { current_conversation } = useSelector(
     (state) => state.conversation.direct_chat
   );
-
-  // Lấy room_id từ app slice để backup
-  const { room_id } = useSelector((state) => state.app);
-
-  // Lấy conversations để tìm current_conversation nếu bị null
-  const { conversations } = useSelector(
-    (state) => state.conversation.direct_chat
+  const { current_room } = useSelector(
+    (state) => state.conversation.group_chat
   );
+
+  // Lấy room_id và chat_type từ app slice
+  const { room_id, chat_type } = useSelector((state) => state.app);
 
   const { sideBar } = useSelector((state) => state.app);
   const isMobile = useResponsive("between", "md", "xs", "sm");
@@ -156,72 +158,55 @@ const Footer = () => {
   const [value, setValue] = useState("");
   const inputRef = useRef(null);
 
-  // Lấy user_id từ Keycloak - FIXED
+  // Lấy user_id từ Keycloak
   const user_id =
     initialized && keycloak?.authenticated ? keycloak?.subject : null;
 
-  // Tìm current_conversation từ room_id nếu current_conversation bị null hoặc mất user_id
-  const getCurrentConversation = useCallback(() => {
-    // Nếu current_conversation hợp lệ, sử dụng nó
-    if (current_conversation?.id && current_conversation?.user_id) {
-      return current_conversation;
-    }
+  // 🆕 Xác định loại chat hiện tại
+  const isGroupChat = chat_type === "group";
+  const isDirectChat = chat_type === "individual";
 
-    // Nếu current_conversation có id nhưng mất user_id, tìm trong conversations
-    if (current_conversation?.id && !current_conversation.user_id) {
-      console.log(
-        "🔄 Current conversation lost user_id, searching in conversations..."
-      );
-      const foundConversation = conversations.find(
-        (conv) => conv.id === current_conversation.id
-      );
-      if (foundConversation && foundConversation.user_id) {
-        console.log("🔍 Found conversation with user_id:", foundConversation);
-        return foundConversation;
-      }
-    }
-
-    // Fallback: tìm từ room_id
-    if (room_id) {
-      const foundConversation = conversations.find(
-        (conv) => conv.id === room_id
-      );
-      if (foundConversation && foundConversation.user_id) {
-        console.log("🔄 Found conversation from room_id:", foundConversation);
-        return foundConversation;
-      }
-    }
-
-    console.log("❌ No valid conversation found");
-    return null;
-  }, [current_conversation, room_id, conversations]);
-
-  // Debug để theo dõi current_conversation
-  useEffect(() => {
-    const currentConv = getCurrentConversation();
-    console.log("🔍 Footer Debug:", {
-      current_conversation: currentConv,
+  // 🆕 Lấy thông tin chat hiện tại - ĐÃ SỬA DEPENDENCIES
+  // Footer.js - SỬA getCurrentChat để giảm re-render
+  const getCurrentChat = useCallback(() => {
+    console.log("🔄 getCurrentChat called:", {
+      isGroupChat,
+      isDirectChat,
+      current_room_id: current_room?.id,
+      current_conversation_id: current_conversation?.id,
       room_id,
-      conversations_count: conversations.length,
-      user_id,
-      keycloak_authenticated: keycloak?.authenticated,
     });
 
-    // Log khi conversation bị reset
-    if (current_conversation?.id && !current_conversation.user_id) {
-      console.warn(
-        "🚨 REDUX ALERT: Current conversation lost user_id!",
-        current_conversation
-      );
+    // 🆕 SỬA: Chỉ return new object khi thực sự thay đổi
+    if (isGroupChat && current_room?.id === room_id) {
+      return {
+        type: "group",
+        id: current_room.id,
+        name: current_room.name,
+        data: current_room,
+      };
+    } else if (isDirectChat && current_conversation?.id === room_id) {
+      return {
+        type: "direct",
+        id: current_conversation.id,
+        name: current_conversation.name,
+        user_id: current_conversation.user_id,
+        data: current_conversation,
+      };
     }
-  }, [
-    current_conversation,
-    room_id,
-    conversations,
-    user_id,
-    keycloak,
-    getCurrentConversation,
-  ]);
+    return null;
+  }, [isGroupChat, isDirectChat, current_room, current_conversation, room_id]);
+
+  // 🆕 THÊM: Debug effect để theo dõi re-render
+  useEffect(() => {
+    console.log("🔄 Footer - Re-render triggered:", {
+      room_id,
+      chat_type,
+      current_room_id: current_room?.id,
+      current_conversation_id: current_conversation?.id,
+      value_length: value.length,
+    });
+  }, [room_id, chat_type, current_room, current_conversation, value]);
 
   // -------------------- HANDLE EMOJI INSERT --------------------
   const handleEmojiClick = useCallback(
@@ -242,19 +227,22 @@ const Footer = () => {
     [value]
   );
 
-  // -------------------- SEND MESSAGE --------------------
+  // 🆕 SỬA QUAN TRỌNG: Handle send message với logic chống reset
   const handleSendMessage = useCallback(() => {
     console.log("📤 Attempting to send message...");
 
-    const currentConv = getCurrentConversation();
+    const currentChat = getCurrentChat();
 
     console.log("🔍 Send Message Debug:", {
-      currentConv,
+      currentChat,
       value: value.trim(),
       user_id,
       room_id,
-      has_user_id: !!user_id,
-      has_conv_user_id: !!currentConv?.user_id,
+      chat_type,
+      isGroupChat,
+      isDirectChat,
+      current_room_messages: current_room?.messages?.length,
+      current_conversation_messages: current_conversation?.messages?.length,
     });
 
     if (!value.trim()) {
@@ -262,13 +250,8 @@ const Footer = () => {
       return;
     }
 
-    if (!currentConv?.id) {
-      console.log("❌ No valid conversation found");
-      return;
-    }
-
-    if (!currentConv.user_id) {
-      console.log("❌ No user_id in conversation");
+    if (!currentChat?.id) {
+      console.log("❌ No valid chat found");
       return;
     }
 
@@ -278,51 +261,166 @@ const Footer = () => {
     }
 
     const msgId = uuidv4();
+    const timestamp = new Date().toISOString();
 
-    const localMessage = {
-      id: msgId,
-      type: "msg",
-      subtype: containsUrl(value) ? "Link" : "Text",
-      message: value,
-      incoming: false,
-      outgoing: true,
-      time: new Date().toISOString(),
-      attachments: [],
-    };
+    if (isGroupChat) {
+      // 🆕 GROUP MESSAGE - OPTIMISTIC UPDATE VỚI UUID
+      const optimisticMessage = {
+        id: msgId, // UUID cho optimistic update
+        _id: msgId, // 🆕 THÊM _id để duplicate detection hoạt động
+        type: "msg",
+        subtype: containsUrl(value) ? "link" : "text",
+        message: value,
+        content: value,
+        incoming: false,
+        outgoing: true,
+        time: formatMessageTime(timestamp),
+        createdAt: timestamp,
+        attachments: [],
+        sender: {
+          keycloakId: user_id,
+          username: keycloak?.tokenParsed?.preferred_username || "You",
+        },
+        isOptimistic: true, // 🆕 FLAG ĐỂ PHÂN BIỆT
+      };
 
-    console.log("📝 Dispatching message:", {
-      conversation_id: currentConv.id,
-      to_user_id: currentConv.user_id,
-      from_user_id: user_id,
-      message: localMessage,
-    });
+      console.log("📝 Optimistic update for GROUP message - STRUCTURE:", {
+        message_structure: optimisticMessage,
+        type: optimisticMessage.type,
+        subtype: optimisticMessage.subtype,
+        has_message: !!optimisticMessage.message,
+        has_content: !!optimisticMessage.content,
+      });
 
-    // Dispatch message to Redux
-    dispatch(
-      addDirectMessage({
-        message: localMessage,
-        conversation_id: currentConv.id,
-        currentUserId: user_id,
-      })
-    );
+      // 🆕 SỬA: Dispatch với flag isOptimistic
+      dispatch(
+        addGroupMessage({
+          message: optimisticMessage,
+          room_id: currentChat.id,
+          isOptimistic: true,
+        })
+      );
 
-    // Emit socket event
-    socket.emit("text_message", {
-      id: msgId,
-      message: linkify(value),
-      from: user_id,
-      to: currentConv.user_id,
-      conversation_id: currentConv.id,
-      type: containsUrl(value) ? "Link" : "Text",
-    });
+      // 🆕 EMIT SOCKET EVENT FOR GROUP
+      console.log("🔌 Emitting group_message socket event:", {
+        roomId: currentChat.id,
+        message: value,
+        sender: user_id,
+        messageId: msgId, // 🆕 GỬI CẢ UUID ĐỂ BACKEND GHÉP
+      });
+
+      socket.emit("group_message", {
+        roomId: currentChat.id,
+        message: value,
+        sender: {
+          keycloakId: user_id,
+          username: keycloak?.tokenParsed?.preferred_username || "Unknown",
+        },
+        type: containsUrl(value) ? "link" : "text",
+        timestamp: timestamp,
+        messageId: msgId, // 🆕 QUAN TRỌNG: Gửi UUID để backend có thể mapping
+      });
+
+      console.log("✅ Group message sent via socket with optimistic update");
+    } else {
+      // DIRECT MESSAGE
+      if (!currentChat.user_id) {
+        console.log("❌ No user_id in conversation");
+        return;
+      }
+
+      const optimisticMessage = {
+        id: msgId,
+        type: "msg",
+        subtype: containsUrl(value) ? "link" : "text",
+        message: value,
+        incoming: false,
+        outgoing: true,
+        time: formatMessageTime(timestamp),
+        attachments: [],
+        isOptimistic: true, // 🆕 FLAG CHO DIRECT MESSAGE
+      };
+
+      console.log("📝 Optimistic update for DIRECT message:", {
+        conversation_id: currentChat.id,
+        message_id: msgId,
+      });
+
+      // 🆕 SỬA: Direct message với optimistic flag
+      dispatch(
+        addDirectMessage({
+          message: optimisticMessage,
+          conversation_id: currentChat.id,
+          currentUserId: user_id,
+          isGroup: false,
+          isOptimistic: true,
+        })
+      );
+
+      console.log("🔌 Emitting text_message socket event:", {
+        conversation_id: currentChat.id,
+        to: currentChat.user_id,
+        from: user_id,
+        messageId: msgId,
+      });
+
+      socket.emit("text_message", {
+        id: msgId,
+        message: linkify(value),
+        from: user_id,
+        to: currentChat.user_id,
+        conversation_id: currentChat.id,
+        type: containsUrl(value) ? "link" : "text",
+      });
+
+      console.log("✅ Direct message sent via socket with optimistic update");
+    }
 
     setValue("");
-  }, [value, getCurrentConversation, dispatch, user_id]);
+  }, [
+    value,
+    getCurrentChat,
+    dispatch,
+    user_id,
+    isGroupChat,
+    isDirectChat,
+    keycloak,
+    current_room,
+    current_conversation,
+  ]);
 
-  // Nếu không có conversation được chọn, ẩn input
-  const validConversation = getCurrentConversation();
-  if (!validConversation) {
-    console.log("🚫 Footer: No valid conversation available");
+  // 🆕 THÊM: Format time helper
+  const formatMessageTime = (timestamp) => {
+    return new Date(timestamp).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  // 🆕 THÊM: Debug currentChat changes
+  useEffect(() => {
+    const currentChat = getCurrentChat();
+    console.log("🔄 Footer - Current Chat Updated:", {
+      currentChat,
+      chat_type,
+      room_id,
+      hasUser: !!user_id,
+      current_room_messages: current_room?.messages?.length,
+      current_conversation_messages: current_conversation?.messages?.length,
+    });
+  }, [
+    getCurrentChat,
+    chat_type,
+    room_id,
+    user_id,
+    current_room,
+    current_conversation,
+  ]);
+
+  // Nếu không có chat được chọn, ẩn input
+  const currentChat = getCurrentChat();
+  if (!currentChat) {
+    console.log("🚫 Footer: No valid chat available");
     return (
       <Box
         sx={{
@@ -396,7 +494,7 @@ const Footer = () => {
             >
               <IconButton
                 onClick={handleSendMessage}
-                disabled={!validConversation?.user_id || !user_id}
+                disabled={!currentChat || !user_id || !value.trim()}
               >
                 <PaperPlaneTilt color="#fff" />
               </IconButton>

@@ -15,6 +15,8 @@ import {
   addDirectMessage,
   updateDirectConversation,
   updateUserPresence,
+  addGroupMessage, // 🆕 THÊM
+  updateGroupRoom, // 🆕 THÊM
 } from "../../redux/slices/conversation";
 
 import { SelectConversation, showSnackbar } from "../../redux/slices/app";
@@ -33,6 +35,14 @@ import {
 import VideoCallNotification from "../../sections/dashboard/video/CallNotification";
 import VideoCallDialog from "../../sections/dashboard/video/CallDialog";
 
+const formatMessageTime = (ts) =>
+  ts
+    ? new Date(ts).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
+
 const DashboardLayout = ({ showChat = false, children }) => {
   const dispatch = useDispatch();
   const { keycloak, initialized } = useKeycloak();
@@ -43,6 +53,10 @@ const DashboardLayout = ({ showChat = false, children }) => {
   const { user_id, role, isLoggedIn } = useSelector((s) => s.auth);
   const { conversations, current_conversation } = useSelector(
     (s) => s.conversation.direct_chat
+  );
+  const { rooms, current_room } = useSelector(
+    // 🆕 THÊM: Lấy group rooms
+    (s) => s.conversation.group_chat
   );
 
   const { open_audio_notification_dialog, open_audio_dialog } = useSelector(
@@ -92,7 +106,7 @@ const DashboardLayout = ({ showChat = false, children }) => {
     setIsReady(true);
   }, [initialized, keycloak, dispatch]);
 
-  // 2️⃣ Kết nối Socket và lắng nghe realtime - ĐÃ SỬA
+  // 2️⃣ Kết nối Socket và lắng nghe realtime - ĐÃ SỬA HỖ TRỢ GROUP
   useEffect(() => {
     if (!isReady || !isLoggedIn || !keycloak.token) return;
     let active = true;
@@ -104,57 +118,137 @@ const DashboardLayout = ({ showChat = false, children }) => {
       console.log("🔗 Socket connected:", sock.id);
       setSocketReady(true);
 
-      // Chat events
-      sock.on("new_message", (data) => {
-        console.log("🔌 Socket: new_message received", data);
+      // ==================== DIRECT CHAT EVENTS ====================
+      // Trong DashboardLayout.js - Sửa phần socket listener
+      sock.on("new_group_message", (data) => {
+        console.log("🔌 Socket: new_group_message received", {
+          room_id: data.roomId,
+          message_id: data.message?.id,
+          sender_id: data.message?.sender?.keycloakId,
+          current_user_id: user_id,
+        });
 
         const msg = data.message;
 
-        // ⚡ VALIDATE: Kiểm tra dữ liệu message
-        if (!msg || !data.conversation_id) {
-          console.warn("🚨 Socket: Invalid message data", data);
-          return;
-        }
         // 🔥 QUAN TRỌNG: BỎ QUA TIN NHẮN TỪ CHÍNH MÌNH
-        if (msg.from === user_id) {
-          console.log("🔄 Ignoring own message from socket");
+        if (msg.sender?.keycloakId === user_id) {
+          console.log(
+            "🔄 Ignoring own group message from socket - already handled by optimistic update"
+          );
           return;
         }
 
-        // ⚡ Nếu message.id đã tồn tại trong current_messages → bỏ qua
-        const existing = conversations
-          .find((c) => c.id === data.conversation_id)
-          ?.messages?.some((m) => m._id === msg.id);
+        const isOutgoing = msg.sender?.keycloakId === user_id;
 
-        if (existing) {
-          console.log("⚠️ Message already exists, skipping");
-          return;
-        }
+        console.log("🔍 Message direction check:", {
+          message_id: msg.id,
+          sender_id: msg.sender?.keycloakId,
+          current_user_id: user_id,
+          isOutgoing,
+          should_be_incoming: !isOutgoing,
+        });
 
-        // Cập nhật conversation UI qua slice
+        // 🆕 Dispatch message từ người khác
         dispatch(
-          addDirectMessage({
+          addGroupMessage({
+            room_id: data.roomId,
             message: {
-              id: msg.id,
-              type: "msg",
+              _id: msg.id, // 🆕 MongoDB _id từ backend
+              id: msg.id, // 🆕 Giữ nguyên id
+              content: msg.content,
+              type: msg.type,
               subtype: msg.type,
-              message: msg.content || msg.text,
-              incoming: true,
+              sender: msg.sender,
+              createdAt: msg.createdAt,
+              time: formatMessageTime(msg.createdAt),
+              incoming: true, // 🆕 Luôn là incoming từ người khác
               outgoing: false,
-              attachments: msg.attachments || [],
-              time: msg.createdAt,
             },
-            conversation_id: data.conversation_id,
-            currentUserId: user_id,
           })
         );
+      });
 
-        // ⚡ QUAN TRỌNG: Không gọi updateDirectConversation với dữ liệu không đầy đủ
-        // Vì nó sẽ reset current_conversation
-        console.log(
-          "✅ Message added to Redux, skipping conversation update to prevent reset"
+      // ==================== GROUP CHAT EVENTS ====================
+      // Trong DashboardLayout.js - SỬA LẠI HOÀN TOÀN PHẦN new_group_message
+
+      // XÓA 2 LISTENER CŨ VÀ THAY THẾ BẰNG 1 LISTENER DUY NHẤT
+      sock.on("new_group_message", (data) => {
+        console.log("🔌 Socket: new_group_message received - FULL DATA:", data);
+
+        // 🆕 XỬ LÝ DATA STRUCTURE KHÁC NHAU
+        const roomId = data.roomId || data.room_id;
+        const msg = data.message;
+
+        console.log("🔍 Parsed data:", {
+          roomId,
+          message_id: msg?.id,
+          sender_id: msg?.sender?.keycloakId,
+          current_user_id: user_id,
+          data_structure: data.roomId
+            ? "roomId_structure"
+            : "room_id_structure",
+        });
+
+        // 🔥 VALIDATE DATA
+        if (!msg || !roomId) {
+          console.warn("🚨 Socket: Invalid group message data", data);
+          return;
+        }
+
+        // 🔥 QUAN TRỌNG: BỎ QUA TIN NHẮN TỪ CHÍNH MÌNH
+        if (msg.sender?.keycloakId === user_id) {
+          console.log("🔄 Ignoring own group message from socket");
+          return;
+        }
+
+        // 🆕 XÁC ĐỊNH ĐÚNG MESSAGE DIRECTION
+        const isOutgoing = msg.sender?.keycloakId === user_id;
+
+        console.log("🔍 Message direction check:", {
+          message_id: msg.id,
+          sender_id: msg.sender?.keycloakId,
+          current_user_id: user_id,
+          isOutgoing,
+          should_be_incoming: !isOutgoing,
+        });
+
+        // 🆕 CHUẨN BỊ MESSAGE DATA VỚI FALLBACKS
+        const messageData = {
+          _id: msg._id || msg.id,
+          id: msg.id || msg._id,
+          content: msg.content,
+          message: msg.content, // 🆕 THÊM field message
+          type: msg.type || "text",
+          subtype: msg.type || "text",
+          sender: {
+            keycloakId: msg.sender?.keycloakId,
+            username: msg.sender?.username || "Unknown",
+            ...msg.sender,
+          },
+          createdAt: msg.createdAt,
+          time: formatMessageTime(msg.createdAt),
+          incoming: !isOutgoing, // 🆕 Luôn là incoming từ người khác
+          outgoing: isOutgoing,
+        };
+
+        console.log("✅ Prepared message data for dispatch:", {
+          room_id: roomId,
+          message_id: messageData.id,
+          content: messageData.content,
+          sender: messageData.sender.username,
+          incoming: messageData.incoming,
+        });
+
+        // 🆕 Dispatch message từ người khác
+        dispatch(
+          addGroupMessage({
+            room_id: roomId,
+            message: messageData,
+          })
         );
       });
+
+      // 🆕 XÓA LISTENER THỨ 2 HOÀN TOÀN
 
       sock.on("start_chat", (data) => {
         console.log("🔌 Socket: start_chat received", {
@@ -188,10 +282,46 @@ const DashboardLayout = ({ showChat = false, children }) => {
           );
         }
 
-        dispatch(SelectConversation({ room_id: data._id }));
+        dispatch(
+          SelectConversation({ room_id: data._id, chat_type: "individual" })
+        );
       });
 
-      // ⚡ THÊM: Lắng nghe sự kiện update_conversation và validate
+      sock.on("join_conversation", ({ room_id, chat_type }) => {
+        console.log("🔌 Socket: join_conversation", { room_id, chat_type });
+
+        if (chat_type === "group" && room_id) {
+          sock.emit("join_group_room", { roomId: room_id });
+        }
+      });
+
+      if (current_room?.id) {
+        console.log("🔗 Auto-joining current room:", current_room.id);
+        sock.emit("join_group_room", { roomId: current_room.id });
+      }
+
+      // 🆕 THÊM: Xử lý group room updates
+      sock.on("update_group_room", (room) => {
+        console.log("🔌 Socket: update_group_room received", {
+          room_id: room._id,
+          name: room.name,
+          members_count: room.members?.length,
+        });
+
+        // ⚡ VALIDATE: Kiểm tra room data
+        if (!room.members || room.members.length === 0) {
+          console.warn("🚨 Socket: Room has no members", room);
+          return;
+        }
+
+        console.log("✅ Valid group room, updating Redux");
+        dispatch(
+          updateGroupRoom({
+            room,
+          })
+        );
+      });
+
       sock.on("update_conversation", (conversation) => {
         console.log("🔌 Socket: update_conversation received", {
           conversation_id: conversation._id,
@@ -277,9 +407,12 @@ const DashboardLayout = ({ showChat = false, children }) => {
       // Debug: Log tất cả socket events để theo dõi
       sock.onAny((eventName, ...args) => {
         if (
-          eventName !== "new_message" &&
-          eventName !== "user_online" &&
-          eventName !== "user_offline"
+          ![
+            "new_message",
+            "new_group_message", // 🆕 THÊM
+            "user_online",
+            "user_offline",
+          ].includes(eventName)
         ) {
           console.log("🔌 Socket event:", eventName, args);
         }
@@ -296,17 +429,53 @@ const DashboardLayout = ({ showChat = false, children }) => {
         sock.removeAllListeners();
       }
     };
-  }, [isReady, isLoggedIn, keycloak.token, user_id, conversations, dispatch]);
+  }, [
+    isReady,
+    isLoggedIn,
+    keycloak.token,
+    user_id,
+    conversations,
+    rooms,
+    dispatch,
+  ]); // 🆕 THÊM rooms
 
-  // Debug current_conversation changes
+  const { room_id, chat_type } = useSelector((state) => state.app);
+
   useEffect(() => {
-    console.log("🔍 DashboardLayout - current_conversation:", {
-      id: current_conversation?.id,
-      user_id: current_conversation?.user_id,
-      name: current_conversation?.name,
-      messages_count: current_conversation?.messages?.length,
+    const sock = getSocket();
+    if (!sock || !room_id || !chat_type) return;
+
+    console.log("🔄 App state changed - Auto joining conversation:", {
+      room_id,
+      chat_type,
     });
-  }, [current_conversation]);
+
+    // TỰ ĐỘNG EMIT JOIN_CONVERSATION KHI STATE THAY ĐỔI
+    sock.emit("leave_group_room", { roomId: room_id });
+    sock.emit("join_group_room", { roomId: room_id });
+  }, [room_id, chat_type]); // Theo dõi state.app
+
+  // 🆕 THÊM: Debug cả direct và group state
+  useEffect(() => {
+    console.log("🔍 DashboardLayout - current state:", {
+      direct_conversation: {
+        id: current_conversation?.id,
+        user_id: current_conversation?.user_id,
+        name: current_conversation?.name,
+        messages_count: current_conversation?.messages?.length,
+      },
+      group_room: {
+        id: current_room?.id,
+        name: current_room?.name,
+        members_count: current_room?.membersCount,
+        messages_count: current_room?.messages?.length,
+      },
+      conversations_count: conversations.length,
+      rooms_count: rooms.length,
+    });
+  }, [current_conversation, current_room, conversations, rooms]);
+
+  // Trong DashboardLayout hoặc component chính - thêm socket stability
 
   if (!isReady || !isLoggedIn || !socketReady) return <LoadingScreen />;
 

@@ -1,4 +1,4 @@
-// App.js
+// App.js - ĐÃ SỬA (CHỈ MỘT AuthProvider)
 import React, { useEffect, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useKeycloak } from "@react-keycloak/web";
@@ -8,6 +8,8 @@ import ThemeSettings from "./components/settings";
 import ThemeProvider from "./theme";
 import Router from "./routes";
 import { closeSnackBar } from "./redux/slices/app";
+import { setKeycloakUser, signOut } from "./redux/slices/auth";
+import { AuthProvider } from "./contexts/AuthContext";
 import { socket } from "./socket";
 import LoadingScreen from "./components/LoadingScreen";
 
@@ -26,13 +28,35 @@ function App() {
     (state) => state.app?.snackbar ?? {}
   );
 
-  // Khởi tạo socket connection khi user đã authenticated
+  // 🆕 THÊM: Sync Redux với Keycloak
   useEffect(() => {
-    if (initialized && keycloak.authenticated && keycloak.token) {
-      console.log("🔌 Initializing socket connection...");
-      // Socket sẽ tự động kết nối khi import, nhưng có thể thêm logic init ở đây nếu cần
+    if (initialized) {
+      console.log("🔑 App - Keycloak initialized:", {
+        authenticated: keycloak.authenticated,
+        user_id: keycloak.tokenParsed?.sub,
+      });
+
+      if (keycloak.authenticated && keycloak.token) {
+        const userInfo = {
+          user_id: keycloak.tokenParsed?.sub,
+          role: keycloak.tokenParsed?.realm_access?.roles?.[0] || "user",
+          token: keycloak.token,
+        };
+
+        console.log("👤 App - Setting Redux state:", userInfo);
+        dispatch(setKeycloakUser(userInfo));
+      } else if (!keycloak.authenticated) {
+        console.log("🚪 App - User logged out, clearing Redux");
+        dispatch(signOut());
+      }
     }
-  }, [initialized, keycloak.authenticated, keycloak.token]);
+  }, [
+    initialized,
+    keycloak.authenticated,
+    keycloak.token,
+    keycloak.tokenParsed,
+    dispatch,
+  ]);
 
   // Xử lý đóng snackbar
   const handleCloseSnackbar = useCallback(
@@ -57,9 +81,12 @@ function App() {
   return (
     <>
       <ThemeProvider>
-        <ThemeSettings>
-          <Router />
-        </ThemeSettings>
+        {/* 🆕 SỬA: Chỉ còn một AuthProvider duy nhất */}
+        <AuthProvider>
+          <ThemeSettings>
+            <Router />
+          </ThemeSettings>
+        </AuthProvider>
       </ThemeProvider>
 
       {/* Snackbar for notifications */}
