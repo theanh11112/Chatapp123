@@ -45,6 +45,24 @@ const Conversation = ({ isMobile, menu }) => {
 
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
 
+  // 🆕 THÊM: Socket listener cho real-time delete
+  useEffect(() => {
+    if (window.socket) {
+      const handleMessageDeleted = (data) => {
+        console.log("📡 Socket: Message deleted by others", data);
+        // Tin nhắn sẽ tự động được xóa khỏi UI nhờ Redux state update từ backend
+      };
+
+      window.socket.on("message_deleted", handleMessageDeleted);
+
+      return () => {
+        if (window.socket) {
+          window.socket.off("message_deleted", handleMessageDeleted);
+        }
+      };
+    }
+  }, []);
+
   const getCurrentChatInfo = () => {
     if (chat_type === "group") {
       return current_room;
@@ -229,8 +247,8 @@ const Conversation = ({ isMobile, menu }) => {
           alignItems: "center",
           gap: 1,
           mb: 0.5,
-          ml: message.outgoing ? "auto" : 0, // Sửa: bỏ margin left
-          mr: message.outgoing ? 0 : "auto", // Sửa: bỏ margin right
+          ml: message.outgoing ? "auto" : 0,
+          mr: message.outgoing ? 0 : "auto",
           justifyContent: message.outgoing ? "flex-end" : "flex-start",
           maxWidth: "100%",
         }}
@@ -250,8 +268,6 @@ const Conversation = ({ isMobile, menu }) => {
     );
   };
 
-  // 🆕 SỬA: Component MessageWrapper với avatar nhỏ hơn và căn chỉnh sát hơn
-  // 🆕 SỬA: Component MessageWrapper với avatar ở dưới chân tin nhắn
   const MessageWrapper = ({
     message,
     showSenderName,
@@ -265,13 +281,13 @@ const Conversation = ({ isMobile, menu }) => {
         sx={{
           display: "flex",
           justifyContent: isOutgoing ? "flex-end" : "flex-start",
-          alignItems: "flex-end", // 🆕 SỬA: align items về bottom
+          alignItems: "flex-end",
           mb: isStartOfGroup ? 1 : 0.25,
           px: 1,
           position: "relative",
         }}
       >
-        {/* Avatar cho incoming messages - CHUYỂN XUỐNG DƯỚI */}
+        {/* Avatar cho incoming messages */}
         {!isOutgoing && chat_type === "group" && (
           <Box
             sx={{
@@ -280,9 +296,9 @@ const Conversation = ({ isMobile, menu }) => {
               mr: 1,
               visibility: isStartOfGroup ? "visible" : "hidden",
               display: "flex",
-              alignItems: "flex-end", // 🆕 Căn avatar về bottom
+              alignItems: "flex-end",
               justifyContent: "center",
-              order: 1, // 🆕 Avatar sẽ là phần tử đầu tiên (bên trái)
+              order: 1,
             }}
           >
             {isStartOfGroup && (
@@ -308,10 +324,10 @@ const Conversation = ({ isMobile, menu }) => {
             ...(isOutgoing && {
               alignItems: "flex-end",
             }),
-            order: 2, // 🆕 Message content là phần tử thứ hai
+            order: 2,
           }}
         >
-          {/* Tên người gửi - VẪN Ở TRÊN */}
+          {/* Tên người gửi */}
           {showSenderName && chat_type === "group" && (
             <SenderName message={message} />
           )}
@@ -329,14 +345,14 @@ const Conversation = ({ isMobile, menu }) => {
           </Box>
         </Box>
 
-        {/* Placeholder cho outgoing messages - CHUYỂN XUỐNG DƯỚI */}
+        {/* Placeholder cho outgoing messages */}
         {isOutgoing && (
           <Box
             sx={{
               width: 28,
               ml: 1,
               flexShrink: 0,
-              order: 3, // 🆕 Placeholder là phần tử thứ ba (bên phải)
+              order: 3,
             }}
           />
         )}
@@ -576,11 +592,7 @@ const Conversation = ({ isMobile, menu }) => {
 
   return (
     <Box p={isMobile ? 0.5 : 2} key={messagesKey}>
-      {" "}
-      {/* Giảm padding container */}
       <Stack spacing={0.5}>
-        {" "}
-        {/* Giảm spacing giữa các message */}
         {groupedMessages.length === 0 ? (
           <Box
             sx={{
@@ -656,7 +668,12 @@ const Conversation = ({ isMobile, menu }) => {
                       showSenderName={showSenderName}
                       isStartOfGroup={isStartOfGroup}
                     >
-                      <MsgComponent el={el} menu={menu} />
+                      {/* 🆕 SỬA: Thêm prop isGroup */}
+                      <MsgComponent
+                        el={el}
+                        menu={menu}
+                        isGroup={chat_type === "group"}
+                      />
                     </MessageWrapper>
                   );
                 }
@@ -682,9 +699,51 @@ const ChatComponent = () => {
     (state) => state.conversation.group_chat
   );
   const { chat_type, room_id } = useSelector((state) => state.app);
+  const dispatch = useDispatch(); // 🆕 THÊM dispatch
 
   const currentChatInfo =
     chat_type === "group" ? current_room : current_conversation;
+
+  // 🆕 CẢI THIỆN: Auto-scroll logic
+  useEffect(() => {
+    if (!messageListRef.current) return;
+
+    const scrollToBottom = () => {
+      const scrollContainer = messageListRef.current;
+      if (scrollContainer) {
+        const isNearBottom =
+          scrollContainer.scrollHeight -
+            scrollContainer.scrollTop -
+            scrollContainer.clientHeight <
+          100;
+
+        if (isNearBottom) {
+          scrollContainer.scrollTop = scrollContainer.scrollHeight;
+        }
+      }
+    };
+
+    // Sử dụng setTimeout để đảm bảo DOM đã update
+    setTimeout(scrollToBottom, 100);
+  }, [current_messages, current_room?.messages]);
+
+  // 🆕 THÊM: Socket listener cho real-time delete
+  useEffect(() => {
+    if (window.socket) {
+      const handleMessageDeleted = (data) => {
+        console.log("📡 Socket: Message deleted by others", data);
+        // Tin nhắn sẽ tự động được xóa khỏi UI nhờ Redux state update từ backend
+      };
+
+      window.socket.on("message_deleted", handleMessageDeleted);
+
+      return () => {
+        if (window.socket) {
+          window.socket.off("message_deleted", handleMessageDeleted);
+        }
+      };
+    }
+  }, [dispatch]);
 
   useEffect(() => {
     console.log("🔍 ChatComponent - current state:", {
@@ -704,27 +763,6 @@ const ChatComponent = () => {
     currentChatInfo,
     current_messages,
   ]);
-
-  useEffect(() => {
-    if (!messageListRef.current) {
-      console.log("❌ messageListRef not available");
-      return;
-    }
-
-    console.log("🔄 Auto-scroll triggered:", {
-      current_messages_count: current_messages?.length,
-      current_room_messages_count: current_room?.messages?.length,
-      scrollHeight: messageListRef.current.scrollHeight,
-      clientHeight: messageListRef.current.clientHeight,
-    });
-
-    messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
-
-    console.log("✅ Scrolled to bottom:", {
-      scrollTop: messageListRef.current.scrollTop,
-      scrollHeight: messageListRef.current.scrollHeight,
-    });
-  }, [current_messages, current_room?.messages]);
 
   return (
     <Stack height="100%" maxHeight="100vh" width={isMobile ? "100vw" : "auto"}>

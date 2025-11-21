@@ -1,4 +1,5 @@
 import React, { memo, useCallback, useRef } from "react";
+import { useDispatch } from "react-redux";
 import {
   Stack,
   Box,
@@ -15,6 +16,7 @@ import { DotsThreeVertical, DownloadSimple, Image } from "phosphor-react";
 import { Message_options } from "../../data";
 import Embed from "react-embed";
 import { ReplyInfo } from "../../components/Chat/ReplyComponents";
+import { deleteMessageThunk } from "../../redux/slices/conversation";
 
 // 🆕 THÊM: Hook để quản lý snackbar
 const useSnackbar = () => {
@@ -36,7 +38,7 @@ const useSnackbar = () => {
 };
 
 // =======================
-//  MESSAGE OPTION MENU - ĐÃ THÊM DELETE
+//  MESSAGE OPTION MENU - HOÀN CHỈNH
 // =======================
 const MessageOption = memo(({ onAction }) => {
   const [anchorEl, setAnchorEl] = React.useState(null);
@@ -118,7 +120,7 @@ const MessageOption = memo(({ onAction }) => {
               key={el.id || index}
               onClick={() => handleMenuItemClick(el.action)}
               autoFocus={false}
-              // 🆕 THÊM: Style đặc biệt cho delete
+              // 🆕 Style đặc biệt cho delete
               sx={
                 el.action === "delete"
                   ? {
@@ -141,10 +143,10 @@ const MessageOption = memo(({ onAction }) => {
 });
 
 // =======================
-//  MESSAGE CONTAINER - ĐÃ THÊM DELETE HANDLER
+//  MESSAGE CONTAINER - HOÀN CHỈNH
 // =======================
 const MessageContainer = memo(
-  ({ children, el, menu, onMenuAction, onDelete }) => {
+  ({ children, el, menu, onMenuAction, onDelete, isGroup = false }) => {
     const [showMenu, setShowMenu] = React.useState(false);
 
     const handleMouseEnter = useCallback(() => {
@@ -158,13 +160,13 @@ const MessageContainer = memo(
     const handleMenuAction = useCallback(
       (action) => {
         if (action === "delete" && onDelete) {
-          // 🆕 THÊM: Xử lý delete ngay lập tức
-          onDelete(el);
+          // 🆕 Xử lý delete ngay lập tức
+          onDelete(el, isGroup);
         } else if (onMenuAction) {
           onMenuAction(action, el);
         }
       },
-      [el, onMenuAction, onDelete]
+      [el, onMenuAction, onDelete, isGroup]
     );
 
     const handleContainerClick = useCallback((e) => {
@@ -219,11 +221,12 @@ const MessageContainer = memo(
 );
 
 // =======================
-//  TEXT MESSAGE - ĐÃ THÊM DELETE
+//  TEXT MESSAGE - HOÀN CHỈNH VỚI DELETE
 // =======================
-const TextMsg = memo(({ el, menu, onDelete }) => {
+const TextMsg = memo(({ el, menu, onDelete, isGroup = false }) => {
   const theme = useTheme();
   const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+  const dispatch = useDispatch(); // 🆕 THÊM dispatch
 
   const handleMenuAction = useCallback(
     (action, messageEl) => {
@@ -239,7 +242,6 @@ const TextMsg = memo(({ el, menu, onDelete }) => {
           }
           break;
         case "forward":
-          // Handle forward
           showSnackbar("Message forwarded", "info");
           break;
         default:
@@ -247,6 +249,25 @@ const TextMsg = memo(({ el, menu, onDelete }) => {
       }
     },
     [showSnackbar]
+  );
+
+  // 🆕 HANDLER XÓA TIN NHẮN HOÀN CHỈNH
+  const handleDelete = useCallback(
+    (messageEl, messageIsGroup = false) => {
+      console.log("🗑️ Deleting message:", {
+        messageId: messageEl.id || messageEl._id,
+        isGroup: messageIsGroup,
+      });
+
+      // Gọi thunk để xóa tin nhắn
+      dispatch(
+        deleteMessageThunk(messageEl.id || messageEl._id, messageIsGroup)
+      );
+
+      // Hiển thị thông báo thành công
+      showSnackbar("Message deleted", "success");
+    },
+    [dispatch, showSnackbar]
   );
 
   const handleReplyClick = useCallback(() => {
@@ -261,7 +282,8 @@ const TextMsg = memo(({ el, menu, onDelete }) => {
         el={el}
         menu={menu}
         onMenuAction={handleMenuAction}
-        onDelete={onDelete}
+        onDelete={handleDelete}
+        isGroup={isGroup}
       >
         <Box
           px={1.5}
@@ -319,11 +341,12 @@ const TextMsg = memo(({ el, menu, onDelete }) => {
 });
 
 // =======================
-//  MEDIA MESSAGE - ĐÃ THÊM DELETE
+//  MEDIA MESSAGE - HOÀN CHỈNH VỚI DELETE
 // =======================
-const MediaMsg = memo(({ el, menu, onDelete }) => {
+const MediaMsg = memo(({ el, menu, onDelete, isGroup = false }) => {
   const theme = useTheme();
   const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+  const dispatch = useDispatch(); // 🆕 THÊM dispatch
 
   const handleMenuAction = useCallback(
     (action, messageEl) => {
@@ -351,6 +374,22 @@ const MediaMsg = memo(({ el, menu, onDelete }) => {
     [showSnackbar]
   );
 
+  // 🆕 HANDLER XÓA TIN NHẮN HOÀN CHỈNH
+  const handleDelete = useCallback(
+    (messageEl, messageIsGroup = false) => {
+      console.log("🗑️ Deleting media message:", {
+        messageId: messageEl.id || messageEl._id,
+        isGroup: messageIsGroup,
+      });
+
+      dispatch(
+        deleteMessageThunk(messageEl.id || messageEl._id, messageIsGroup)
+      );
+      showSnackbar("Media message deleted", "success");
+    },
+    [dispatch, showSnackbar]
+  );
+
   const handleReplyClick = useCallback(() => {
     if (el.replyTo && window.setMessageReply) {
       // Handle reply click
@@ -363,7 +402,8 @@ const MediaMsg = memo(({ el, menu, onDelete }) => {
         el={el}
         menu={menu}
         onMenuAction={handleMenuAction}
-        onDelete={onDelete}
+        onDelete={handleDelete}
+        isGroup={isGroup}
       >
         <Box
           px={1.5}
@@ -432,11 +472,12 @@ const MediaMsg = memo(({ el, menu, onDelete }) => {
 });
 
 // =======================
-//  DOCUMENT MESSAGE - ĐÃ THÊM DELETE
+//  DOCUMENT MESSAGE - HOÀN CHỈNH VỚI DELETE
 // =======================
-const DocMsg = memo(({ el, menu, onDelete }) => {
+const DocMsg = memo(({ el, menu, onDelete, isGroup = false }) => {
   const theme = useTheme();
   const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+  const dispatch = useDispatch(); // 🆕 THÊM dispatch
 
   const handleMenuAction = useCallback(
     (action, messageEl) => {
@@ -464,6 +505,22 @@ const DocMsg = memo(({ el, menu, onDelete }) => {
     [showSnackbar]
   );
 
+  // 🆕 HANDLER XÓA TIN NHẮN HOÀN CHỈNH
+  const handleDelete = useCallback(
+    (messageEl, messageIsGroup = false) => {
+      console.log("🗑️ Deleting document message:", {
+        messageId: messageEl.id || messageEl._id,
+        isGroup: messageIsGroup,
+      });
+
+      dispatch(
+        deleteMessageThunk(messageEl.id || messageEl._id, messageIsGroup)
+      );
+      showSnackbar("Document message deleted", "success");
+    },
+    [dispatch, showSnackbar]
+  );
+
   const handleReplyClick = useCallback(() => {
     if (el.replyTo && window.setMessageReply) {
       // Handle reply click
@@ -476,7 +533,8 @@ const DocMsg = memo(({ el, menu, onDelete }) => {
         el={el}
         menu={menu}
         onMenuAction={handleMenuAction}
-        onDelete={onDelete}
+        onDelete={handleDelete}
+        isGroup={isGroup}
       >
         <Box
           px={1.5}
@@ -551,11 +609,12 @@ const DocMsg = memo(({ el, menu, onDelete }) => {
 });
 
 // =======================
-//  LINK MESSAGE - ĐÃ THÊM DELETE
+//  LINK MESSAGE - HOÀN CHỈNH VỚI DELETE
 // =======================
-const LinkMsg = memo(({ el, menu, onDelete }) => {
+const LinkMsg = memo(({ el, menu, onDelete, isGroup = false }) => {
   const theme = useTheme();
   const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+  const dispatch = useDispatch(); // 🆕 THÊM dispatch
 
   const handleMenuAction = useCallback(
     (action, messageEl) => {
@@ -583,6 +642,22 @@ const LinkMsg = memo(({ el, menu, onDelete }) => {
     [showSnackbar]
   );
 
+  // 🆕 HANDLER XÓA TIN NHẮN HOÀN CHỈNH
+  const handleDelete = useCallback(
+    (messageEl, messageIsGroup = false) => {
+      console.log("🗑️ Deleting link message:", {
+        messageId: messageEl.id || messageEl._id,
+        isGroup: messageIsGroup,
+      });
+
+      dispatch(
+        deleteMessageThunk(messageEl.id || messageEl._id, messageIsGroup)
+      );
+      showSnackbar("Link message deleted", "success");
+    },
+    [dispatch, showSnackbar]
+  );
+
   const handleReplyClick = useCallback(() => {
     if (el.replyTo && window.setMessageReply) {
       // Handle reply click
@@ -595,7 +670,8 @@ const LinkMsg = memo(({ el, menu, onDelete }) => {
         el={el}
         menu={menu}
         onMenuAction={handleMenuAction}
-        onDelete={onDelete}
+        onDelete={handleDelete}
+        isGroup={isGroup}
       >
         <Box
           px={1.5}
@@ -670,11 +746,12 @@ const LinkMsg = memo(({ el, menu, onDelete }) => {
 });
 
 // =======================
-//  REPLY MESSAGE - ĐÃ THÊM DELETE
+//  REPLY MESSAGE - HOÀN CHỈNH VỚI DELETE
 // =======================
-const ReplyMsg = memo(({ el, menu, onDelete }) => {
+const ReplyMsg = memo(({ el, menu, onDelete, isGroup = false }) => {
   const theme = useTheme();
   const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+  const dispatch = useDispatch(); // 🆕 THÊM dispatch
 
   const handleMenuAction = useCallback(
     (action, messageEl) => {
@@ -697,6 +774,22 @@ const ReplyMsg = memo(({ el, menu, onDelete }) => {
       }
     },
     [showSnackbar]
+  );
+
+  // 🆕 HANDLER XÓA TIN NHẮN HOÀN CHỈNH
+  const handleDelete = useCallback(
+    (messageEl, messageIsGroup = false) => {
+      console.log("🗑️ Deleting reply message:", {
+        messageId: messageEl.id || messageEl._id,
+        isGroup: messageIsGroup,
+      });
+
+      dispatch(
+        deleteMessageThunk(messageEl.id || messageEl._id, messageIsGroup)
+      );
+      showSnackbar("Reply message deleted", "success");
+    },
+    [dispatch, showSnackbar]
   );
 
   const handleReplyClick = useCallback(() => {
@@ -756,7 +849,8 @@ const ReplyMsg = memo(({ el, menu, onDelete }) => {
           el={el}
           menu={menu}
           onMenuAction={handleMenuAction}
-          onDelete={onDelete}
+          onDelete={handleDelete}
+          isGroup={isGroup}
         >
           <Box
             px={1.5}
@@ -815,7 +909,8 @@ const ReplyMsg = memo(({ el, menu, onDelete }) => {
         el={el}
         menu={menu}
         onMenuAction={handleMenuAction}
-        onDelete={onDelete}
+        onDelete={handleDelete}
+        isGroup={isGroup}
       >
         <Box
           px={1.5}
