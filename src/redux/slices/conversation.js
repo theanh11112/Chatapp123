@@ -1,4 +1,4 @@
-// conversation.js - HOÀN CHỈNH VỚI BẢO VỆ MESSAGES
+// conversation.js - HOÀN CHỈNH VỚI BẢO VỆ MESSAGES VÀ REAL-TIME FIXES
 import { createSlice } from "@reduxjs/toolkit";
 import { AWS_S3_REGION, S3_BUCKET_NAME } from "../../config";
 import { timeAgo } from "../../utils/timeAgo";
@@ -9,13 +9,21 @@ const parseTimestamp = (ts) => {
   return isNaN(t) ? null : t;
 };
 
-const formatMessageTime = (ts) =>
-  ts
-    ? new Date(ts).toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : "";
+const formatMessageTime = (ts) => {
+  try {
+    if (!ts) return "";
+    const date = new Date(ts);
+    return isNaN(date.getTime())
+      ? ""
+      : date.toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+  } catch (error) {
+    console.error("❌ Error formatting time:", error);
+    return "";
+  }
+};
 
 const initialState = {
   direct_chat: {
@@ -158,11 +166,7 @@ const slice = createSlice({
       state.group_chat.error = action.payload.error;
     },
 
-    // 🆕 SỬA QUAN TRỌNG: Set current group room với BẢO VỆ MESSAGES
-    // conversation.js - SỬA LỖI QUAN TRỌNG TRONG setCurrentGroupRoom
-
     // 🆕 SỬA QUAN TRỌNG: setCurrentGroupRoom với logic MERGE messages
-    // conversation.js - SỬA setCurrentGroupRoom ĐỂ BẢO VỆ MESSAGES
     setCurrentGroupRoom(state, action) {
       try {
         console.log("🔄 setCurrentGroupRoom:", {
@@ -265,11 +269,7 @@ const slice = createSlice({
       state.direct_chat.current_messages = [];
     },
 
-    // Fetch messages với MERGE thay vì REPLACE
-    // conversation.js - THÊM DEBUG TRONG fetchCurrentMessages
-
-    // Fetch messages với MERGE thay vì REPLACE
-    // Trong conversation.js - SỬA fetchCurrentMessages
+    // 🆕 SỬA: fetchCurrentMessages với xử lý direct messages realtime
     fetchCurrentMessages(state, action) {
       const {
         messages,
@@ -278,23 +278,65 @@ const slice = createSlice({
         merge = true,
       } = action.payload;
 
-      console.log("📥 fetchCurrentMessages - DEBUG:", {
+      console.log("📥 fetchCurrentMessages - DEBUG with REPLY:", {
         messages_count: messages?.length,
         currentUserId,
         isGroup,
         merge,
         sample_messages: messages?.slice(0, 3).map((m) => ({
           id: m._id || m.id,
-          sender_id: m.sender?.keycloakId || m.senderId, // THÊM senderId
-          currentUserId,
-          should_be_outgoing:
-            (m.sender?.keycloakId || m.senderId) === currentUserId,
-          content: m.content?.substring(0, 30),
+          subtype: m.subtype || m.type,
+          has_replyTo: !!m.replyTo,
+          replyTo_type: typeof m.replyTo,
+          replyTo_data: m.replyTo,
         })),
       });
 
       // Validate messages
       const validMessages = Array.isArray(messages) ? messages : [];
+
+      // 🆕 THÊM: Hàm xử lý replyTo
+      const processReplyTo = (m) => {
+        if (!m.replyTo) return null;
+
+        console.log("🔍 Processing replyTo for message:", {
+          message_id: m._id || m.id,
+          replyTo_raw: m.replyTo,
+          replyTo_type: typeof m.replyTo,
+        });
+
+        // Nếu replyTo đã là object đầy đủ
+        if (typeof m.replyTo === "object" && m.replyTo.id) {
+          console.log("✅ replyTo already has full object structure");
+          return {
+            id: m.replyTo.id,
+            content: m.replyTo.content || m.replyContent || "Original message",
+            sender: m.replyTo.sender ||
+              m.replySender || {
+                keycloakId: "unknown",
+                username: "Unknown",
+              },
+            type: m.replyTo.type || m.replyType || "text",
+          };
+        }
+
+        // Nếu replyTo chỉ là ID string
+        if (typeof m.replyTo === "string") {
+          console.log("🔄 replyTo is string ID, creating full object");
+          return {
+            id: m.replyTo,
+            content: m.replyContent || "Original message",
+            sender: m.replySender || {
+              keycloakId: "unknown",
+              username: "Unknown",
+            },
+            type: m.replyType || "text",
+          };
+        }
+
+        console.log("⚠️ Unknown replyTo format:", m.replyTo);
+        return null;
+      };
 
       if (isGroup) {
         if (!state.group_chat.current_room) {
@@ -327,28 +369,30 @@ const slice = createSlice({
           existing: existingMessages.length,
           new: newMessages.length,
           duplicates: validMessages.length - newMessages.length,
+          new_messages_with_reply: newMessages.filter((m) => m.replyTo).length,
         });
 
         const allMessages = [
           ...existingMessages,
           ...newMessages.map((m) => {
-            // 🆕 CẢI THIỆN: Xác định sender với nhiều trường hợp
             const senderId = m.sender?.keycloakId || m.senderId || m.sender;
             const isOutgoing = senderId === currentUserId;
 
-            console.log("🔍 Message sender detection:", {
+            // 🆕 XỬ LÝ REPLYTO CHO GROUP
+            const processedReplyTo = processReplyTo(m);
+
+            console.log("🔍 Group message processing:", {
               message_id: m._id || m.id,
-              sender_data: m.sender,
-              senderId_extracted: senderId,
-              currentUserId,
-              isOutgoing,
+              subtype: m.subtype || m.type,
+              has_replyTo: !!m.replyTo,
+              processed_replyTo: !!processedReplyTo,
             });
 
             return {
               id: m._id || m.id,
               _id: m._id || m.id,
               type: "msg",
-              subtype: m.type || "text",
+              subtype: m.subtype || m.type || "text", // 🆕 SỬA: Ưu tiên subtype
               message: m.content || m.message || "",
               content: m.content || m.message || "",
               incoming: !isOutgoing,
@@ -356,11 +400,12 @@ const slice = createSlice({
               time: formatMessageTime(m.createdAt || m.time),
               createdAt: m.createdAt || m.time,
               attachments: m.attachments || [],
-              // 🆕 CẢI THIỆN: Đảm bảo sender structure đầy đủ
               sender: m.sender || {
                 keycloakId: senderId,
                 username: m.senderName || "Unknown",
               },
+              // 🆕 THÊM REPLYTO ĐÃ XỬ LÝ
+              replyTo: processedReplyTo,
             };
           }),
         ];
@@ -372,32 +417,84 @@ const slice = createSlice({
 
         state.group_chat.current_room.messages = allMessages;
 
-        console.log("✅ Final messages after fetch:", {
+        console.log("✅ Final group messages after fetch:", {
           total_messages: allMessages.length,
+          messages_with_reply: allMessages.filter((m) => m.replyTo).length,
           outgoing_count: allMessages.filter((m) => m.outgoing).length,
           incoming_count: allMessages.filter((m) => m.incoming).length,
         });
       } else {
-        // Xử lý direct messages tương tự
-        state.direct_chat.current_messages = validMessages.map((m) => {
-          const senderId = m.sender?.keycloakId || m.from;
-          const isOutgoing = senderId === currentUserId;
+        // 🆕 SỬA QUAN TRỌNG: Xử lý direct messages với REPLYTO
+        const existingMessages = state.direct_chat.current_messages || [];
+        const existingMessageIds = new Set(
+          existingMessages.map((m) => m._id || m.id)
+        );
 
-          return {
-            id: m._id || m.id,
-            type: "msg",
-            subtype: m.type || "text",
-            message: m.content || m.message || "",
-            incoming: !isOutgoing,
-            outgoing: isOutgoing,
-            time: formatMessageTime(m.createdAt || m.time),
-            attachments: m.attachments || [],
-            sender: m.sender || { keycloakId: senderId },
-          };
+        const newMessages = validMessages.filter(
+          (m) => !existingMessageIds.has(m._id || m.id)
+        );
+
+        console.log("🔄 Merging direct messages:", {
+          existing: existingMessages.length,
+          new: newMessages.length,
+          duplicates: validMessages.length - newMessages.length,
+          new_messages_with_reply: newMessages.filter((m) => m.replyTo).length,
+        });
+
+        const allMessages = [
+          ...existingMessages,
+          ...newMessages.map((m) => {
+            const senderId = m.sender?.keycloakId || m.from;
+            const isOutgoing = senderId === currentUserId;
+
+            // 🆕 XỬ LÝ REPLYTO CHO DIRECT
+            const processedReplyTo = processReplyTo(m);
+
+            console.log("🔍 Direct message processing:", {
+              message_id: m._id || m.id,
+              subtype: m.subtype || m.type,
+              has_replyTo: !!m.replyTo,
+              processed_replyTo: !!processedReplyTo,
+            });
+
+            return {
+              id: m._id || m.id,
+              type: "msg",
+              subtype: m.subtype || m.type || "text", // 🆕 SỬA: Ưu tiên subtype
+              message: m.content || m.message || "",
+              content: m.content || m.message || "",
+              incoming: !isOutgoing,
+              outgoing: isOutgoing,
+              time: formatMessageTime(m.createdAt || m.time),
+              createdAt: m.createdAt || m.time,
+              attachments: m.attachments || [],
+              sender: m.sender || {
+                keycloakId: senderId,
+                username: m.sender?.username || "Unknown",
+              },
+              // 🆕 THÊM REPLYTO ĐÃ XỬ LÝ
+              replyTo: processedReplyTo,
+            };
+          }),
+        ];
+
+        allMessages.sort(
+          (a, b) =>
+            new Date(a.createdAt || a.time) - new Date(b.createdAt || b.time)
+        );
+
+        state.direct_chat.current_messages = allMessages;
+
+        console.log("✅ Final direct messages after fetch:", {
+          total_messages: allMessages.length,
+          messages_with_reply: allMessages.filter((m) => m.replyTo).length,
+          outgoing_count: allMessages.filter((m) => m.outgoing).length,
+          incoming_count: allMessages.filter((m) => m.incoming).length,
         });
       }
     },
-    // Add direct message với xử lý riêng cho group và direct
+
+    // 🆕 SỬA: addDirectMessage với xử lý realtime cho cả direct và group
     addDirectMessage(state, action) {
       const {
         message,
@@ -405,6 +502,8 @@ const slice = createSlice({
         currentUserId,
         isGroup = false,
         isOptimistic = false,
+        replaceOptimistic = false,
+        tempId = null,
       } = action.payload;
 
       // Validate message
@@ -418,11 +517,13 @@ const slice = createSlice({
         conversation_id,
         isGroup,
         isOptimistic,
+        replaceOptimistic,
+        tempId,
         currentUserId,
       });
 
       if (isGroup) {
-        // Xử lý group message
+        // 🆕 Xử lý group message với replaceOptimistic
         const room =
           state.group_chat.rooms.find((r) => r.id === conversation_id) ||
           state.group_chat.current_room;
@@ -432,54 +533,96 @@ const slice = createSlice({
           return;
         }
 
-        // Check duplicate với multiple strategies
-        const existsInRoom = this.checkMessageDuplicate(room.messages, message);
-        if (existsInRoom) {
+        // Đảm bảo room.messages tồn tại
+        if (!room.messages) {
+          room.messages = [];
+        }
+
+        // 🆕 Xử lý replace optimistic message
+        if (replaceOptimistic && tempId) {
+          const optimisticIndex = room.messages.findIndex(
+            (m) => m.tempId === tempId || m.id === tempId
+          );
+
+          if (optimisticIndex !== -1) {
+            console.log("🔄 Replacing optimistic message:", {
+              optimistic_index: optimisticIndex,
+              tempId,
+              real_id: message.id,
+            });
+
+            room.messages[optimisticIndex] = {
+              ...message,
+              isOptimistic: false,
+            };
+
+            // Cập nhật lastMessage
+            room.lastMessage = {
+              id: message.id,
+              content: message.content,
+              type: message.type,
+              sender: message.sender,
+              time: message.time,
+            };
+
+            room.msg = message.content;
+            room.time = message.time;
+            return;
+          }
+        }
+
+        // Check duplicate
+        const existsInRoom = room.messages.find(
+          (m) => m.id === message.id || m._id === message._id
+        );
+
+        if (existsInRoom && !isOptimistic) {
           console.log("⚠️ Group message already exists, skipping");
           return;
         }
 
-        if (!room.messages) room.messages = [];
-
         const newGroupMessage = {
-          _id: message.id,
-          id: message.id,
-          content: message.message,
-          type: message.subtype || "text",
+          _id: message._id || message.id,
+          id: message.id || message._id,
+          type: "msg",
+          subtype: message.subtype || message.type || "text",
+          message: message.message || message.content || "",
+          content: message.content || message.message || "",
           sender: message.sender || {
             keycloakId: currentUserId,
             username: "You",
           },
-          createdAt: message.time || new Date().toISOString(),
+          replyTo: message.replyTo,
+          createdAt:
+            message.createdAt || message.time || new Date().toISOString(),
+          time: formatMessageTime(message.createdAt || message.time),
           attachments: message.attachments || [],
-          incoming: false,
-          outgoing: true,
-          time: formatMessageTime(message.time),
+          incoming: message.incoming !== undefined ? message.incoming : false,
+          outgoing: message.outgoing !== undefined ? message.outgoing : true,
           isOptimistic: isOptimistic,
+          tempId: tempId,
         };
 
         room.messages.push(newGroupMessage);
 
         // Cập nhật lastMessage
-        room.msg = message.message;
-        room.time = formatMessageTime(new Date());
         room.lastMessage = {
-          id: message.id,
-          content: message.message,
-          type: message.subtype || "text",
-          sender: message.sender || {
-            keycloakId: currentUserId,
-            username: "You",
-          },
-          time: formatMessageTime(new Date()),
+          id: newGroupMessage.id,
+          content: newGroupMessage.content,
+          type: newGroupMessage.type,
+          sender: newGroupMessage.sender,
+          time: newGroupMessage.time,
         };
+
+        room.msg = newGroupMessage.content;
+        room.time = newGroupMessage.time;
 
         console.log("✅ Group message added via addDirectMessage", {
           isOptimistic,
           totalMessages: room.messages.length,
         });
       } else {
-        // Xử lý direct message
+        // 🆕 Xử lý direct message với replaceOptimistic
         const conv =
           state.direct_chat.conversations.find(
             (c) => c.id === conversation_id
@@ -490,64 +633,90 @@ const slice = createSlice({
           return;
         }
 
+        // Xử lý replace optimistic message
+        if (replaceOptimistic && tempId) {
+          const optimisticIndex = state.direct_chat.current_messages.findIndex(
+            (m) => m.tempId === tempId || m.id === tempId
+          );
+
+          if (optimisticIndex !== -1) {
+            console.log("🔄 Replacing optimistic direct message:", {
+              optimistic_index: optimisticIndex,
+              tempId,
+              real_id: message.id,
+            });
+
+            state.direct_chat.current_messages[optimisticIndex] = {
+              ...message,
+              isOptimistic: false,
+            };
+            return;
+          }
+        }
+
         // Check duplicate
         const existsInCurrent = state.direct_chat.current_messages.find(
           (m) => m.id === message.id
         );
-        const existsInConv = conv.messages.find((m) => m._id === message.id);
+        const existsInConv = conv.messages?.find((m) => m._id === message.id);
 
-        if (existsInCurrent || existsInConv) {
+        if ((existsInCurrent || existsInConv) && !isOptimistic) {
           console.log("⚠️ Direct message already exists, skipping");
           return;
         }
 
-        state.direct_chat.current_messages.push(message);
+        // Thêm message mới
+        if (!existsInCurrent) {
+          state.direct_chat.current_messages.push(message);
+        }
 
+        // Cập nhật conversation messages
         if (!conv.messages) conv.messages = [];
 
-        const newMessageObj = {
-          _id: message.id,
-          content: message.message,
-          type: message.subtype || "text",
-          from: message.outgoing ? currentUserId : conv.user_id,
-          to: message.outgoing ? conv.user_id : currentUserId,
-          createdAt: message.time || new Date().toISOString(),
-          attachments: message.attachments || [],
-          seen: false,
-        };
+        if (!existsInConv) {
+          const newMessageObj = {
+            _id: message.id,
+            content: message.message,
+            type: message.subtype || "text",
+            from: message.outgoing ? currentUserId : conv.user_id,
+            to: message.outgoing ? conv.user_id : currentUserId,
+            createdAt:
+              message.createdAt || message.time || new Date().toISOString(),
+            attachments: message.attachments || [],
+            seen: false,
+          };
 
-        conv.messages.push(newMessageObj);
+          conv.messages.push(newMessageObj);
+        }
+
         conv.msg = message.message;
         conv.time = message.time;
       }
     },
 
-    // 🆕 ADD GROUP MESSAGE HOÀN CHỈNH - VỚI DUPLICATE DETECTION
-    // Trong addGroupMessage reducer - THÊM DEBUG CHI TIẾT
-    // conversation.js - SỬA LỖI QUAN TRỌNG TRONG addGroupMessage
-
-    // 🆕 SỬA: addGroupMessage với đúng message structure
-    // conversation.js - SỬA LỖI QUAN TRỌNG
-
-    // 🆕 SỬA: addGroupMessage - LÀM VIỆC TRỰC TIẾP VỚI current_room
-    // Trong conversation.js - THÊM debug cho realtime messages
+    // 🆕 SỬA: addGroupMessage hoàn chỉnh với realtime support
     addGroupMessage(state, action) {
-      const { message, room_id, isOptimistic = false } = action.payload;
+      const {
+        message,
+        room_id,
+        isOptimistic = false,
+        replaceOptimistic = false,
+        tempId = null,
+      } = action.payload;
 
       console.log("📨 addGroupMessage - REALTIME DEBUG:", {
         message_id: message.id,
+        tempId,
         room_id,
         isOptimistic,
+        replaceOptimistic,
         current_room_id: state.group_chat.current_room?.id,
         message_sender: message.sender?.keycloakId,
-        message_incoming: message.incoming,
-        message_outgoing: message.outgoing,
+        is_reply: message.subtype === "reply",
       });
 
-      // 🆕 QUAN TRỌNG: ƯU TIÊN LÀM VIỆC VỚI current_room TRỰC TIẾP
+      // 🆕 TÌM ROOM - ƯU TIÊN current_room
       let room = state.group_chat.current_room;
-
-      // Nếu current_room không khớp với room_id, tìm trong rooms
       if (!room || room.id !== room_id) {
         room = state.group_chat.rooms.find((r) => r.id === room_id);
       }
@@ -557,21 +726,98 @@ const slice = createSlice({
         return;
       }
 
-      // 🆕 QUAN TRỌNG: ĐẢM BẢO room.messages LUÔN TỒN TẠI
+      // 🆕 ĐẢM BẢO room.messages TỒN TẠI
       if (!room.messages) {
         console.log("🔄 Initializing room.messages array");
         room.messages = [];
       }
 
-      // 🆕 NÂNG CAO: Duplicate detection với multiple strategies
+      // 🆕 CẢI TIẾN: LOGIC THAY THẾ OPTIMISTIC MESSAGE
+      if (replaceOptimistic || (isOptimistic === false && tempId)) {
+        console.log("🔄 Looking for optimistic message to replace...", {
+          tempId,
+          replaceOptimistic,
+          isOptimistic,
+          message_id: message.id,
+        });
+
+        // 🆕 STRATEGY 1: Tìm bằng tempId (chính xác nhất)
+        let optimisticIndex = -1;
+
+        if (tempId) {
+          optimisticIndex = room.messages.findIndex(
+            (m) => m.tempId === tempId || m.id === tempId
+          );
+          console.log("🔍 Search by tempId result:", {
+            tempId,
+            optimisticIndex,
+          });
+        }
+
+        // 🆕 STRATEGY 2: Tìm bằng sender + content + timestamp (fallback)
+        if (optimisticIndex === -1) {
+          optimisticIndex = room.messages.findIndex(
+            (m) =>
+              m.isOptimistic &&
+              m.sender?.keycloakId === message.sender?.keycloakId &&
+              m.content === message.content &&
+              Math.abs(new Date(m.createdAt) - new Date(message.createdAt)) <
+                30000 // 30 giây
+          );
+          console.log("🔍 Search by content fallback result:", {
+            optimisticIndex,
+          });
+        }
+
+        if (optimisticIndex !== -1) {
+          console.log("✅ Replacing optimistic message with real message:", {
+            optimistic_index: optimisticIndex,
+            optimistic_id: room.messages[optimisticIndex].id,
+            real_id: message.id,
+            tempId_matched: tempId
+              ? room.messages[optimisticIndex].tempId === tempId
+              : "N/A",
+          });
+
+          // 🆕 GIỮ LẠI MỘT SỐ THÔNG TIN QUAN TRỌNG TỪ OPTIMISTIC MESSAGE
+          const optimisticMessage = room.messages[optimisticIndex];
+
+          room.messages[optimisticIndex] = {
+            ...message,
+            isOptimistic: false,
+            // 🆕 QUAN TRỌNG: Giữ lại các thuộc tính hiển thị từ optimistic message
+            time: optimisticMessage.time || message.time,
+            createdAt: optimisticMessage.createdAt || message.createdAt,
+          };
+
+          // Cập nhật lastMessage
+          room.lastMessage = {
+            id: message.id,
+            content: message.content,
+            type: message.type,
+            sender: message.sender,
+            time: message.time,
+          };
+
+          room.msg = message.content;
+          room.time = message.time;
+
+          console.log("✅ Optimistic message replaced successfully");
+          return;
+        } else {
+          console.log("⚠️ No optimistic message found to replace");
+        }
+      }
+
+      // 🆕 CẢI TIẾN: DUPLICATE DETECTION
       const existsInRoom = room.messages.find((m) => {
-        // Strategy 1: Check by MongoDB _id (từ backend)
-        if (m._id === message._id) return true;
+        // Strategy 1: Check by MongoDB _id
+        if (m._id && message._id && m._id === message._id) return true;
 
         // Strategy 2: Check by UUID (từ optimistic update)
         if (m.id === message.id) return true;
 
-        // Strategy 3: Check by content + sender + timestamp (fallback)
+        // Strategy 3: Check by content + sender + timestamp
         if (
           m.content === message.content &&
           m.sender?.keycloakId === message.sender?.keycloakId &&
@@ -583,10 +829,11 @@ const slice = createSlice({
         return false;
       });
 
-      if (existsInRoom) {
+      if (existsInRoom && !isOptimistic) {
         console.log("⚠️ Group message already exists, skipping", {
           existing_id: existsInRoom._id || existsInRoom.id,
           new_id: message._id || message.id,
+          isOptimistic: existsInRoom.isOptimistic,
         });
         return;
       }
@@ -604,24 +851,41 @@ const slice = createSlice({
           username: message.sender?.username || "Unknown",
           ...message.sender,
         },
+        // 🆕 THÊM REPLYTO SUPPORT
+        replyTo: message.replyTo
+          ? {
+              id: message.replyTo.id,
+              content: message.replyTo.content,
+              sender:
+                typeof message.replyTo.sender === "string"
+                  ? { keycloakId: message.replyTo.sender, username: "Unknown" }
+                  : message.replyTo.sender,
+              type: message.replyTo.type || "text",
+            }
+          : undefined,
         createdAt:
           message.createdAt || message.time || new Date().toISOString(),
         time: formatMessageTime(message.createdAt || message.time),
         attachments: message.attachments || [],
-        // 🆕 QUAN TRỌNG: GIỮ NGUYÊN incoming/outgoing TỪ SOCKET
+        // 🆕 QUAN TRỌNG: GIỮ NGUYÊN incoming/outgoing
         incoming: message.incoming !== undefined ? message.incoming : false,
         outgoing: message.outgoing !== undefined ? message.outgoing : true,
         isOptimistic: message.isOptimistic || isOptimistic,
+        // 🆕 THÊM: tempId để tracking
+        tempId: message.tempId || tempId,
       };
 
-      console.log("✅ Adding realtime message to room:", {
+      console.log("✅ Adding message to room:", {
         room_id: room.id,
         message_id: newMessage.id,
+        tempId: newMessage.tempId,
+        isOptimistic: newMessage.isOptimistic,
         incoming: newMessage.incoming,
         outgoing: newMessage.outgoing,
         total_messages_before: room.messages.length,
       });
 
+      // 🆕 THÊM MESSAGE VÀO DANH SÁCH
       room.messages.push(newMessage);
 
       // Cập nhật lastMessage
@@ -647,53 +911,64 @@ const slice = createSlice({
       }
     },
 
-    // 🆕 UPDATE OPTIMISTIC MESSAGE VỚI REAL DATA TỪ BACKEND
-    updateOptimisticMessage(state, action) {
-      const { optimisticId, realMessage, room_id } = action.payload;
+    // 🆕 THÊM: updateDirectMessage để xử lý optimistic updates cho direct chat
+    updateDirectMessage(state, action) {
+      const { tempId, realMessage, conversation_id } = action.payload;
 
-      console.log("🔄 Updating optimistic message:", {
-        optimisticId,
+      console.log("🔄 updateDirectMessage:", {
+        tempId,
         realMessageId: realMessage.id,
-        room_id,
+        conversation_id,
       });
 
-      const room =
-        state.group_chat.rooms.find((r) => r.id === room_id) ||
-        state.group_chat.current_room;
-
-      if (!room || !room.messages) return;
-
-      // Tìm optimistic message bằng UUID
-      const optimisticIndex = room.messages.findIndex(
-        (m) => m.id === optimisticId && m.isOptimistic
+      // Tìm và thay thế optimistic message trong current_messages
+      const optimisticIndex = state.direct_chat.current_messages.findIndex(
+        (m) => m.tempId === tempId || m.id === tempId
       );
 
       if (optimisticIndex !== -1) {
-        // 🆕 THAY THẾ optimistic message bằng real message
-        room.messages[optimisticIndex] = {
-          ...room.messages[optimisticIndex],
-          _id: realMessage.id, // Cập nhật MongoDB _id
-          id: realMessage.id, // Giữ nguyên id từ backend
-          isOptimistic: false, // Đánh dấu đã được confirm
-          // Giữ nguyên các fields khác từ optimistic message
-        };
+        console.log("✅ Replacing optimistic direct message:", {
+          optimistic_index: optimisticIndex,
+          tempId,
+          real_id: realMessage.id,
+        });
 
-        // Cập nhật lastMessage
-        if (room.lastMessage && room.lastMessage.id === optimisticId) {
-          room.lastMessage = {
-            id: realMessage.id,
+        state.direct_chat.current_messages[optimisticIndex] = {
+          ...realMessage,
+          isOptimistic: false,
+        };
+      }
+
+      // Cập nhật trong conversation messages nếu có
+      const conv =
+        state.direct_chat.conversations.find((c) => c.id === conversation_id) ||
+        state.direct_chat.current_conversation;
+
+      if (conv && conv.messages) {
+        const convOptimisticIndex = conv.messages.findIndex(
+          (m) => m._id === tempId
+        );
+
+        if (convOptimisticIndex !== -1) {
+          conv.messages[convOptimisticIndex] = {
+            _id: realMessage.id,
             content: realMessage.content,
             type: realMessage.type,
-            sender: realMessage.sender,
-            time: formatMessageTime(realMessage.createdAt),
+            from: realMessage.outgoing
+              ? realMessage.sender?.keycloakId
+              : conv.user_id,
+            to: realMessage.outgoing
+              ? conv.user_id
+              : realMessage.sender?.keycloakId,
+            createdAt: realMessage.createdAt,
+            attachments: realMessage.attachments || [],
+            seen: false,
           };
         }
-
-        console.log("✅ Optimistic message updated with real data");
       }
     },
 
-    // Update direct conversation
+    // Các reducers khác giữ nguyên
     updateDirectConversation(state, action) {
       const { conversation, currentUserId } = action.payload;
 
@@ -740,7 +1015,6 @@ const slice = createSlice({
       }
     },
 
-    // Add direct conversation
     addDirectConversation(state, action) {
       const { conversation, currentUserId } = action.payload;
 
@@ -786,7 +1060,6 @@ const slice = createSlice({
       }
     },
 
-    // Update group room
     updateGroupRoom(state, action) {
       const { room } = action.payload;
 
@@ -847,7 +1120,6 @@ const slice = createSlice({
       }
     },
 
-    // Update user presence
     updateUserPresence(state, action) {
       const { userId, status, lastSeen } = action.payload;
 
@@ -941,7 +1213,7 @@ export const {
   updateGroupRoom,
   clearCurrentRoom,
   clearCurrentConversation,
-  updateOptimisticMessage, // 🆕 THÊM
+  updateDirectMessage, // 🆕 THÊM
 } = slice.actions;
 
 // ==================== THUNKS ====================

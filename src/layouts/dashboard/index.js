@@ -15,8 +15,8 @@ import {
   addDirectMessage,
   updateDirectConversation,
   updateUserPresence,
-  addGroupMessage, // 🆕 THÊM
-  updateGroupRoom, // 🆕 THÊM
+  addGroupMessage,
+  updateGroupRoom,
 } from "../../redux/slices/conversation";
 
 import { SelectConversation, showSnackbar } from "../../redux/slices/app";
@@ -54,10 +54,7 @@ const DashboardLayout = ({ showChat = false, children }) => {
   const { conversations, current_conversation } = useSelector(
     (s) => s.conversation.direct_chat
   );
-  const { rooms, current_room } = useSelector(
-    // 🆕 THÊM: Lấy group rooms
-    (s) => s.conversation.group_chat
-  );
+  const { rooms, current_room } = useSelector((s) => s.conversation.group_chat);
 
   const { open_audio_notification_dialog, open_audio_dialog } = useSelector(
     (s) => s.audioCall
@@ -106,7 +103,7 @@ const DashboardLayout = ({ showChat = false, children }) => {
     setIsReady(true);
   }, [initialized, keycloak, dispatch]);
 
-  // 2️⃣ Kết nối Socket và lắng nghe realtime - ĐÃ SỬA HỖ TRỢ GROUP
+  // 2️⃣ Kết nối Socket và lắng nghe realtime - ĐÃ THÊM DIRECT MESSAGE LISTENERS
   useEffect(() => {
     if (!isReady || !isLoggedIn || !keycloak.token) return;
     let active = true;
@@ -119,137 +116,281 @@ const DashboardLayout = ({ showChat = false, children }) => {
       setSocketReady(true);
 
       // ==================== DIRECT CHAT EVENTS ====================
-      // Trong DashboardLayout.js - Sửa phần socket listener
-      sock.on("new_group_message", (data) => {
-        console.log("🔌 Socket: new_group_message received", {
-          room_id: data.roomId,
-          message_id: data.message?.id,
-          sender_id: data.message?.sender?.keycloakId,
-          current_user_id: user_id,
+      // 🆕 THÊM: Listener cho direct messages
+      sock.on("text_message", (data) => {
+        console.log("🔌 Socket: text_message received - DIRECT CHAT:", data);
+
+        // VALIDATE DATA
+        if (!data || !data.conversation_id) {
+          console.warn("🚨 Socket: Invalid direct message data", data);
+          return;
+        }
+
+        const isOwnMessage = data.from === user_id;
+        const isReplyMessage = data.type === "reply";
+
+        console.log("🔍 Processing direct message:", {
+          conversation_id: data.conversation_id,
+          message_id: data._id || data.id,
+          from: data.from,
+          to: data.to,
+          isOwnMessage,
+          isReplyMessage,
         });
 
-        const msg = data.message;
+        // 🆕 XỬ LÝ replyTo.sender
+        let processedReplyTo = data.replyTo;
+        if (processedReplyTo && typeof processedReplyTo.sender === "string") {
+          processedReplyTo = {
+            ...processedReplyTo,
+            sender: {
+              keycloakId: processedReplyTo.sender,
+              username: "Unknown",
+            },
+          };
+        }
 
-        // 🔥 QUAN TRỌNG: BỎ QUA TIN NHẮN TỪ CHÍNH MÌNH
-        if (msg.sender?.keycloakId === user_id) {
+        const messageData = {
+          _id: data._id || data.id,
+          id: data.id || data._id,
+          message: data.message || data.content,
+          content: data.message || data.content,
+          type: "msg",
+          subtype: isReplyMessage ? "reply" : data.type || "text",
+          incoming: !isOwnMessage,
+          outgoing: isOwnMessage,
+          time: data.time || formatMessageTime(data.createdAt || new Date()),
+          createdAt: data.createdAt || new Date(),
+          attachments: data.attachments || [],
+          sender: data.sender || {
+            keycloakId: data.from,
+            username: data.sender?.username || "Unknown",
+          },
+          replyTo: processedReplyTo,
+          isOptimistic: false,
+          tempId: data.tempId || data.messageId,
+        };
+
+        console.log("✅ Prepared DIRECT message data for dispatch:", {
+          conversation_id: data.conversation_id,
+          message_id: messageData.id,
+          isOwnMessage,
+          isReply: isReplyMessage,
+        });
+
+        // DISPATCH DIRECT MESSAGE
+        dispatch(
+          addDirectMessage({
+            message: messageData,
+            conversation_id: data.conversation_id,
+            currentUserId: user_id,
+            isGroup: false,
+            isOptimistic: false,
+            replaceOptimistic: true,
+            tempId: messageData.tempId,
+          })
+        );
+      });
+
+      // 🆕 THÊM: Listener cho direct reply messages
+      // THAY THẾ đoạn code text_message_reply listener hiện tại bằng:
+
+      sock.on("text_message_reply", (data) => {
+        console.log("11111", data);
+
+        // 🆕 SỬA QUAN TRỌNG: Xử lý trực tiếp reply message thay vì emit lại
+        if (!data || !data.conversation_id) {
+          console.warn("🚨 Socket: Invalid direct reply message data", data);
+          return;
+        }
+
+        const isOwnMessage = data.from === user_id;
+        const isReplyMessage = data.subtype === "reply";
+
+        console.log("🔍 Processing direct reply message:", {
+          conversation_id: data.conversation_id,
+          message_id: data._id || data.id,
+          from: data.from,
+          to: data.to,
+          isOwnMessage,
+          isReplyMessage,
+          has_replyTo: !!data.replyTo,
+        });
+
+        // 🆕 XỬ LÝ replyTo.sender
+        let processedReplyTo = data.replyTo;
+        if (processedReplyTo && typeof processedReplyTo.sender === "string") {
+          processedReplyTo = {
+            ...processedReplyTo,
+            sender: {
+              keycloakId: processedReplyTo.sender,
+              username: "Unknown",
+            },
+          };
+        }
+
+        const messageData = {
+          _id: data._id || data.id,
+          id: data.id || data._id,
+          message: data.message || data.content,
+          content: data.message || data.content,
+          type: "msg",
+          subtype: isReplyMessage ? "reply" : data.type || "text",
+          incoming: !isOwnMessage,
+          outgoing: isOwnMessage,
+          time: data.time || formatMessageTime(data.createdAt || new Date()),
+          createdAt: data.createdAt || new Date(),
+          attachments: data.attachments || [],
+          sender: data.sender || {
+            keycloakId: data.from,
+            username: data.sender?.username || "Unknown",
+          },
+          replyTo: processedReplyTo,
+          isOptimistic: false,
+          tempId: data.tempId || data.messageId,
+        };
+
+        console.log("✅ Prepared DIRECT REPLY message data for dispatch:", {
+          conversation_id: data.conversation_id,
+          message_id: messageData.id,
+          isOwnMessage,
+          isReply: isReplyMessage,
+          has_replyTo: !!messageData.replyTo,
+        });
+
+        // 🆕 DISPATCH DIRECT REPLY MESSAGE
+        dispatch(
+          addDirectMessage({
+            message: messageData,
+            conversation_id: data.conversation_id,
+            currentUserId: user_id,
+            isGroup: false,
+            isOptimistic: false,
+            replaceOptimistic: true,
+            tempId: messageData.tempId,
+          })
+        );
+      });
+
+      // ==================== GROUP CHAT EVENTS ====================
+      sock.on("new_group_message", (data) => {
+        console.log("🔌 Socket: new_group_message received - FULL DATA:", data);
+
+        const roomId = data.roomId || data.room_id;
+        const msg = data.message || data;
+
+        console.log("🔍 Parsed data:", {
+          roomId,
+          message_id: msg?.id,
+          sender_id: msg?.sender,
+          current_user_id: user_id,
+          tempId: msg?.tempId || msg?.messageId,
+        });
+
+        if (!msg || !roomId) {
+          console.warn("🚨 Socket: Invalid group message data", data);
+          return;
+        }
+
+        const isReplyMessage = msg.type === "reply";
+        const isOwnMessage = msg.sender?.keycloakId === user_id;
+
+        if (isOwnMessage) {
           console.log(
-            "🔄 Ignoring own group message from socket - already handled by optimistic update"
+            "🔄 Processing own message from socket - REPLACING optimistic update",
+            {
+              tempId: msg.tempId || msg.messageId,
+              isReply: isReplyMessage,
+            }
+          );
+
+          let processedReplyTo = msg.replyTo;
+          if (processedReplyTo && typeof processedReplyTo.sender === "string") {
+            processedReplyTo = {
+              ...processedReplyTo,
+              sender: {
+                keycloakId: processedReplyTo.sender,
+                username: "Unknown",
+              },
+            };
+          }
+
+          const messageData = {
+            _id: msg._id || msg.id,
+            id: msg.id || msg._id,
+            content: msg.content,
+            message: msg.content,
+            type: "msg",
+            subtype: isReplyMessage ? "reply" : msg.type || "text",
+            sender: {
+              keycloakId: msg.sender?.keycloakId,
+              username: msg.sender?.username || "Unknown",
+              ...msg.sender,
+            },
+            replyTo: processedReplyTo,
+            createdAt: msg.createdAt,
+            time: formatMessageTime(msg.createdAt),
+            incoming: false,
+            outgoing: true,
+            isOptimistic: false,
+            tempId: msg.tempId || msg.messageId,
+          };
+
+          dispatch(
+            addGroupMessage({
+              room_id: roomId,
+              message: messageData,
+              isOptimistic: false,
+              replaceOptimistic: true,
+              tempId: messageData.tempId,
+            })
           );
           return;
         }
 
         const isOutgoing = msg.sender?.keycloakId === user_id;
 
-        console.log("🔍 Message direction check:", {
-          message_id: msg.id,
-          sender_id: msg.sender?.keycloakId,
-          current_user_id: user_id,
-          isOutgoing,
-          should_be_incoming: !isOutgoing,
-        });
-
-        // 🆕 Dispatch message từ người khác
-        dispatch(
-          addGroupMessage({
-            room_id: data.roomId,
-            message: {
-              _id: msg.id, // 🆕 MongoDB _id từ backend
-              id: msg.id, // 🆕 Giữ nguyên id
-              content: msg.content,
-              type: msg.type,
-              subtype: msg.type,
-              sender: msg.sender,
-              createdAt: msg.createdAt,
-              time: formatMessageTime(msg.createdAt),
-              incoming: true, // 🆕 Luôn là incoming từ người khác
-              outgoing: false,
+        let processedReplyTo = msg.replyTo;
+        if (processedReplyTo && typeof processedReplyTo.sender === "string") {
+          processedReplyTo = {
+            ...processedReplyTo,
+            sender: {
+              keycloakId: processedReplyTo.sender,
+              username: "Unknown",
             },
-          })
-        );
-      });
-
-      // ==================== GROUP CHAT EVENTS ====================
-      // Trong DashboardLayout.js - SỬA LẠI HOÀN TOÀN PHẦN new_group_message
-
-      // XÓA 2 LISTENER CŨ VÀ THAY THẾ BẰNG 1 LISTENER DUY NHẤT
-      sock.on("new_group_message", (data) => {
-        console.log("🔌 Socket: new_group_message received - FULL DATA:", data);
-
-        // 🆕 XỬ LÝ DATA STRUCTURE KHÁC NHAU
-        const roomId = data.roomId || data.room_id;
-        const msg = data.message;
-
-        console.log("🔍 Parsed data:", {
-          roomId,
-          message_id: msg?.id,
-          sender_id: msg?.sender?.keycloakId,
-          current_user_id: user_id,
-          data_structure: data.roomId
-            ? "roomId_structure"
-            : "room_id_structure",
-        });
-
-        // 🔥 VALIDATE DATA
-        if (!msg || !roomId) {
-          console.warn("🚨 Socket: Invalid group message data", data);
-          return;
+          };
         }
 
-        // 🔥 QUAN TRỌNG: BỎ QUA TIN NHẮN TỪ CHÍNH MÌNH
-        if (msg.sender?.keycloakId === user_id) {
-          console.log("🔄 Ignoring own group message from socket");
-          return;
-        }
-
-        // 🆕 XÁC ĐỊNH ĐÚNG MESSAGE DIRECTION
-        const isOutgoing = msg.sender?.keycloakId === user_id;
-
-        console.log("🔍 Message direction check:", {
-          message_id: msg.id,
-          sender_id: msg.sender?.keycloakId,
-          current_user_id: user_id,
-          isOutgoing,
-          should_be_incoming: !isOutgoing,
-        });
-
-        // 🆕 CHUẨN BỊ MESSAGE DATA VỚI FALLBACKS
         const messageData = {
           _id: msg._id || msg.id,
           id: msg.id || msg._id,
           content: msg.content,
-          message: msg.content, // 🆕 THÊM field message
-          type: msg.type || "text",
-          subtype: msg.type || "text",
+          message: msg.content,
+          type: "msg",
+          subtype: isReplyMessage ? "reply" : msg.type || "text",
           sender: {
             keycloakId: msg.sender?.keycloakId,
             username: msg.sender?.username || "Unknown",
             ...msg.sender,
           },
+          replyTo: processedReplyTo,
           createdAt: msg.createdAt,
           time: formatMessageTime(msg.createdAt),
-          incoming: !isOutgoing, // 🆕 Luôn là incoming từ người khác
+          incoming: !isOutgoing,
           outgoing: isOutgoing,
+          isOptimistic: false,
         };
 
-        console.log("✅ Prepared message data for dispatch:", {
-          room_id: roomId,
-          message_id: messageData.id,
-          content: messageData.content,
-          sender: messageData.sender.username,
-          incoming: messageData.incoming,
-        });
-
-        // 🆕 Dispatch message từ người khác
         dispatch(
           addGroupMessage({
             room_id: roomId,
             message: messageData,
+            isOptimistic: false,
           })
         );
       });
 
-      // 🆕 XÓA LISTENER THỨ 2 HOÀN TOÀN
-
+      // Các listeners khác giữ nguyên
       sock.on("start_chat", (data) => {
         console.log("🔌 Socket: start_chat received", {
           conversation_id: data._id,
@@ -257,7 +398,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
           participants_count: data.participants?.length,
         });
 
-        // ⚡ VALIDATE: Kiểm tra conversation có participants hợp lệ
         if (!data.participants || data.participants.length === 0) {
           console.warn("🚨 Socket: Conversation has no participants", data);
           return;
@@ -265,7 +405,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
 
         const existed = conversations.find((c) => c.id === data._id);
         if (existed) {
-          console.log("🔄 Updating existing conversation");
           dispatch(
             updateDirectConversation({
               conversation: data,
@@ -273,7 +412,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
             })
           );
         } else {
-          console.log("➕ Adding new conversation");
           dispatch(
             addDirectConversation({
               conversation: data,
@@ -300,7 +438,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
         sock.emit("join_group_room", { roomId: current_room.id });
       }
 
-      // 🆕 THÊM: Xử lý group room updates
       sock.on("update_group_room", (room) => {
         console.log("🔌 Socket: update_group_room received", {
           room_id: room._id,
@@ -308,18 +445,12 @@ const DashboardLayout = ({ showChat = false, children }) => {
           members_count: room.members?.length,
         });
 
-        // ⚡ VALIDATE: Kiểm tra room data
         if (!room.members || room.members.length === 0) {
           console.warn("🚨 Socket: Room has no members", room);
           return;
         }
 
-        console.log("✅ Valid group room, updating Redux");
-        dispatch(
-          updateGroupRoom({
-            room,
-          })
-        );
+        dispatch(updateGroupRoom({ room }));
       });
 
       sock.on("update_conversation", (conversation) => {
@@ -329,7 +460,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
           participants: conversation.participants,
         });
 
-        // ⚡ VALIDATE: Chỉ update nếu có participants hợp lệ
         if (
           !conversation.participants ||
           conversation.participants.length === 0
@@ -352,12 +482,8 @@ const DashboardLayout = ({ showChat = false, children }) => {
           return;
         }
 
-        console.log("✅ Valid conversation, updating Redux");
         dispatch(
-          updateDirectConversation({
-            conversation,
-            currentUserId: user_id,
-          })
+          updateDirectConversation({ conversation, currentUserId: user_id })
         );
       });
 
@@ -370,9 +496,7 @@ const DashboardLayout = ({ showChat = false, children }) => {
         )
       );
 
-      // Multi-device Presence
       sock.on("user_online", ({ userId, lastSeen }) => {
-        console.log("👤 Socket: user_online", { userId, lastSeen });
         dispatch(
           updateUserPresence({
             userId,
@@ -383,7 +507,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
       });
 
       sock.on("user_offline", ({ userId, lastSeen }) => {
-        console.log("👤 Socket: user_offline", { userId, lastSeen });
         dispatch(
           updateUserPresence({
             userId,
@@ -393,25 +516,24 @@ const DashboardLayout = ({ showChat = false, children }) => {
         );
       });
 
-      // Audio/Video Call
       sock.on("audio_call_notification", (data) => {
-        console.log("📞 Socket: audio_call_notification", data);
         dispatch(PushToAudioCallQueue(data));
       });
 
       sock.on("video_call_notification", (data) => {
-        console.log("🎥 Socket: video_call_notification", data);
         dispatch(PushToVideoCallQueue(data));
       });
 
-      // Debug: Log tất cả socket events để theo dõi
+      // Debug: Log tất cả socket events
       sock.onAny((eventName, ...args) => {
         if (
           ![
             "new_message",
-            "new_group_message", // 🆕 THÊM
+            "new_group_message",
             "user_online",
             "user_offline",
+            "text_message",
+            "text_message_reply",
           ].includes(eventName)
         ) {
           console.log("🔌 Socket event:", eventName, args);
@@ -437,7 +559,7 @@ const DashboardLayout = ({ showChat = false, children }) => {
     conversations,
     rooms,
     dispatch,
-  ]); // 🆕 THÊM rooms
+  ]);
 
   const { room_id, chat_type } = useSelector((state) => state.app);
 
@@ -449,13 +571,10 @@ const DashboardLayout = ({ showChat = false, children }) => {
       room_id,
       chat_type,
     });
-
-    // TỰ ĐỘNG EMIT JOIN_CONVERSATION KHI STATE THAY ĐỔI
     sock.emit("leave_group_room", { roomId: room_id });
     sock.emit("join_group_room", { roomId: room_id });
-  }, [room_id, chat_type]); // Theo dõi state.app
+  }, [room_id, chat_type]);
 
-  // 🆕 THÊM: Debug cả direct và group state
   useEffect(() => {
     console.log("🔍 DashboardLayout - current state:", {
       direct_conversation: {
@@ -475,8 +594,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
     });
   }, [current_conversation, current_room, conversations, rooms]);
 
-  // Trong DashboardLayout hoặc component chính - thêm socket stability
-
   if (!isReady || !isLoggedIn || !socketReady) return <LoadingScreen />;
 
   return (
@@ -484,7 +601,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
       <SideBar role={role} />
       <Outlet />
 
-      {/* Audio Call */}
       {open_audio_notification_dialog && (
         <AudioCallNotification open={open_audio_notification_dialog} />
       )}
@@ -495,7 +611,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
         />
       )}
 
-      {/* Video Call */}
       {open_video_notification_dialog && (
         <VideoCallNotification open={open_video_notification_dialog} />
       )}

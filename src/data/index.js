@@ -41,7 +41,7 @@ const Nav_Buttons = [
     icon: <Phone />,
     roles: ["user", "admin", "moderator", "guest"],
   },
-   {
+  {
     index: 4,
     icon: <AdminPanelSettingsIcon />,
     roles: ["admin"], // chỉ admin thấy
@@ -318,25 +318,36 @@ const Chat_History = [
 
 const Message_options = [
   {
+    id: 1,
     title: "Reply",
+    action: "reply",
   },
   {
+    id: 2,
     title: "React to message",
+    action: "react",
   },
   {
+    id: 3,
     title: "Forward message",
+    action: "forward",
   },
   {
+    id: 4,
     title: "Star message",
+    action: "star",
   },
   {
+    id: 5,
     title: "Report",
+    action: "report",
   },
   {
+    id: 6,
     title: "Delete Message",
+    action: "delete",
   },
 ];
-
 const Shared_docs = [
   {
     type: "msg",

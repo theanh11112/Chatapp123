@@ -43,16 +43,8 @@ const Conversation = ({ isMobile, menu }) => {
   const currentUserId =
     initialized && keycloak?.authenticated ? keycloak?.subject : null;
 
-  const [dragState, setDragState] = useState({
-    dragging: false,
-    activeMsgId: null,
-    startX: 0,
-    dragOffset: 0,
-  });
-
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
 
-  // 🆕 SỬA: Lấy current chat info từ conversation state thay vì app state
   const getCurrentChatInfo = () => {
     if (chat_type === "group") {
       return current_room;
@@ -63,7 +55,6 @@ const Conversation = ({ isMobile, menu }) => {
 
   const currentChatInfo = getCurrentChatInfo();
 
-  // 🆕 SỬA: Lấy messages dựa trên chat_type
   const getCurrentMessages = () => {
     if (chat_type === "group") {
       return current_room?.messages || [];
@@ -74,7 +65,6 @@ const Conversation = ({ isMobile, menu }) => {
 
   const currentMessages = getCurrentMessages();
 
-  // 🆕 THÊM: Hàm format ngày
   const formatMessageDate = (timestamp) => {
     if (!timestamp) return "";
     const date = new Date(timestamp);
@@ -82,7 +72,6 @@ const Conversation = ({ isMobile, menu }) => {
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
 
-    // So sánh ngày (bỏ qua giờ)
     const isToday = date.toDateString() === today.toDateString();
     const isYesterday = date.toDateString() === yesterday.toDateString();
 
@@ -99,7 +88,6 @@ const Conversation = ({ isMobile, menu }) => {
     }
   };
 
-  // 🆕 THÊM: Hàm nhóm tin nhắn theo ngày
   const groupMessagesByDate = (messages) => {
     if (!messages || messages.length === 0) return [];
 
@@ -108,10 +96,9 @@ const Conversation = ({ isMobile, menu }) => {
 
     messages.forEach((message) => {
       const messageDate = new Date(message.createdAt || message.time);
-      const dateKey = messageDate.toDateString(); // Chỉ so sánh ngày, không so giờ
+      const dateKey = messageDate.toDateString();
 
       if (!currentDateGroup || currentDateGroup.dateKey !== dateKey) {
-        // Tạo timeline divider cho ngày mới
         if (currentDateGroup) {
           groupedMessages.push(currentDateGroup);
         }
@@ -125,11 +112,9 @@ const Conversation = ({ isMobile, menu }) => {
         };
       }
 
-      // Thêm message vào nhóm hiện tại
       currentDateGroup.messages.push(message);
     });
 
-    // Thêm nhóm cuối cùng
     if (currentDateGroup) {
       groupedMessages.push(currentDateGroup);
     }
@@ -137,7 +122,6 @@ const Conversation = ({ isMobile, menu }) => {
     return groupedMessages;
   };
 
-  // 🆕 THÊM: Component hiển thị date divider
   const DateDivider = ({ date }) => {
     return (
       <Box
@@ -180,33 +164,25 @@ const Conversation = ({ isMobile, menu }) => {
     );
   };
 
-  // 🆕 THÊM: Hàm xác định khi nào hiển thị tên người gửi - SỬA THÀNH 1 NGÀY
   const shouldShowSenderName = useCallback(
     (currentMessage, previousMessage, chatType) => {
-      // Nếu là tin nhắn đầu tiên
       if (!previousMessage) return true;
-
-      // Nếu là direct chat, không hiển thị tên
       if (chatType === "individual") return false;
-
-      // Nếu là tin nhắn system
       if (currentMessage.subtype === "system") return false;
 
-      // Nếu người gửi khác với tin nhắn trước
       if (
         currentMessage.sender?.keycloakId !== previousMessage.sender?.keycloakId
       ) {
         return true;
       }
 
-      // 🆕 SỬA: KIỂM TRA THỜI GIAN: Nếu cách nhau quá 1 NGÀY (24 giờ), hiển thị lại tên
       const currentTime = new Date(
         currentMessage.createdAt || currentMessage.time
       );
       const previousTime = new Date(
         previousMessage.createdAt || previousMessage.time
       );
-      const timeDiff = Math.abs(currentTime - previousTime) / (1000 * 60 * 60); // giờ
+      const timeDiff = Math.abs(currentTime - previousTime) / (1000 * 60 * 60);
 
       if (timeDiff > 24) {
         return true;
@@ -217,28 +193,22 @@ const Conversation = ({ isMobile, menu }) => {
     []
   );
 
-  // 🆕 THÊM: Hàm xác định khi nào là đầu đoạn tin nhắn - SỬA THÀNH 1 NGÀY
   const isStartOfMessageGroup = useCallback(
     (currentMessage, nextMessage, chatType) => {
-      // Nếu là tin nhắn cuối cùng
       if (!nextMessage) return true;
-
-      // Nếu là direct chat, luôn là đầu đoạn
       if (chatType === "individual") return true;
 
-      // Nếu người gửi khác với tin nhắn tiếp theo
       if (
         currentMessage.sender?.keycloakId !== nextMessage.sender?.keycloakId
       ) {
         return true;
       }
 
-      // 🆕 SỬA: KIỂM TRA THỜI GIAN: Nếu cách nhau quá 1 NGÀY (24 giờ), là đầu đoạn
       const currentTime = new Date(
         currentMessage.createdAt || currentMessage.time
       );
       const nextTime = new Date(nextMessage.createdAt || nextMessage.time);
-      const timeDiff = Math.abs(nextTime - currentTime) / (1000 * 60 * 60); // giờ
+      const timeDiff = Math.abs(nextTime - currentTime) / (1000 * 60 * 60);
 
       if (timeDiff > 24) {
         return true;
@@ -249,8 +219,7 @@ const Conversation = ({ isMobile, menu }) => {
     []
   );
 
-  // 🆕 THÊM: Component hiển thị tên người gửi
-  const SenderName = ({ message, showAvatar = false }) => {
+  const SenderName = ({ message }) => {
     if (!message.sender || chat_type === "individual") return null;
 
     return (
@@ -260,20 +229,12 @@ const Conversation = ({ isMobile, menu }) => {
           alignItems: "center",
           gap: 1,
           mb: 0.5,
-          ml: message.outgoing ? "auto" : 4.5,
-          mr: message.outgoing ? 3 : "auto",
+          ml: message.outgoing ? "auto" : 0, // Sửa: bỏ margin left
+          mr: message.outgoing ? 0 : "auto", // Sửa: bỏ margin right
           justifyContent: message.outgoing ? "flex-end" : "flex-start",
-          maxWidth: "70%",
-          px: 1,
+          maxWidth: "100%",
         }}
       >
-        {showAvatar && !message.outgoing && (
-          <Avatar
-            sx={{ width: 24, height: 24 }}
-            src={message.sender.avatar}
-            alt={message.sender.username}
-          />
-        )}
         <Typography
           variant="caption"
           sx={{
@@ -289,7 +250,100 @@ const Conversation = ({ isMobile, menu }) => {
     );
   };
 
-  // 🆕 THÊM: Debug message grouping
+  // 🆕 SỬA: Component MessageWrapper với avatar nhỏ hơn và căn chỉnh sát hơn
+  // 🆕 SỬA: Component MessageWrapper với avatar ở dưới chân tin nhắn
+  const MessageWrapper = ({
+    message,
+    showSenderName,
+    isStartOfGroup,
+    children,
+  }) => {
+    const isOutgoing = message.outgoing;
+
+    return (
+      <Box
+        sx={{
+          display: "flex",
+          justifyContent: isOutgoing ? "flex-end" : "flex-start",
+          alignItems: "flex-end", // 🆕 SỬA: align items về bottom
+          mb: isStartOfGroup ? 1 : 0.25,
+          px: 1,
+          position: "relative",
+        }}
+      >
+        {/* Avatar cho incoming messages - CHUYỂN XUỐNG DƯỚI */}
+        {!isOutgoing && chat_type === "group" && (
+          <Box
+            sx={{
+              width: 28,
+              height: 28,
+              mr: 1,
+              visibility: isStartOfGroup ? "visible" : "hidden",
+              display: "flex",
+              alignItems: "flex-end", // 🆕 Căn avatar về bottom
+              justifyContent: "center",
+              order: 1, // 🆕 Avatar sẽ là phần tử đầu tiên (bên trái)
+            }}
+          >
+            {isStartOfGroup && (
+              <Avatar
+                sx={{
+                  width: 24,
+                  height: 24,
+                }}
+                src={message.sender?.avatar}
+                alt={message.sender?.username}
+              />
+            )}
+          </Box>
+        )}
+
+        {/* Container cho tin nhắn và tên người gửi */}
+        <Box
+          sx={{
+            display: "flex",
+            flexDirection: "column",
+            maxWidth: "70%",
+            minWidth: isOutgoing ? "auto" : "-50",
+            ...(isOutgoing && {
+              alignItems: "flex-end",
+            }),
+            order: 2, // 🆕 Message content là phần tử thứ hai
+          }}
+        >
+          {/* Tên người gửi - VẪN Ở TRÊN */}
+          {showSenderName && chat_type === "group" && (
+            <SenderName message={message} />
+          )}
+
+          {/* Nội dung tin nhắn */}
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: isOutgoing ? "flex-end" : "flex-start",
+              width: "100%",
+            }}
+          >
+            {children}
+          </Box>
+        </Box>
+
+        {/* Placeholder cho outgoing messages - CHUYỂN XUỐNG DƯỚI */}
+        {isOutgoing && (
+          <Box
+            sx={{
+              width: 28,
+              ml: 1,
+              flexShrink: 0,
+              order: 3, // 🆕 Placeholder là phần tử thứ ba (bên phải)
+            }}
+          />
+        )}
+      </Box>
+    );
+  };
+
   useEffect(() => {
     if (currentMessages.length > 0) {
       const grouped = groupMessagesByDate(currentMessages);
@@ -304,7 +358,6 @@ const Conversation = ({ isMobile, menu }) => {
     }
   }, [currentMessages]);
 
-  // 🆕 THÊM: Debug render và messages
   useEffect(() => {
     console.log("🎯 Conversation - RENDER DEBUG:", {
       currentMessages_length: currentMessages.length,
@@ -314,7 +367,6 @@ const Conversation = ({ isMobile, menu }) => {
     });
   }, [currentMessages, current_room, room_id, chat_type]);
 
-  // 🆕 SỬA QUAN TRỌNG: Fetch messages chỉ khi cần thiết
   useEffect(() => {
     console.log("🔄 Conversation - Check if should fetch messages:", {
       room_id,
@@ -324,10 +376,6 @@ const Conversation = ({ isMobile, menu }) => {
       current_messages_count: current_messages?.length,
     });
 
-    // 🆕 CHỈ fetch messages khi:
-    // 1. Có room_id hợp lệ
-    // 2. Là group chat
-    // 3. current_room TỒN TẠI nhưng KHÔNG có messages HOẶC messages rỗng
     if (room_id && chat_type === "group" && current_room?.id === room_id) {
       const shouldFetch =
         !current_room.messages || current_room.messages.length === 0;
@@ -349,12 +397,10 @@ const Conversation = ({ isMobile, menu }) => {
         setIsLoadingMessages(false);
       }
     } else if (room_id && chat_type === "individual") {
-      // Đối với direct chat, messages đã được load cùng với conversation
       setIsLoadingMessages(false);
     }
   }, [room_id, chat_type, current_room, dispatch]);
 
-  // 🆕 SỬA QUAN TRỌNG: setCurrentChatFromRoomId với logic bảo vệ messages
   const setCurrentChatFromRoomId = useCallback(() => {
     console.log("🔄 setCurrentChatFromRoomId called", {
       room_id,
@@ -383,13 +429,9 @@ const Conversation = ({ isMobile, menu }) => {
         return null;
       }
 
-      // 🆕 QUAN TRỌNG: CHỈ dispatch khi THỰC SỰ CẦN THIẾT
       const shouldSetNewRoom =
-        // Chưa có current room
         !current_room ||
-        // Current room khác với room muốn set
         current_room.id !== room_id ||
-        // Current room không có messages nhưng room mới có
         (!current_room.messages?.length && currentRoom.messages?.length);
 
       console.log("🔍 Should set new room?", {
@@ -450,14 +492,12 @@ const Conversation = ({ isMobile, menu }) => {
   useEffect(() => {
     const currentChat = setCurrentChatFromRoomId();
 
-    // Nếu current chat bị null nhưng có room_id, force set lại
     if (!currentChat && room_id) {
       console.log("🔄 Force setting current chat from room_id");
       setCurrentChatFromRoomId();
     }
   }, [room_id, chat_type, setCurrentChatFromRoomId]);
 
-  // Debug để theo dõi state
   useEffect(() => {
     console.log("🔵 Conversation Debug:", {
       room_id,
@@ -480,60 +520,6 @@ const Conversation = ({ isMobile, menu }) => {
     isLoadingMessages,
   ]);
 
-  // --- Drag handlers (giữ nguyên) ---
-  const startDrag = (e, id) => {
-    e.preventDefault();
-    setDragState({
-      dragging: true,
-      activeMsgId: id,
-      startX: e.clientX,
-      dragOffset: 0,
-    });
-  };
-
-  const onDrag = (e) => {
-    if (!dragState.dragging) return;
-    const offset = Math.max(
-      0,
-      Math.min(Math.abs(e.clientX - dragState.startX), 80)
-    );
-    setDragState((prev) => ({ ...prev, dragOffset: offset }));
-  };
-
-  const endDrag = () => {
-    setDragState({
-      dragging: false,
-      activeMsgId: null,
-      startX: 0,
-      dragOffset: 0,
-    });
-  };
-
-  const startDragTouch = (e, id) => {
-    const touch = e.touches[0];
-    setDragState({
-      dragging: true,
-      activeMsgId: id,
-      startX: touch.clientX,
-      dragOffset: 0,
-    });
-  };
-
-  const onDragTouch = (e) => {
-    if (!dragState.dragging) return;
-    const touch = e.touches[0];
-    const offset = Math.max(
-      0,
-      Math.min(Math.abs(touch.clientX - dragState.startX), 80)
-    );
-    setDragState((prev) => ({ ...prev, dragOffset: offset }));
-  };
-
-  const endDragTouch = () => {
-    endDrag();
-  };
-
-  // 🆕 TẠM THỜI: Key để force re-render khi messages thay đổi
   const messagesKey =
     currentMessages.length > 0
       ? `messages-${currentMessages.length}-${
@@ -541,7 +527,6 @@ const Conversation = ({ isMobile, menu }) => {
         }`
       : "no-messages";
 
-  // 🆕 SỬA: Hiển thị loading nếu đang loading messages
   if (isLoadingMessages) {
     return (
       <Box
@@ -562,7 +547,6 @@ const Conversation = ({ isMobile, menu }) => {
     );
   }
 
-  // 🆕 SỬA: Hiển thị placeholder khi không có conversation được chọn
   if (!room_id || !currentChatInfo) {
     return (
       <Box
@@ -588,12 +572,15 @@ const Conversation = ({ isMobile, menu }) => {
     );
   }
 
-  // 🆕 SỬA: Nhóm tin nhắn theo ngày
   const groupedMessages = groupMessagesByDate(currentMessages);
 
   return (
-    <Box p={isMobile ? 1 : 3} key={messagesKey}>
-      <Stack spacing={1}>
+    <Box p={isMobile ? 0.5 : 2} key={messagesKey}>
+      {" "}
+      {/* Giảm padding container */}
+      <Stack spacing={0.5}>
+        {" "}
+        {/* Giảm spacing giữa các message */}
         {groupedMessages.length === 0 ? (
           <Box
             sx={{
@@ -622,7 +609,6 @@ const Conversation = ({ isMobile, menu }) => {
 
               {/* Messages in this date */}
               {dateGroup.messages.map((el, index) => {
-                // 🆕 SỬA: Validate message data
                 if (!el) return null;
 
                 if (el.type === "divider") {
@@ -630,10 +616,6 @@ const Conversation = ({ isMobile, menu }) => {
                 }
 
                 if (el.type === "msg") {
-                  const isOutgoing = el.outgoing;
-                  const alignment = isOutgoing ? "flex-end" : "flex-start";
-
-                  // 🆕 XÁC ĐỊNH KHI NÀO HIỂN THỊ TÊN NGƯỜI GỬI (TRONG CÙNG NGÀY)
                   const previousMessage =
                     index > 0 ? dateGroup.messages[index - 1] : null;
                   const nextMessage =
@@ -667,106 +649,15 @@ const Conversation = ({ isMobile, menu }) => {
                     }
                   })();
 
-                  const isActive = dragState.activeMsgId === el.id;
-                  const offset = isActive ? dragState.dragOffset : 0;
-                  const translateX = isOutgoing ? -offset : offset;
-
                   return (
-                    <Box
+                    <MessageWrapper
                       key={el.id || `msg-${groupIndex}-${index}`}
-                      sx={{
-                        position: "relative",
-                        marginBottom: isStartOfGroup ? 1 : 0.5,
-                      }}
+                      message={el}
+                      showSenderName={showSenderName}
+                      isStartOfGroup={isStartOfGroup}
                     >
-                      {/* 🆕 HIỂN THỊ TÊN NGƯỜI GỬI */}
-                      {showSenderName && chat_type === "group" && (
-                        <SenderName message={el} />
-                      )}
-
-                      <Box
-                        display="flex"
-                        justifyContent={alignment}
-                        alignItems="flex-end"
-                        sx={{
-                          position: "relative",
-                          cursor: dragState.dragging ? "grabbing" : "grab",
-                        }}
-                        onMouseDown={(e) => startDrag(e, el.id)}
-                        onMouseMove={onDrag}
-                        onMouseUp={endDrag}
-                        onMouseLeave={endDrag}
-                        onTouchStart={(e) => startDragTouch(e, el.id)}
-                        onTouchMove={onDragTouch}
-                        onTouchEnd={endDragTouch}
-                      >
-                        <Box
-                          sx={{
-                            display: "flex",
-                            alignItems: "flex-end",
-                            transform: `translateX(${translateX}px)`,
-                            transition: dragState.dragging
-                              ? "none"
-                              : "transform 0.2s",
-                            position: "relative",
-                            // 🆕 THÊM AVATAR CHO ĐẦU ĐOẠN TIN NHẮN
-                            ...(isStartOfGroup &&
-                              !el.outgoing &&
-                              chat_type === "group" && {
-                                alignItems: "flex-start",
-                              }),
-                          }}
-                        >
-                          {/* 🆕 AVATAR CHO INCOMING MESSAGES */}
-                          {isStartOfGroup &&
-                            !el.outgoing &&
-                            chat_type === "group" && (
-                              <Avatar
-                                sx={{
-                                  width: 32,
-                                  height: 32,
-                                  mr: 1,
-                                  mt: 0.5,
-                                }}
-                                src={el.sender?.avatar}
-                                alt={el.sender?.username}
-                              />
-                            )}
-
-                          <Box
-                            sx={{
-                              // 🆕 THÊM MARGIN ĐỂ CÂN CHỈNH KHI CÓ AVATAR
-                              ...(isStartOfGroup &&
-                                !el.outgoing &&
-                                chat_type === "group" && {
-                                  marginLeft: 0,
-                                }),
-                            }}
-                          >
-                            <MsgComponent el={el} menu={menu} />
-                          </Box>
-
-                          {/* Timestamp: right cho outgoing, left cho incoming */}
-                          {isActive && offset > 0 && (
-                            <Box
-                              sx={{
-                                position: "absolute",
-                                bottom: 4,
-                                fontSize: 12,
-                                color: "#999",
-                                whiteSpace: "nowrap",
-                                opacity: dragState.dragging ? 1 : 0,
-                                transition: "opacity 0.2s",
-                                left: isOutgoing ? "auto" : -60,
-                                right: isOutgoing ? -40 : "auto",
-                              }}
-                            >
-                              {el.time}
-                            </Box>
-                          )}
-                        </Box>
-                      </Box>
-                    </Box>
+                      <MsgComponent el={el} menu={menu} />
+                    </MessageWrapper>
                   );
                 }
 
@@ -780,7 +671,6 @@ const Conversation = ({ isMobile, menu }) => {
   );
 };
 
-// ChatComponent giữ nguyên
 const ChatComponent = () => {
   const isMobile = useResponsive("between", "md", "xs", "sm");
   const theme = useTheme();
@@ -793,7 +683,6 @@ const ChatComponent = () => {
   );
   const { chat_type, room_id } = useSelector((state) => state.app);
 
-  // 🆕 SỬA: Lấy current chat info từ conversation state
   const currentChatInfo =
     chat_type === "group" ? current_room : current_conversation;
 
@@ -816,7 +705,6 @@ const ChatComponent = () => {
     current_messages,
   ]);
 
-  // 🆕 THÊM DEBUG SCROLL
   useEffect(() => {
     if (!messageListRef.current) {
       console.log("❌ messageListRef not available");
@@ -830,7 +718,6 @@ const ChatComponent = () => {
       clientHeight: messageListRef.current.clientHeight,
     });
 
-    // Auto scroll to bottom khi có messages mới
     messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
 
     console.log("✅ Scrolled to bottom:", {
@@ -841,7 +728,6 @@ const ChatComponent = () => {
 
   return (
     <Stack height="100%" maxHeight="100vh" width={isMobile ? "100vw" : "auto"}>
-      {/* ChatHeader sẽ tự động hiển thị thông tin dựa trên current_conversation và current_room */}
       <ChatHeader />
       <Box
         ref={messageListRef}

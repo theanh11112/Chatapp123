@@ -1,4 +1,5 @@
-// Footer.js - HOÀN CHỈNH - ĐÃ SỬA LỖI RESET MESSAGES
+// Footer.js - ĐÃ THÊM SOCKET LISTENERS CHO DIRECT MESSAGES
+import React, { useRef, useState, useCallback, useEffect } from "react";
 import {
   Box,
   Fab,
@@ -19,10 +20,8 @@ import {
   User,
 } from "phosphor-react";
 import { useTheme, styled } from "@mui/material/styles";
-import React, { useRef, useState, useCallback, useEffect } from "react";
 import useResponsive from "../../hooks/useResponsive";
 import { useKeycloak } from "@react-keycloak/web";
-
 import data from "@emoji-mart/data";
 import Picker from "@emoji-mart/react";
 import { socket } from "../../socket";
@@ -30,8 +29,10 @@ import { useSelector, useDispatch } from "react-redux";
 import {
   addDirectMessage,
   addGroupMessage,
+  updateDirectMessage,
 } from "../../redux/slices/conversation";
 import { v4 as uuidv4 } from "uuid";
+import { ReplyPreview } from "./ReplyComponents";
 
 const StyledInput = styled(TextField)(({ theme }) => ({
   "& .MuiInputBase-input": {
@@ -57,82 +58,75 @@ const ChatInput = React.memo(
     value,
     inputRef,
     handleSendMessage,
+    replyTo,
+    onCancelReply,
   }) => {
     const [openActions, setOpenActions] = useState(false);
 
     return (
-      <StyledInput
-        inputRef={inputRef}
-        value={value}
-        onChange={(event) => {
-          setValue(event.target.value);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            handleSendMessage();
-          }
-        }}
-        fullWidth
-        placeholder="Write a message..."
-        variant="filled"
-        InputProps={{
-          disableUnderline: true,
-          startAdornment: (
-            <InputAdornment position="start">
-              <Stack sx={{ width: "max-content" }}>
-                <Stack
-                  sx={{
-                    position: "relative",
-                    display: openActions ? "inline-block" : "none",
-                  }}
-                >
-                  {Actions.map((el, idx) => (
-                    <Tooltip placement="right" title={el.title} key={idx}>
-                      <Fab
-                        sx={{
-                          position: "absolute",
-                          top: -el.y,
-                          backgroundColor: el.color,
-                        }}
-                        onClick={() => setOpenActions(false)}
-                      >
-                        {el.icon}
-                      </Fab>
-                    </Tooltip>
-                  ))}
+      <>
+        {replyTo && <ReplyPreview replyTo={replyTo} onCancel={onCancelReply} />}
+
+        <StyledInput
+          inputRef={inputRef}
+          value={value}
+          onChange={(event) => {
+            setValue(event.target.value);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              handleSendMessage();
+            }
+          }}
+          fullWidth
+          placeholder={replyTo ? "Type your reply..." : "Write a message..."}
+          variant="filled"
+          InputProps={{
+            disableUnderline: true,
+            startAdornment: (
+              <InputAdornment position="start">
+                <Stack sx={{ width: "max-content" }}>
+                  <Stack
+                    sx={{
+                      position: "relative",
+                      display: openActions ? "inline-block" : "none",
+                    }}
+                  >
+                    {Actions.map((el, idx) => (
+                      <Tooltip placement="right" title={el.title} key={idx}>
+                        <Fab
+                          sx={{
+                            position: "absolute",
+                            top: -el.y,
+                            backgroundColor: el.color,
+                          }}
+                          onClick={() => setOpenActions(false)}
+                        >
+                          {el.icon}
+                        </Fab>
+                      </Tooltip>
+                    ))}
+                  </Stack>
+                  <IconButton onClick={() => setOpenActions(!openActions)}>
+                    <LinkSimple />
+                  </IconButton>
                 </Stack>
-                <IconButton onClick={() => setOpenActions(!openActions)}>
-                  <LinkSimple />
+              </InputAdornment>
+            ),
+            endAdornment: (
+              <InputAdornment position="end">
+                <IconButton onClick={() => setOpenPicker(!openPicker)}>
+                  <Smiley />
                 </IconButton>
-              </Stack>
-            </InputAdornment>
-          ),
-          endAdornment: (
-            <InputAdornment position="end">
-              <IconButton onClick={() => setOpenPicker(!openPicker)}>
-                <Smiley />
-              </IconButton>
-            </InputAdornment>
-          ),
-        }}
-      />
+              </InputAdornment>
+            ),
+          }}
+        />
+      </>
     );
   }
 );
-
-// ----------------------------- UTIL -----------------------------
-function linkify(text) {
-  const urlRegex = /(https?:\/\/[^\s]+)/g;
-  return text.replace(
-    urlRegex,
-    (url) => `<a href="${url}" target="_blank">${url}</a>`
-  );
-}
-
-function containsUrl(text) {
-  return /(https?:\/\/[^\s]+)/g.test(text);
-}
 
 // ----------------------------- FOOTER MAIN -----------------------------
 const Footer = () => {
@@ -140,7 +134,6 @@ const Footer = () => {
   const dispatch = useDispatch();
   const { keycloak, initialized } = useKeycloak();
 
-  // Lấy cả direct và group state từ Redux
   const { current_conversation } = useSelector(
     (state) => state.conversation.direct_chat
   );
@@ -148,36 +141,22 @@ const Footer = () => {
     (state) => state.conversation.group_chat
   );
 
-  // Lấy room_id và chat_type từ app slice
   const { room_id, chat_type } = useSelector((state) => state.app);
-
   const { sideBar } = useSelector((state) => state.app);
   const isMobile = useResponsive("between", "md", "xs", "sm");
 
   const [openPicker, setOpenPicker] = useState(false);
   const [value, setValue] = useState("");
+  const [replyTo, setReplyTo] = useState(null);
   const inputRef = useRef(null);
 
-  // Lấy user_id từ Keycloak
   const user_id =
     initialized && keycloak?.authenticated ? keycloak?.subject : null;
 
-  // 🆕 Xác định loại chat hiện tại
   const isGroupChat = chat_type === "group";
   const isDirectChat = chat_type === "individual";
 
-  // 🆕 Lấy thông tin chat hiện tại - ĐÃ SỬA DEPENDENCIES
-  // Footer.js - SỬA getCurrentChat để giảm re-render
   const getCurrentChat = useCallback(() => {
-    console.log("🔄 getCurrentChat called:", {
-      isGroupChat,
-      isDirectChat,
-      current_room_id: current_room?.id,
-      current_conversation_id: current_conversation?.id,
-      room_id,
-    });
-
-    // 🆕 SỬA: Chỉ return new object khi thực sự thay đổi
     if (isGroupChat && current_room?.id === room_id) {
       return {
         type: "group",
@@ -197,53 +176,154 @@ const Footer = () => {
     return null;
   }, [isGroupChat, isDirectChat, current_room, current_conversation, room_id]);
 
-  // 🆕 THÊM: Debug effect để theo dõi re-render
+  // 🆕 THÊM: Socket event listeners cho direct messages
   useEffect(() => {
-    console.log("🔄 Footer - Re-render triggered:", {
-      room_id,
-      chat_type,
-      current_room_id: current_room?.id,
-      current_conversation_id: current_conversation?.id,
-      value_length: value.length,
-    });
-  }, [room_id, chat_type, current_room, current_conversation, value]);
+    if (!socket || !user_id) return;
 
-  // -------------------- HANDLE EMOJI INSERT --------------------
-  const handleEmojiClick = useCallback(
-    (emoji) => {
-      const input = inputRef.current;
-      if (!input) return;
+    // Listener cho tin nhắn direct mới
+    const handleNewDirectMessage = (data) => {
+      console.log("📨 Footer: Received new direct message:", data);
 
-      const start = input.selectionStart;
-      const end = input.selectionEnd;
-      const newValue = value.slice(0, start) + emoji + value.slice(end);
+      const currentChat = getCurrentChat();
+      if (!currentChat || currentChat.type !== "direct") {
+        console.log("❌ Not in direct chat or no current chat");
+        return;
+      }
 
-      setValue(newValue);
+      // Kiểm tra xem tin nhắn có thuộc conversation hiện tại không
+      if (data.conversation_id === currentChat.id) {
+        console.log(
+          "✅ Adding realtime direct message to current conversation"
+        );
 
+        const isOwnMessage = data.from === user_id;
+
+        // 🆕 XỬ LÝ replyTo.sender
+        let processedReplyTo = data.replyTo;
+        if (processedReplyTo && typeof processedReplyTo.sender === "string") {
+          processedReplyTo = {
+            ...processedReplyTo,
+            sender: {
+              keycloakId: processedReplyTo.sender,
+              username: "Unknown",
+            },
+          };
+        }
+
+        const messageData = {
+          id: data._id || data.id,
+          _id: data._id || data.id,
+          type: "msg",
+          subtype: data.type || "text",
+          message: data.message || data.content,
+          content: data.message || data.content,
+          incoming: !isOwnMessage,
+          outgoing: isOwnMessage,
+          time: data.time || formatMessageTime(data.createdAt || new Date()),
+          createdAt: data.createdAt || new Date(),
+          attachments: data.attachments || [],
+          sender: data.sender || {
+            keycloakId: data.from,
+            username: data.sender?.username || "Unknown",
+          },
+          replyTo: processedReplyTo,
+          isOptimistic: false,
+          tempId: data.tempId || data.messageId,
+        };
+
+        console.log("🔄 Footer: Processing direct message -", {
+          conversation_id: data.conversation_id,
+          message_id: messageData.id,
+          isOwnMessage,
+          hasReply: !!data.replyTo,
+        });
+
+        // 🆕 Replace optimistic message với real message từ server
+        if (data.tempId || data.messageId) {
+          console.log("🔄 Replacing optimistic message:", {
+            tempId: data.tempId || data.messageId,
+            realId: messageData.id,
+          });
+
+          // Nếu có action updateDirectMessage, sử dụng nó
+          if (updateDirectMessage) {
+            dispatch(
+              updateDirectMessage({
+                tempId: data.tempId || data.messageId,
+                realMessage: messageData,
+                conversation_id: currentChat.id,
+              })
+            );
+          } else {
+            // Fallback: sử dụng addDirectMessage với replace flag
+            dispatch(
+              addDirectMessage({
+                message: messageData,
+                conversation_id: currentChat.id,
+                currentUserId: user_id,
+                isGroup: false,
+                isOptimistic: false,
+                replaceOptimistic: true,
+              })
+            );
+          }
+        } else {
+          // Tin nhắn mới từ người khác
+          dispatch(
+            addDirectMessage({
+              message: messageData,
+              conversation_id: currentChat.id,
+              currentUserId: user_id,
+              isGroup: false,
+              isOptimistic: false,
+            })
+          );
+        }
+      }
+    };
+
+    // Listener cho direct reply messages
+    const handleDirectReplyMessage = (data) => {
+      console.log("📨 Footer: Received direct reply message:", data);
+      handleNewDirectMessage(data);
+    };
+
+    socket.on("text_message", handleNewDirectMessage);
+    socket.on("text_message_reply", handleDirectReplyMessage);
+
+    return () => {
+      socket.off("text_message", handleNewDirectMessage);
+      socket.off("text_message_reply", handleDirectReplyMessage);
+    };
+  }, [socket, user_id, dispatch, getCurrentChat]);
+
+  // 🆕 Setup reply listener từ parent component
+  useEffect(() => {
+    const handleSetReply = (message) => {
+      console.log("🔄 Setting reply to:", message);
+      setReplyTo(message);
       setTimeout(() => {
-        input.selectionStart = input.selectionEnd = start + emoji.length;
-      }, 1);
-    },
-    [value]
-  );
+        if (inputRef.current) {
+          inputRef.current.focus();
+        }
+      }, 100);
+    };
 
-  // 🆕 SỬA QUAN TRỌNG: Handle send message với logic chống reset
+    window.setMessageReply = handleSetReply;
+
+    return () => {
+      window.setMessageReply = null;
+    };
+  }, []);
+
+  const handleCancelReply = useCallback(() => {
+    setReplyTo(null);
+  }, []);
+
   const handleSendMessage = useCallback(() => {
-    console.log("📤 Attempting to send message...");
+    console.log("📤 Attempting to send message...", { replyTo });
 
     const currentChat = getCurrentChat();
-
-    console.log("🔍 Send Message Debug:", {
-      currentChat,
-      value: value.trim(),
-      user_id,
-      room_id,
-      chat_type,
-      isGroupChat,
-      isDirectChat,
-      current_room_messages: current_room?.messages?.length,
-      current_conversation_messages: current_conversation?.messages?.length,
-    });
 
     if (!value.trim()) {
       console.log("❌ Message is empty");
@@ -263,13 +343,20 @@ const Footer = () => {
     const msgId = uuidv4();
     const timestamp = new Date().toISOString();
 
+    const isReply = !!replyTo;
+    const messageType = isReply
+      ? "reply"
+      : containsUrl(value)
+      ? "link"
+      : "text";
+
     if (isGroupChat) {
-      // 🆕 GROUP MESSAGE - OPTIMISTIC UPDATE VỚI UUID
+      // GROUP MESSAGE - code giữ nguyên
       const optimisticMessage = {
-        id: msgId, // UUID cho optimistic update
-        _id: msgId, // 🆕 THÊM _id để duplicate detection hoạt động
+        id: msgId,
+        _id: msgId,
         type: "msg",
-        subtype: containsUrl(value) ? "link" : "text",
+        subtype: messageType,
         message: value,
         content: value,
         incoming: false,
@@ -281,49 +368,77 @@ const Footer = () => {
           keycloakId: user_id,
           username: keycloak?.tokenParsed?.preferred_username || "You",
         },
-        isOptimistic: true, // 🆕 FLAG ĐỂ PHÂN BIỆT
+        isOptimistic: true,
+        tempId: msgId,
+        ...(isReply && {
+          replyTo: {
+            id: replyTo.id || replyTo._id,
+            content: replyTo.content || replyTo.message,
+            sender: replyTo.sender,
+          },
+        }),
       };
 
-      console.log("📝 Optimistic update for GROUP message - STRUCTURE:", {
-        message_structure: optimisticMessage,
-        type: optimisticMessage.type,
-        subtype: optimisticMessage.subtype,
-        has_message: !!optimisticMessage.message,
-        has_content: !!optimisticMessage.content,
-      });
-
-      // 🆕 SỬA: Dispatch với flag isOptimistic
       dispatch(
         addGroupMessage({
           message: optimisticMessage,
           room_id: currentChat.id,
           isOptimistic: true,
+          tempId: msgId,
         })
       );
 
-      // 🆕 EMIT SOCKET EVENT FOR GROUP
-      console.log("🔌 Emitting group_message socket event:", {
-        roomId: currentChat.id,
-        message: value,
-        sender: user_id,
-        messageId: msgId, // 🆕 GỬI CẢ UUID ĐỂ BACKEND GHÉP
-      });
+      const socketEvent = isReply ? "group_message_reply" : "group_message";
+      const socketData = isReply
+        ? {
+            roomId: currentChat.id,
+            message: value,
+            sender: {
+              keycloakId: user_id,
+              username: keycloak?.tokenParsed?.preferred_username || "Unknown",
+            },
+            type: messageType,
+            timestamp: timestamp,
+            messageId: msgId,
+            replyTo: replyTo.id || replyTo._id,
+            replyContent: replyTo.content || replyTo.message,
+            replySender: (() => {
+              if (typeof replyTo.sender === "string") {
+                return {
+                  keycloakId: replyTo.sender,
+                  username: "Unknown",
+                };
+              }
+              if (replyTo.sender && typeof replyTo.sender === "object") {
+                return {
+                  keycloakId:
+                    replyTo.sender.keycloakId || replyTo.sender.id || "unknown",
+                  username: replyTo.sender.username || "Unknown",
+                  ...replyTo.sender,
+                };
+              }
+              return {
+                keycloakId: "unknown",
+                username: "Unknown",
+              };
+            })(),
+          }
+        : {
+            roomId: currentChat.id,
+            message: value,
+            sender: {
+              keycloakId: user_id,
+              username: keycloak?.tokenParsed?.preferred_username || "Unknown",
+            },
+            type: messageType,
+            timestamp: timestamp,
+            messageId: msgId,
+          };
 
-      socket.emit("group_message", {
-        roomId: currentChat.id,
-        message: value,
-        sender: {
-          keycloakId: user_id,
-          username: keycloak?.tokenParsed?.preferred_username || "Unknown",
-        },
-        type: containsUrl(value) ? "link" : "text",
-        timestamp: timestamp,
-        messageId: msgId, // 🆕 QUAN TRỌNG: Gửi UUID để backend có thể mapping
-      });
-
-      console.log("✅ Group message sent via socket with optimistic update");
+      socket.emit(socketEvent, socketData);
+      console.log(`✅ Group ${isReply ? "reply " : ""}message sent via socket`);
     } else {
-      // DIRECT MESSAGE
+      // DIRECT MESSAGE - CÓ/HOẶC KHÔNG REPLY
       if (!currentChat.user_id) {
         console.log("❌ No user_id in conversation");
         return;
@@ -332,21 +447,24 @@ const Footer = () => {
       const optimisticMessage = {
         id: msgId,
         type: "msg",
-        subtype: containsUrl(value) ? "link" : "text",
+        subtype: messageType,
         message: value,
         incoming: false,
         outgoing: true,
         time: formatMessageTime(timestamp),
+        createdAt: timestamp,
         attachments: [],
-        isOptimistic: true, // 🆕 FLAG CHO DIRECT MESSAGE
+        isOptimistic: true,
+        tempId: msgId,
+        ...(isReply && {
+          replyTo: {
+            id: replyTo.id || replyTo._id,
+            content: replyTo.content || replyTo.message,
+            sender: replyTo.sender,
+          },
+        }),
       };
 
-      console.log("📝 Optimistic update for DIRECT message:", {
-        conversation_id: currentChat.id,
-        message_id: msgId,
-      });
-
-      // 🆕 SỬA: Direct message với optimistic flag
       dispatch(
         addDirectMessage({
           message: optimisticMessage,
@@ -354,73 +472,100 @@ const Footer = () => {
           currentUserId: user_id,
           isGroup: false,
           isOptimistic: true,
+          tempId: msgId,
         })
       );
 
-      console.log("🔌 Emitting text_message socket event:", {
-        conversation_id: currentChat.id,
-        to: currentChat.user_id,
-        from: user_id,
-        messageId: msgId,
-      });
+      const socketEvent = isReply ? "text_message_reply" : "text_message";
+      const socketData = isReply
+        ? {
+            id: msgId,
+            message: linkify(value),
+            from: user_id,
+            to: currentChat.user_id,
+            conversation_id: currentChat.id,
+            type: messageType,
+            replyTo: replyTo.id || replyTo._id,
+            replyContent: replyTo.content || replyTo.message,
+            replySender: replyTo.sender,
+          }
+        : {
+            id: msgId,
+            message: linkify(value),
+            from: user_id,
+            to: currentChat.user_id,
+            conversation_id: currentChat.id,
+            type: messageType,
+          };
 
-      socket.emit("text_message", {
-        id: msgId,
-        message: linkify(value),
-        from: user_id,
-        to: currentChat.user_id,
-        conversation_id: currentChat.id,
-        type: containsUrl(value) ? "link" : "text",
-      });
-
-      console.log("✅ Direct message sent via socket with optimistic update");
+      console.log(`🔌 Emitting ${socketEvent}:`, socketData);
+      socket.emit(socketEvent, socketData);
+      console.log(
+        `✅ Direct ${isReply ? "reply " : ""}message sent via socket`
+      );
     }
 
+    setReplyTo(null);
     setValue("");
   }, [
     value,
+    replyTo,
     getCurrentChat,
     dispatch,
     user_id,
     isGroupChat,
     isDirectChat,
     keycloak,
-    current_room,
-    current_conversation,
   ]);
 
-  // 🆕 THÊM: Format time helper
+  const handleEmojiClick = useCallback(
+    (emoji) => {
+      const input = inputRef.current;
+      if (!input) return;
+
+      const start = input.selectionStart;
+      const end = input.selectionEnd;
+      const newValue = value.slice(0, start) + emoji + value.slice(end);
+
+      setValue(newValue);
+
+      setTimeout(() => {
+        input.selectionStart = input.selectionEnd = start + emoji.length;
+      }, 1);
+    },
+    [value]
+  );
+
   const formatMessageTime = (timestamp) => {
-    return new Date(timestamp).toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    try {
+      const date = new Date(timestamp);
+      return date.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch (error) {
+      console.error("❌ Error formatting time:", error);
+      return new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
   };
 
-  // 🆕 THÊM: Debug currentChat changes
-  useEffect(() => {
-    const currentChat = getCurrentChat();
-    console.log("🔄 Footer - Current Chat Updated:", {
-      currentChat,
-      chat_type,
-      room_id,
-      hasUser: !!user_id,
-      current_room_messages: current_room?.messages?.length,
-      current_conversation_messages: current_conversation?.messages?.length,
-    });
-  }, [
-    getCurrentChat,
-    chat_type,
-    room_id,
-    user_id,
-    current_room,
-    current_conversation,
-  ]);
+  const containsUrl = (text) => {
+    return /(https?:\/\/[^\s]+)/g.test(text);
+  };
 
-  // Nếu không có chat được chọn, ẩn input
+  const linkify = (text) => {
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    return text.replace(
+      urlRegex,
+      (url) => `<a href="${url}" target="_blank">${url}</a>`
+    );
+  };
+
   const currentChat = getCurrentChat();
   if (!currentChat) {
-    console.log("🚫 Footer: No valid chat available");
     return (
       <Box
         sx={{
@@ -475,10 +620,11 @@ const Footer = () => {
               openPicker={openPicker}
               setOpenPicker={setOpenPicker}
               handleSendMessage={handleSendMessage}
+              replyTo={replyTo}
+              onCancelReply={handleCancelReply}
             />
           </Stack>
 
-          {/* SEND BUTTON */}
           <Box
             sx={{
               height: 48,
