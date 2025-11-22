@@ -390,6 +390,47 @@ const DashboardLayout = ({ showChat = false, children }) => {
         );
       });
 
+      // Lắng nghe sự kiện message bị xóa từ server
+      sock.on("message_deleted", (data) => {
+        try {
+          console.log("📨 Received message_deleted event:", data);
+
+          const {
+            messageId,
+            conversationId,
+            roomId,
+            deletedBy,
+            isGroup,
+            timestamp,
+          } = data;
+
+          // 🆕 DISPATCH ACTION ĐỂ CẬP NHẬT REDUX STORE
+          if (isGroup) {
+            // Xóa message khỏi group chat
+            dispatch({
+              type: "conversation/deleteMessage",
+              payload: {
+                messageId,
+                isGroup: true,
+              },
+            });
+          } else {
+            // Xóa message khỏi direct chat
+            dispatch({
+              type: "conversation/deleteMessage",
+              payload: {
+                messageId,
+                isGroup: false,
+              },
+            });
+          }
+
+          console.log("✅ UI updated for deleted message:", messageId);
+        } catch (error) {
+          console.error("❌ Error handling message_deleted event:", error);
+        }
+      });
+
       // Các listeners khác giữ nguyên
       sock.on("start_chat", (data) => {
         console.log("🔌 Socket: start_chat received", {

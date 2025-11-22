@@ -618,7 +618,6 @@ const Conversation = ({ isMobile, menu }) => {
             >
               {/* Date Divider */}
               <DateDivider date={dateGroup.displayDate} />
-
               {/* Messages in this date */}
               {dateGroup.messages.map((el, index) => {
                 if (!el) return null;
@@ -668,11 +667,12 @@ const Conversation = ({ isMobile, menu }) => {
                       showSenderName={showSenderName}
                       isStartOfGroup={isStartOfGroup}
                     >
-                      {/* 🆕 SỬA: Thêm prop isGroup */}
+                      {/* 🆕 SỬA: Thêm prop roomId cho group messages */}
                       <MsgComponent
                         el={el}
                         menu={menu}
                         isGroup={chat_type === "group"}
+                        roomId={chat_type === "group" ? room_id : null} // 🆕 TRUYỀN roomId
                       />
                     </MessageWrapper>
                   );

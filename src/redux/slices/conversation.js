@@ -3,6 +3,7 @@ import { createSlice } from "@reduxjs/toolkit";
 import { AWS_S3_REGION, S3_BUCKET_NAME } from "../../config";
 import { timeAgo } from "../../utils/timeAgo";
 import api from "../../utils/axios";
+import { showSnackbar } from "../../redux/slices/app";
 
 const parseTimestamp = (ts) => {
   const t = new Date(ts).getTime();
@@ -40,6 +41,13 @@ const initialState = {
     error: null,
   },
   deletedMessages: [],
+  notification: {
+    // 🆕 THÊM NOTIFICATION STATE
+    open: false,
+    message: "",
+    severity: "error", // error, warning, info, success
+    duration: 3000,
+  },
 };
 
 const slice = createSlice({
@@ -1183,18 +1191,26 @@ const slice = createSlice({
           ).length;
       }
     },
+    // Trong conversation slice
     deleteMessage(state, action) {
       const { messageId, isGroup = false } = action.payload;
 
       console.log("🗑️ deleteMessage:", { messageId, isGroup });
 
+      let deletedMessage = null;
+
       if (isGroup) {
-        // Xóa trong group chat
+        // Xóa trong group chat và lưu message đã xóa
         if (state.group_chat.current_room?.messages) {
-          state.group_chat.current_room.messages =
-            state.group_chat.current_room.messages.filter(
-              (msg) => msg.id !== messageId && msg._id !== messageId
-            );
+          const messageIndex = state.group_chat.current_room.messages.findIndex(
+            (msg) => msg.id === messageId || msg._id === messageId
+          );
+
+          if (messageIndex !== -1) {
+            deletedMessage =
+              state.group_chat.current_room.messages[messageIndex];
+            state.group_chat.current_room.messages.splice(messageIndex, 1);
+          }
         }
 
         // Cập nhật trong rooms list nếu cần
@@ -1206,11 +1222,15 @@ const slice = createSlice({
           }
         });
       } else {
-        // Xóa trong direct chat
-        state.direct_chat.current_messages =
-          state.direct_chat.current_messages.filter(
-            (msg) => msg.id !== messageId && msg._id !== messageId
-          );
+        // Xóa trong direct chat và lưu message đã xóa
+        const messageIndex = state.direct_chat.current_messages.findIndex(
+          (msg) => msg.id === messageId || msg._id === messageId
+        );
+
+        if (messageIndex !== -1) {
+          deletedMessage = state.direct_chat.current_messages[messageIndex];
+          state.direct_chat.current_messages.splice(messageIndex, 1);
+        }
 
         // Cập nhật trong conversations list
         state.direct_chat.conversations.forEach((conv) => {
@@ -1219,6 +1239,17 @@ const slice = createSlice({
               (msg) => msg._id !== messageId
             );
           }
+        });
+      }
+
+      // 🆕 LƯU MESSAGE ĐÃ XÓA ĐỂ CÓ THỂ RESTORE SAU NÀY
+      if (deletedMessage) {
+        if (!state.deletedMessages) {
+          state.deletedMessages = [];
+        }
+        state.deletedMessages.push({
+          ...deletedMessage,
+          deletedAt: new Date().toISOString(),
         });
       }
 
@@ -1233,13 +1264,23 @@ const slice = createSlice({
       const { messageId, isGroup } = action.payload;
       console.log("🔄 Restoring message:", { messageId, isGroup });
 
-      // Tìm message đã xóa trong temp storage
+      // 🆕 TÌM MESSAGE TRONG deletedMessages
       const deletedMessageIndex = state.deletedMessages?.findIndex(
         (msg) => msg.id === messageId || msg._id === messageId
       );
 
+      console.log("🔍 Deleted message search:", {
+        deletedMessageIndex,
+        deletedMessagesCount: state.deletedMessages?.length,
+      });
+
       if (deletedMessageIndex !== -1 && state.deletedMessages) {
         const messageToRestore = state.deletedMessages[deletedMessageIndex];
+
+        console.log("✅ Found message to restore:", {
+          messageId: messageToRestore.id || messageToRestore._id,
+          content: messageToRestore.content || messageToRestore.message,
+        });
 
         if (isGroup) {
           // Khôi phục trong group chat
@@ -1247,23 +1288,48 @@ const slice = createSlice({
             state.group_chat.current_room.messages.push(messageToRestore);
             // Sắp xếp lại theo thời gian
             state.group_chat.current_room.messages.sort(
-              (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
+              (a, b) =>
+                new Date(a.createdAt || a.time) -
+                new Date(b.createdAt || b.time)
             );
+            console.log("✅ Group message restored to current room");
           }
         } else {
           // Khôi phục trong direct chat
           state.direct_chat.current_messages.push(messageToRestore);
           // Sắp xếp lại theo thời gian
           state.direct_chat.current_messages.sort(
-            (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
+            (a, b) =>
+              new Date(a.createdAt || a.time) - new Date(b.createdAt || b.time)
           );
+          console.log("✅ Direct message restored to current messages");
         }
 
         // Xóa khỏi temp storage
         state.deletedMessages.splice(deletedMessageIndex, 1);
 
-        console.log("✅ Message restored successfully");
+        console.log("🎉 Message restored successfully");
+      } else {
+        console.error("❌ Message not found in deletedMessages:", {
+          messageId,
+          deletedMessages: state.deletedMessages,
+        });
       }
+    },
+    showMessage: (state, action) => {
+      const { message, severity = "error", duration = 3000 } = action.payload;
+      state.notification = {
+        open: true,
+        message,
+        severity,
+        duration,
+      };
+    },
+    hideMessage: (state) => {
+      state.notification = {
+        ...state.notification,
+        open: false,
+      };
     },
   },
 });
@@ -1293,6 +1359,8 @@ export const {
   updateDirectMessage, // 🆕 THÊM
   deleteMessage,
   restoreMessage,
+  showMessage,
+  hideMessage,
 } = slice.actions;
 
 // ==================== THUNKS ====================
@@ -1410,84 +1478,109 @@ export const fetchGroupRooms = (keycloakId) => async (dispatch) => {
 };
 
 // 🆕 THÊM: Thunk để xóa tin nhắn
+// 🆕 THÊM: Thunk để xóa tin nhắn - LẤY keycloakId TỪ STATE
+
 export const deleteMessageThunk =
-  (messageId, isGroup = false) =>
+  (messageId, isGroup = false, roomId = null, socket) =>
   async (dispatch, getState) => {
     try {
-      console.log("🗑️ deleteMessageThunk:", { messageId, isGroup });
+      console.log("🗑️ deleteMessageThunk:", { messageId, isGroup, roomId });
 
-      // 🆕 OPTIMISTIC UPDATE: Cập nhật UI ngay lập tức
+      const state = getState();
+      const keycloakId = state.auth.user_id;
+
+      if (!keycloakId) {
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: "User not authenticated",
+          })
+        );
+        throw new Error("User not authenticated");
+      }
+
+      // 1. OPTIMISTIC UPDATE
       dispatch(deleteMessage({ messageId, isGroup }));
 
-      // Gọi API với body
-      if (isGroup) {
-        // API xóa tin nhắn group - DÙNG BODY
-        await api.delete("/users/rooms/messages", {
-          data: { messageId },
+      // 2. EMIT SOCKET SAU KHI DISPATCH
+      if (socket) {
+        const socketEvent = isGroup
+          ? "delete_group_message"
+          : "delete_direct_message";
+
+        const socketData = isGroup
+          ? { messageId, keycloakId, roomId }
+          : { messageId, keycloakId };
+
+        socket.emit(socketEvent, socketData, (response) => {
+          console.log("✅ Socket response:", response);
+
+          if (response.status !== "success") {
+            console.error("❌ Socket delete failed, restoring message...");
+
+            // Rollback nếu server báo lỗi
+            dispatch(restoreMessage({ messageId, isGroup }));
+
+            // 🆕 HIỂN THỊ THÔNG BÁO LỖI CHO NGƯỜI DÙNG
+            let errorMessage = "Failed to delete message";
+
+            if (response.message.includes("1 hour")) {
+              errorMessage =
+                "You can only delete messages within 1 hour of sending";
+            } else if (response.message.includes("own messages")) {
+              errorMessage = "You can only delete your own messages";
+            } else if (response.message.includes("not found")) {
+              errorMessage = "Message not found";
+            } else if (response.message.includes("Access denied")) {
+              errorMessage = "Access denied to this conversation";
+            }
+
+            // THAY THẾ: Sử dụng showSnackbar từ app slice
+            dispatch(
+              showSnackbar({
+                severity: "error",
+                message: errorMessage,
+              })
+            );
+          } else {
+            // 🆕 HIỂN THỊ THÔNG BÁO THÀNH CÔNG
+            // THAY THẾ: Sử dụng showSnackbar từ app slice
+            dispatch(
+              showSnackbar({
+                severity: "success",
+                message: "Message deleted successfully",
+              })
+            );
+          }
         });
       } else {
-        // API xóa tin nhắn direct - DÙNG BODY
-        await api.delete("/users/conversations/messages", {
-          data: { messageId },
-        });
+        console.error("❌ Socket not available");
+        dispatch(restoreMessage({ messageId, isGroup }));
+
+        // 🆕 HIỂN THỊ THÔNG BÁO LỖI
+        // THAY THẾ: Sử dụng showSnackbar từ app slice
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: "Socket connection not available",
+          })
+        );
+
+        throw new Error("Socket connection not available");
       }
-
-      console.log("✅ Message deleted successfully via API");
-
-      // 🆕 THÊM: Hiển thị thông báo thành công
-      // dispatch(
-      //   showSnackbar({
-      //     message: "Message deleted successfully",
-      //     severity: "success",
-      //     duration: 3000,
-      //   })
-      // );
     } catch (error) {
       console.error("❌ deleteMessageThunk error:", error);
-
-      // 🆕 ROLLBACK: Khôi phục tin nhắn trong state
       dispatch(restoreMessage({ messageId, isGroup }));
 
-      // 🆕 XỬ LÝ LỖI CHI TIẾT
-      let errorMessage = "Failed to delete message";
-      let errorSeverity = "error";
+      // 🆕 HIỂN THỊ THÔNG BÁO LỖI
+      // THAY THẾ: Sử dụng showSnackbar từ app slice
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: error.message || "Failed to delete message",
+        })
+      );
 
-      if (error.response) {
-        const { status, data } = error.response;
-
-        switch (status) {
-          case 403:
-            errorMessage =
-              data.message || "You can only delete your own messages";
-            break;
-          case 404:
-            errorMessage = "Message not found";
-            break;
-          case 400:
-            errorMessage = data.message || "Invalid request";
-            break;
-          case 401:
-            errorMessage = "Please login again";
-            errorSeverity = "warning";
-            break;
-          default:
-            errorMessage = data.message || "Server error occurred";
-        }
-
-        console.error("API Error Details:", { status, data });
-      } else if (error.request) {
-        errorMessage = "Network error - please check your connection";
-      } else {
-        errorMessage = "Unexpected error occurred";
-      }
-
-      // 🆕 HIỂN THỊ THÔNG BÁO LỖI CỤ THỂ
-      // dispatch(
-      //   showSnackbar({
-      //     message: errorMessage,
-      //     severity: errorSeverity,
-      //     duration: 5000,
-      //   })
-      // );
+      throw error;
     }
   };

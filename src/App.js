@@ -1,4 +1,4 @@
-// App.js - ĐÃ SỬA (CHỈ MỘT AuthProvider)
+// App.js - SỬA PHẦN SNACKBAR
 import React, { useEffect, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useKeycloak } from "@react-keycloak/web";
@@ -13,7 +13,8 @@ import { AuthProvider } from "./contexts/AuthContext";
 import { socket } from "./socket";
 import LoadingScreen from "./components/LoadingScreen";
 
-const vertical = "bottom";
+// 🆕 SỬA: Thay đổi vertical từ "bottom" thành "top"
+const vertical = "top";
 const horizontal = "center";
 
 const Alert = React.forwardRef((props, ref) => (
@@ -89,22 +90,33 @@ function App() {
         </AuthProvider>
       </ThemeProvider>
 
-      {/* Snackbar for notifications */}
+      {/* 🆕 SỬA: Snackbar hiển thị ở giữa phía trên */}
       <Snackbar
         anchorOrigin={{ vertical, horizontal }}
         open={open}
         autoHideDuration={4000}
         key={vertical + horizontal}
         onClose={handleCloseSnackbar}
+        // 🆕 THÊM: CSS để căn giữa và đẹp hơn
+        sx={{
+          "&.MuiSnackbar-root": {
+            top: "80px", // Điều chỉnh khoảng cách từ top
+            marginLeft: "100px",
+          },
+          zIndex: 9999, // Đảm bảo hiển thị trên cùng
+        }}
       >
         <Alert
           onClose={handleCloseSnackbar}
           severity={severity}
           sx={{
             width: "100%",
+            minWidth: "300px", // 🆕 THÊM: Độ rộng tối thiểu
             "& .MuiAlert-message": {
               overflow: "hidden",
               textOverflow: "ellipsis",
+              textAlign: "center", // 🆕 THÊM: Căn giữa text
+              flex: 1,
             },
           }}
         >

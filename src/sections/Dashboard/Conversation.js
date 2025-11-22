@@ -17,6 +17,7 @@ import { Message_options } from "../../data";
 import Embed from "react-embed";
 import { ReplyInfo } from "../../components/Chat/ReplyComponents";
 import { deleteMessageThunk } from "../../redux/slices/conversation";
+import { socket } from "../../socket";
 
 // 🆕 THÊM: Hook để quản lý snackbar
 const useSnackbar = () => {
@@ -143,10 +144,18 @@ const MessageOption = memo(({ onAction }) => {
 });
 
 // =======================
-//  MESSAGE CONTAINER - HOÀN CHỈNH
+//  MESSAGE CONTAINER - HOÀN CHỈNH VỚI roomId
 // =======================
 const MessageContainer = memo(
-  ({ children, el, menu, onMenuAction, onDelete, isGroup = false }) => {
+  ({
+    children,
+    el,
+    menu,
+    onMenuAction,
+    onDelete,
+    isGroup = false,
+    roomId = null,
+  }) => {
     const [showMenu, setShowMenu] = React.useState(false);
 
     const handleMouseEnter = useCallback(() => {
@@ -160,13 +169,13 @@ const MessageContainer = memo(
     const handleMenuAction = useCallback(
       (action) => {
         if (action === "delete" && onDelete) {
-          // 🆕 Xử lý delete ngay lập tức
-          onDelete(el, isGroup);
+          // 🆕 TRUYỀN roomId CHO onDelete
+          onDelete(el, isGroup, roomId);
         } else if (onMenuAction) {
           onMenuAction(action, el);
         }
       },
-      [el, onMenuAction, onDelete, isGroup]
+      [el, onMenuAction, onDelete, isGroup, roomId] // 🆕 THÊM roomId
     );
 
     const handleContainerClick = useCallback((e) => {
@@ -221,628 +230,67 @@ const MessageContainer = memo(
 );
 
 // =======================
-//  TEXT MESSAGE - HOÀN CHỈNH VỚI DELETE
+//  TEXT MESSAGE - HOÀN CHỈNH VỚI DELETE VÀ roomId
 // =======================
-const TextMsg = memo(({ el, menu, onDelete, isGroup = false }) => {
-  const theme = useTheme();
-  const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
-  const dispatch = useDispatch(); // 🆕 THÊM dispatch
+const TextMsg = memo(
+  ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
+    const theme = useTheme();
+    const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+    const dispatch = useDispatch();
 
-  const handleMenuAction = useCallback(
-    (action, messageEl) => {
-      switch (action) {
-        case "reply":
-          if (window.setMessageReply) {
-            window.setMessageReply({
-              id: messageEl.id || messageEl._id,
-              content: messageEl.message || messageEl.content,
-              sender: messageEl.sender,
-              type: messageEl.subtype || "text",
-            });
-          }
-          break;
-        case "forward":
-          showSnackbar("Message forwarded", "info");
-          break;
-        default:
-          break;
+    const handleMenuAction = useCallback(
+      (action, messageEl) => {
+        switch (action) {
+          case "reply":
+            if (window.setMessageReply) {
+              window.setMessageReply({
+                id: messageEl.id || messageEl._id,
+                content: messageEl.message || messageEl.content,
+                sender: messageEl.sender,
+                type: messageEl.subtype || "text",
+              });
+            }
+            break;
+          case "forward":
+            showSnackbar("Message forwarded", "info");
+            break;
+          default:
+            break;
+        }
+      },
+      [showSnackbar]
+    );
+
+    // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP
+    const handleDelete = useCallback(
+      (messageEl, messageIsGroup = false, messageRoomId = null) => {
+        console.log("🗑️ Deleting message:", {
+          messageId: messageEl.id || messageEl._id,
+          isGroup: messageIsGroup,
+          roomId: messageRoomId, // 🆕 SỬ DỤNG roomId TRUYỀN VÀO
+        });
+
+        // Gọi thunk để xóa tin nhắn - TRUYỀN roomId CHO GROUP
+        dispatch(
+          deleteMessageThunk(
+            messageEl.id || messageEl._id,
+            messageIsGroup,
+            messageRoomId, // 🆕 TRUYỀN roomId
+            socket
+          )
+        );
+
+        showSnackbar("Message deleted", "success");
+      },
+      [dispatch, showSnackbar]
+    );
+
+    const handleReplyClick = useCallback(() => {
+      if (el.replyTo && window.setMessageReply) {
+        // Handle reply click
       }
-    },
-    [showSnackbar]
-  );
+    }, [el.replyTo]);
 
-  // 🆕 HANDLER XÓA TIN NHẮN HOÀN CHỈNH
-  const handleDelete = useCallback(
-    (messageEl, messageIsGroup = false) => {
-      console.log("🗑️ Deleting message:", {
-        messageId: messageEl.id || messageEl._id,
-        isGroup: messageIsGroup,
-      });
-
-      // Gọi thunk để xóa tin nhắn
-      dispatch(
-        deleteMessageThunk(messageEl.id || messageEl._id, messageIsGroup)
-      );
-
-      // Hiển thị thông báo thành công
-      showSnackbar("Message deleted", "success");
-    },
-    [dispatch, showSnackbar]
-  );
-
-  const handleReplyClick = useCallback(() => {
-    if (el.replyTo && window.setMessageReply) {
-      // Handle reply click
-    }
-  }, [el.replyTo]);
-
-  return (
-    <>
-      <MessageContainer
-        el={el}
-        menu={menu}
-        onMenuAction={handleMenuAction}
-        onDelete={handleDelete}
-        isGroup={isGroup}
-      >
-        <Box
-          px={1.5}
-          py={1.5}
-          sx={{
-            backgroundColor: el.incoming
-              ? alpha(theme.palette.background.default, 1)
-              : theme.palette.primary.main,
-            borderRadius: 1.5,
-            width: "max-content",
-            maxWidth: "400px",
-          }}
-        >
-          {el.replyTo && (
-            <ReplyInfo replyTo={el.replyTo} onClick={handleReplyClick} />
-          )}
-
-          <Typography
-            variant="body2"
-            color={el.incoming ? theme.palette.text : "#fff"}
-            sx={{ wordBreak: "break-word" }}
-          >
-            {el.message || el.content}
-          </Typography>
-
-          <Typography
-            variant="caption"
-            sx={{
-              display: "block",
-              textAlign: el.incoming ? "left" : "right",
-              color: el.incoming
-                ? theme.palette.text.secondary
-                : "rgba(255,255,255,0.7)",
-              marginTop: 0.5,
-              fontSize: "0.7rem",
-            }}
-          >
-            {el.time}
-          </Typography>
-        </Box>
-      </MessageContainer>
-
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={3000}
-        onClose={hideSnackbar}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-      >
-        <Alert onClose={hideSnackbar} severity={snackbar.severity}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
-    </>
-  );
-});
-
-// =======================
-//  MEDIA MESSAGE - HOÀN CHỈNH VỚI DELETE
-// =======================
-const MediaMsg = memo(({ el, menu, onDelete, isGroup = false }) => {
-  const theme = useTheme();
-  const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
-  const dispatch = useDispatch(); // 🆕 THÊM dispatch
-
-  const handleMenuAction = useCallback(
-    (action, messageEl) => {
-      switch (action) {
-        case "reply":
-          if (window.setMessageReply) {
-            window.setMessageReply({
-              id: messageEl.id || messageEl._id,
-              content: messageEl.message || "📷 Media",
-              sender: messageEl.sender,
-              type: "img",
-            });
-          }
-          break;
-        case "download":
-          showSnackbar("Media downloaded", "info");
-          break;
-        case "forward":
-          showSnackbar("Media forwarded", "info");
-          break;
-        default:
-          break;
-      }
-    },
-    [showSnackbar]
-  );
-
-  // 🆕 HANDLER XÓA TIN NHẮN HOÀN CHỈNH
-  const handleDelete = useCallback(
-    (messageEl, messageIsGroup = false) => {
-      console.log("🗑️ Deleting media message:", {
-        messageId: messageEl.id || messageEl._id,
-        isGroup: messageIsGroup,
-      });
-
-      dispatch(
-        deleteMessageThunk(messageEl.id || messageEl._id, messageIsGroup)
-      );
-      showSnackbar("Media message deleted", "success");
-    },
-    [dispatch, showSnackbar]
-  );
-
-  const handleReplyClick = useCallback(() => {
-    if (el.replyTo && window.setMessageReply) {
-      // Handle reply click
-    }
-  }, [el.replyTo]);
-
-  return (
-    <>
-      <MessageContainer
-        el={el}
-        menu={menu}
-        onMenuAction={handleMenuAction}
-        onDelete={handleDelete}
-        isGroup={isGroup}
-      >
-        <Box
-          px={1.5}
-          py={1.5}
-          sx={{
-            backgroundColor: el.incoming
-              ? alpha(theme.palette.background.default, 1)
-              : theme.palette.primary.main,
-            borderRadius: 1.5,
-            width: "max-content",
-          }}
-        >
-          {el.replyTo && (
-            <ReplyInfo replyTo={el.replyTo} onClick={handleReplyClick} />
-          )}
-
-          <Stack spacing={1}>
-            <img
-              src={el.img}
-              alt={el.message}
-              style={{
-                maxHeight: 210,
-                borderRadius: "10px",
-                maxWidth: "300px",
-              }}
-              loading="lazy"
-            />
-            {el.message && (
-              <Typography
-                variant="body2"
-                color={el.incoming ? theme.palette.text : "#fff"}
-              >
-                {el.message}
-              </Typography>
-            )}
-
-            <Typography
-              variant="caption"
-              sx={{
-                display: "block",
-                textAlign: el.incoming ? "left" : "right",
-                color: el.incoming
-                  ? theme.palette.text.secondary
-                  : "rgba(255,255,255,0.7)",
-                fontSize: "0.7rem",
-              }}
-            >
-              {el.time}
-            </Typography>
-          </Stack>
-        </Box>
-      </MessageContainer>
-
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={3000}
-        onClose={hideSnackbar}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-      >
-        <Alert onClose={hideSnackbar} severity={snackbar.severity}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
-    </>
-  );
-});
-
-// =======================
-//  DOCUMENT MESSAGE - HOÀN CHỈNH VỚI DELETE
-// =======================
-const DocMsg = memo(({ el, menu, onDelete, isGroup = false }) => {
-  const theme = useTheme();
-  const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
-  const dispatch = useDispatch(); // 🆕 THÊM dispatch
-
-  const handleMenuAction = useCallback(
-    (action, messageEl) => {
-      switch (action) {
-        case "reply":
-          if (window.setMessageReply) {
-            window.setMessageReply({
-              id: messageEl.id || messageEl._id,
-              content: messageEl.message || "📄 Document",
-              sender: messageEl.sender,
-              type: "doc",
-            });
-          }
-          break;
-        case "download":
-          showSnackbar("Document downloaded", "info");
-          break;
-        case "forward":
-          showSnackbar("Document forwarded", "info");
-          break;
-        default:
-          break;
-      }
-    },
-    [showSnackbar]
-  );
-
-  // 🆕 HANDLER XÓA TIN NHẮN HOÀN CHỈNH
-  const handleDelete = useCallback(
-    (messageEl, messageIsGroup = false) => {
-      console.log("🗑️ Deleting document message:", {
-        messageId: messageEl.id || messageEl._id,
-        isGroup: messageIsGroup,
-      });
-
-      dispatch(
-        deleteMessageThunk(messageEl.id || messageEl._id, messageIsGroup)
-      );
-      showSnackbar("Document message deleted", "success");
-    },
-    [dispatch, showSnackbar]
-  );
-
-  const handleReplyClick = useCallback(() => {
-    if (el.replyTo && window.setMessageReply) {
-      // Handle reply click
-    }
-  }, [el.replyTo]);
-
-  return (
-    <>
-      <MessageContainer
-        el={el}
-        menu={menu}
-        onMenuAction={handleMenuAction}
-        onDelete={handleDelete}
-        isGroup={isGroup}
-      >
-        <Box
-          px={1.5}
-          py={1.5}
-          sx={{
-            backgroundColor: el.incoming
-              ? alpha(theme.palette.background.default, 1)
-              : theme.palette.primary.main,
-            borderRadius: 1.5,
-            width: "max-content",
-          }}
-        >
-          {el.replyTo && (
-            <ReplyInfo replyTo={el.replyTo} onClick={handleReplyClick} />
-          )}
-
-          <Stack spacing={2}>
-            <Stack
-              p={2}
-              direction="row"
-              spacing={3}
-              alignItems="center"
-              sx={{
-                backgroundColor: theme.palette.background.paper,
-                borderRadius: 1,
-              }}
-            >
-              <Image size={48} />
-              <Typography variant="caption">Abstract.png</Typography>
-              <IconButton>
-                <DownloadSimple />
-              </IconButton>
-            </Stack>
-            {el.message && (
-              <Typography
-                variant="body2"
-                color={el.incoming ? theme.palette.text : "#fff"}
-              >
-                {el.message}
-              </Typography>
-            )}
-
-            <Typography
-              variant="caption"
-              sx={{
-                display: "block",
-                textAlign: el.incoming ? "left" : "right",
-                color: el.incoming
-                  ? theme.palette.text.secondary
-                  : "rgba(255,255,255,0.7)",
-                fontSize: "0.7rem",
-              }}
-            >
-              {el.time}
-            </Typography>
-          </Stack>
-        </Box>
-      </MessageContainer>
-
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={3000}
-        onClose={hideSnackbar}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-      >
-        <Alert onClose={hideSnackbar} severity={snackbar.severity}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
-    </>
-  );
-});
-
-// =======================
-//  LINK MESSAGE - HOÀN CHỈNH VỚI DELETE
-// =======================
-const LinkMsg = memo(({ el, menu, onDelete, isGroup = false }) => {
-  const theme = useTheme();
-  const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
-  const dispatch = useDispatch(); // 🆕 THÊM dispatch
-
-  const handleMenuAction = useCallback(
-    (action, messageEl) => {
-      switch (action) {
-        case "reply":
-          if (window.setMessageReply) {
-            window.setMessageReply({
-              id: messageEl.id || messageEl._id,
-              content: messageEl.message || "🔗 Link",
-              sender: messageEl.sender,
-              type: "Link",
-            });
-          }
-          break;
-        case "copy":
-          showSnackbar("Link copied to clipboard", "info");
-          break;
-        case "forward":
-          showSnackbar("Link forwarded", "info");
-          break;
-        default:
-          break;
-      }
-    },
-    [showSnackbar]
-  );
-
-  // 🆕 HANDLER XÓA TIN NHẮN HOÀN CHỈNH
-  const handleDelete = useCallback(
-    (messageEl, messageIsGroup = false) => {
-      console.log("🗑️ Deleting link message:", {
-        messageId: messageEl.id || messageEl._id,
-        isGroup: messageIsGroup,
-      });
-
-      dispatch(
-        deleteMessageThunk(messageEl.id || messageEl._id, messageIsGroup)
-      );
-      showSnackbar("Link message deleted", "success");
-    },
-    [dispatch, showSnackbar]
-  );
-
-  const handleReplyClick = useCallback(() => {
-    if (el.replyTo && window.setMessageReply) {
-      // Handle reply click
-    }
-  }, [el.replyTo]);
-
-  return (
-    <>
-      <MessageContainer
-        el={el}
-        menu={menu}
-        onMenuAction={handleMenuAction}
-        onDelete={handleDelete}
-        isGroup={isGroup}
-      >
-        <Box
-          px={1.5}
-          py={1.5}
-          sx={{
-            backgroundColor: el.incoming
-              ? alpha(theme.palette.background.default, 1)
-              : theme.palette.primary.main,
-            borderRadius: 1.5,
-            width: "max-content",
-          }}
-        >
-          {el.replyTo && (
-            <ReplyInfo replyTo={el.replyTo} onClick={handleReplyClick} />
-          )}
-
-          <Stack spacing={2}>
-            <Stack
-              p={2}
-              direction="column"
-              spacing={3}
-              sx={{
-                backgroundColor: theme.palette.background.paper,
-                borderRadius: 1,
-              }}
-            >
-              <Embed
-                width="300px"
-                isDark
-                url={`https://youtu.be/xoWxBR34qLE`}
-              />
-            </Stack>
-
-            {el.message && (
-              <Typography
-                variant="body2"
-                color={el.incoming ? theme.palette.text : "#fff"}
-              >
-                <div dangerouslySetInnerHTML={{ __html: el.message }} />
-              </Typography>
-            )}
-
-            <Typography
-              variant="caption"
-              sx={{
-                display: "block",
-                textAlign: el.incoming ? "left" : "right",
-                color: el.incoming
-                  ? theme.palette.text.secondary
-                  : "rgba(255,255,255,0.7)",
-                fontSize: "0.7rem",
-              }}
-            >
-              {el.time}
-            </Typography>
-          </Stack>
-        </Box>
-      </MessageContainer>
-
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={3000}
-        onClose={hideSnackbar}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-      >
-        <Alert onClose={hideSnackbar} severity={snackbar.severity}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
-    </>
-  );
-});
-
-// =======================
-//  REPLY MESSAGE - HOÀN CHỈNH VỚI DELETE
-// =======================
-const ReplyMsg = memo(({ el, menu, onDelete, isGroup = false }) => {
-  const theme = useTheme();
-  const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
-  const dispatch = useDispatch(); // 🆕 THÊM dispatch
-
-  const handleMenuAction = useCallback(
-    (action, messageEl) => {
-      switch (action) {
-        case "reply":
-          if (window.setMessageReply) {
-            window.setMessageReply({
-              id: messageEl.id || messageEl._id,
-              content: messageEl.content || messageEl.message,
-              sender: messageEl.sender,
-              type: "reply",
-            });
-          }
-          break;
-        case "forward":
-          showSnackbar("Message forwarded", "info");
-          break;
-        default:
-          break;
-      }
-    },
-    [showSnackbar]
-  );
-
-  // 🆕 HANDLER XÓA TIN NHẮN HOÀN CHỈNH
-  const handleDelete = useCallback(
-    (messageEl, messageIsGroup = false) => {
-      console.log("🗑️ Deleting reply message:", {
-        messageId: messageEl.id || messageEl._id,
-        isGroup: messageIsGroup,
-      });
-
-      dispatch(
-        deleteMessageThunk(messageEl.id || messageEl._id, messageIsGroup)
-      );
-      showSnackbar("Reply message deleted", "success");
-    },
-    [dispatch, showSnackbar]
-  );
-
-  const handleReplyClick = useCallback(() => {
-    if (el.replyTo && window.setMessageReply) {
-      // Handle reply click
-    }
-  }, [el.replyTo]);
-
-  // Hàm xử lý dữ liệu reply an toàn
-  const getReplyData = () => {
-    if (!el.replyTo) {
-      return null;
-    }
-
-    const replyTo = el.replyTo;
-
-    if (typeof replyTo === "string") {
-      return null;
-    }
-
-    if (!replyTo.content && !replyTo.message) {
-      return null;
-    }
-
-    return replyTo;
-  };
-
-  const replyData = getReplyData();
-  const isOwnMessage = el.outgoing;
-
-  const getOriginalSenderName = () => {
-    if (!replyData?.sender) return "Unknown";
-
-    if (typeof replyData.sender === "string") {
-      return "User";
-    }
-
-    const senderName = replyData.sender.name || replyData.sender.username;
-
-    if (replyData.sender.keycloakId && el.sender?.keycloakId) {
-      if (replyData.sender.keycloakId === el.sender.keycloakId) {
-        return "You";
-      }
-    }
-
-    return senderName || "Unknown";
-  };
-
-  const getOriginalContent = () => {
-    return replyData?.content || replyData?.message || "No content";
-  };
-
-  if (!replyData) {
     return (
       <>
         <MessageContainer
@@ -851,6 +299,671 @@ const ReplyMsg = memo(({ el, menu, onDelete, isGroup = false }) => {
           onMenuAction={handleMenuAction}
           onDelete={handleDelete}
           isGroup={isGroup}
+          roomId={roomId} // 🆕 TRUYỀN roomId CHO CONTAINER
+        >
+          <Box
+            px={1.5}
+            py={1.5}
+            sx={{
+              backgroundColor: el.incoming
+                ? alpha(theme.palette.background.default, 1)
+                : theme.palette.primary.main,
+              borderRadius: 1.5,
+              width: "max-content",
+              maxWidth: "400px",
+            }}
+          >
+            {el.replyTo && (
+              <ReplyInfo replyTo={el.replyTo} onClick={handleReplyClick} />
+            )}
+
+            <Typography
+              variant="body2"
+              color={el.incoming ? theme.palette.text : "#fff"}
+              sx={{ wordBreak: "break-word" }}
+            >
+              {el.message || el.content}
+            </Typography>
+
+            <Typography
+              variant="caption"
+              sx={{
+                display: "block",
+                textAlign: el.incoming ? "left" : "right",
+                color: el.incoming
+                  ? theme.palette.text.secondary
+                  : "rgba(255,255,255,0.7)",
+                marginTop: 0.5,
+                fontSize: "0.7rem",
+              }}
+            >
+              {el.time}
+            </Typography>
+          </Box>
+        </MessageContainer>
+
+        <Snackbar
+          open={snackbar.open}
+          autoHideDuration={3000}
+          onClose={hideSnackbar}
+          anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        >
+          <Alert onClose={hideSnackbar} severity={snackbar.severity}>
+            {snackbar.message}
+          </Alert>
+        </Snackbar>
+      </>
+    );
+  }
+);
+
+// =======================
+//  MEDIA MESSAGE - HOÀN CHỈNH VỚI DELETE VÀ roomId
+// =======================
+const MediaMsg = memo(
+  ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
+    const theme = useTheme();
+    const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+    const dispatch = useDispatch();
+
+    const handleMenuAction = useCallback(
+      (action, messageEl) => {
+        switch (action) {
+          case "reply":
+            if (window.setMessageReply) {
+              window.setMessageReply({
+                id: messageEl.id || messageEl._id,
+                content: messageEl.message || "📷 Media",
+                sender: messageEl.sender,
+                type: "img",
+              });
+            }
+            break;
+          case "download":
+            showSnackbar("Media downloaded", "info");
+            break;
+          case "forward":
+            showSnackbar("Media forwarded", "info");
+            break;
+          default:
+            break;
+        }
+      },
+      [showSnackbar]
+    );
+
+    // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP
+    const handleDelete = useCallback(
+      (messageEl, messageIsGroup = false, messageRoomId = null) => {
+        console.log("🗑️ Deleting media message:", {
+          messageId: messageEl.id || messageEl._id,
+          isGroup: messageIsGroup,
+          roomId: messageRoomId,
+        });
+
+        dispatch(
+          deleteMessageThunk(
+            messageEl.id || messageEl._id,
+            messageIsGroup,
+            messageRoomId, // 🆕 TRUYỀN roomId
+            socket
+          )
+        );
+        showSnackbar("Media message deleted", "success");
+      },
+      [dispatch, showSnackbar]
+    );
+
+    const handleReplyClick = useCallback(() => {
+      if (el.replyTo && window.setMessageReply) {
+        // Handle reply click
+      }
+    }, [el.replyTo]);
+
+    return (
+      <>
+        <MessageContainer
+          el={el}
+          menu={menu}
+          onMenuAction={handleMenuAction}
+          onDelete={handleDelete}
+          isGroup={isGroup}
+          roomId={roomId} // 🆕 TRUYỀN roomId CHO CONTAINER
+        >
+          <Box
+            px={1.5}
+            py={1.5}
+            sx={{
+              backgroundColor: el.incoming
+                ? alpha(theme.palette.background.default, 1)
+                : theme.palette.primary.main,
+              borderRadius: 1.5,
+              width: "max-content",
+            }}
+          >
+            {el.replyTo && (
+              <ReplyInfo replyTo={el.replyTo} onClick={handleReplyClick} />
+            )}
+
+            <Stack spacing={1}>
+              <img
+                src={el.img}
+                alt={el.message}
+                style={{
+                  maxHeight: 210,
+                  borderRadius: "10px",
+                  maxWidth: "300px",
+                }}
+                loading="lazy"
+              />
+              {el.message && (
+                <Typography
+                  variant="body2"
+                  color={el.incoming ? theme.palette.text : "#fff"}
+                >
+                  {el.message}
+                </Typography>
+              )}
+
+              <Typography
+                variant="caption"
+                sx={{
+                  display: "block",
+                  textAlign: el.incoming ? "left" : "right",
+                  color: el.incoming
+                    ? theme.palette.text.secondary
+                    : "rgba(255,255,255,0.7)",
+                  fontSize: "0.7rem",
+                }}
+              >
+                {el.time}
+              </Typography>
+            </Stack>
+          </Box>
+        </MessageContainer>
+
+        <Snackbar
+          open={snackbar.open}
+          autoHideDuration={3000}
+          onClose={hideSnackbar}
+          anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        >
+          <Alert onClose={hideSnackbar} severity={snackbar.severity}>
+            {snackbar.message}
+          </Alert>
+        </Snackbar>
+      </>
+    );
+  }
+);
+
+// =======================
+//  DOCUMENT MESSAGE - HOÀN CHỈNH VỚI DELETE VÀ roomId
+// =======================
+const DocMsg = memo(
+  ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
+    const theme = useTheme();
+    const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+    const dispatch = useDispatch();
+
+    const handleMenuAction = useCallback(
+      (action, messageEl) => {
+        switch (action) {
+          case "reply":
+            if (window.setMessageReply) {
+              window.setMessageReply({
+                id: messageEl.id || messageEl._id,
+                content: messageEl.message || "📄 Document",
+                sender: messageEl.sender,
+                type: "doc",
+              });
+            }
+            break;
+          case "download":
+            showSnackbar("Document downloaded", "info");
+            break;
+          case "forward":
+            showSnackbar("Document forwarded", "info");
+            break;
+          default:
+            break;
+        }
+      },
+      [showSnackbar]
+    );
+
+    // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP
+    const handleDelete = useCallback(
+      (messageEl, messageIsGroup = false, messageRoomId = null) => {
+        console.log("🗑️ Deleting document message:", {
+          messageId: messageEl.id || messageEl._id,
+          isGroup: messageIsGroup,
+          roomId: messageRoomId,
+        });
+
+        dispatch(
+          deleteMessageThunk(
+            messageEl.id || messageEl._id,
+            messageIsGroup,
+            messageRoomId, // 🆕 TRUYỀN roomId
+            socket
+          )
+        );
+        showSnackbar("Document message deleted", "success");
+      },
+      [dispatch, showSnackbar]
+    );
+
+    const handleReplyClick = useCallback(() => {
+      if (el.replyTo && window.setMessageReply) {
+        // Handle reply click
+      }
+    }, [el.replyTo]);
+
+    return (
+      <>
+        <MessageContainer
+          el={el}
+          menu={menu}
+          onMenuAction={handleMenuAction}
+          onDelete={handleDelete}
+          isGroup={isGroup}
+          roomId={roomId} // 🆕 TRUYỀN roomId CHO CONTAINER
+        >
+          <Box
+            px={1.5}
+            py={1.5}
+            sx={{
+              backgroundColor: el.incoming
+                ? alpha(theme.palette.background.default, 1)
+                : theme.palette.primary.main,
+              borderRadius: 1.5,
+              width: "max-content",
+            }}
+          >
+            {el.replyTo && (
+              <ReplyInfo replyTo={el.replyTo} onClick={handleReplyClick} />
+            )}
+
+            <Stack spacing={2}>
+              <Stack
+                p={2}
+                direction="row"
+                spacing={3}
+                alignItems="center"
+                sx={{
+                  backgroundColor: theme.palette.background.paper,
+                  borderRadius: 1,
+                }}
+              >
+                <Image size={48} />
+                <Typography variant="caption">Abstract.png</Typography>
+                <IconButton>
+                  <DownloadSimple />
+                </IconButton>
+              </Stack>
+              {el.message && (
+                <Typography
+                  variant="body2"
+                  color={el.incoming ? theme.palette.text : "#fff"}
+                >
+                  {el.message}
+                </Typography>
+              )}
+
+              <Typography
+                variant="caption"
+                sx={{
+                  display: "block",
+                  textAlign: el.incoming ? "left" : "right",
+                  color: el.incoming
+                    ? theme.palette.text.secondary
+                    : "rgba(255,255,255,0.7)",
+                  fontSize: "0.7rem",
+                }}
+              >
+                {el.time}
+              </Typography>
+            </Stack>
+          </Box>
+        </MessageContainer>
+
+        <Snackbar
+          open={snackbar.open}
+          autoHideDuration={3000}
+          onClose={hideSnackbar}
+          anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        >
+          <Alert onClose={hideSnackbar} severity={snackbar.severity}>
+            {snackbar.message}
+          </Alert>
+        </Snackbar>
+      </>
+    );
+  }
+);
+
+// =======================
+//  LINK MESSAGE - HOÀN CHỈNH VỚI DELETE VÀ roomId
+// =======================
+const LinkMsg = memo(
+  ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
+    const theme = useTheme();
+    const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+    const dispatch = useDispatch();
+
+    const handleMenuAction = useCallback(
+      (action, messageEl) => {
+        switch (action) {
+          case "reply":
+            if (window.setMessageReply) {
+              window.setMessageReply({
+                id: messageEl.id || messageEl._id,
+                content: messageEl.message || "🔗 Link",
+                sender: messageEl.sender,
+                type: "Link",
+              });
+            }
+            break;
+          case "copy":
+            showSnackbar("Link copied to clipboard", "info");
+            break;
+          case "forward":
+            showSnackbar("Link forwarded", "info");
+            break;
+          default:
+            break;
+        }
+      },
+      [showSnackbar]
+    );
+
+    // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP
+    const handleDelete = useCallback(
+      (messageEl, messageIsGroup = false, messageRoomId = null) => {
+        console.log("🗑️ Deleting link message:", {
+          messageId: messageEl.id || messageEl._id,
+          isGroup: messageIsGroup,
+          roomId: messageRoomId,
+        });
+
+        dispatch(
+          deleteMessageThunk(
+            messageEl.id || messageEl._id,
+            messageIsGroup,
+            messageRoomId, // 🆕 TRUYỀN roomId
+            socket
+          )
+        );
+        showSnackbar("Link message deleted", "success");
+      },
+      [dispatch, showSnackbar]
+    );
+
+    const handleReplyClick = useCallback(() => {
+      if (el.replyTo && window.setMessageReply) {
+        // Handle reply click
+      }
+    }, [el.replyTo]);
+
+    return (
+      <>
+        <MessageContainer
+          el={el}
+          menu={menu}
+          onMenuAction={handleMenuAction}
+          onDelete={handleDelete}
+          isGroup={isGroup}
+          roomId={roomId} // 🆕 TRUYỀN roomId CHO CONTAINER
+        >
+          <Box
+            px={1.5}
+            py={1.5}
+            sx={{
+              backgroundColor: el.incoming
+                ? alpha(theme.palette.background.default, 1)
+                : theme.palette.primary.main,
+              borderRadius: 1.5,
+              width: "max-content",
+            }}
+          >
+            {el.replyTo && (
+              <ReplyInfo replyTo={el.replyTo} onClick={handleReplyClick} />
+            )}
+
+            <Stack spacing={2}>
+              <Stack
+                p={2}
+                direction="column"
+                spacing={3}
+                sx={{
+                  backgroundColor: theme.palette.background.paper,
+                  borderRadius: 1,
+                }}
+              >
+                <Embed
+                  width="300px"
+                  isDark
+                  url={`https://youtu.be/xoWxBR34qLE`}
+                />
+              </Stack>
+
+              {el.message && (
+                <Typography
+                  variant="body2"
+                  color={el.incoming ? theme.palette.text : "#fff"}
+                >
+                  <div dangerouslySetInnerHTML={{ __html: el.message }} />
+                </Typography>
+              )}
+
+              <Typography
+                variant="caption"
+                sx={{
+                  display: "block",
+                  textAlign: el.incoming ? "left" : "right",
+                  color: el.incoming
+                    ? theme.palette.text.secondary
+                    : "rgba(255,255,255,0.7)",
+                  fontSize: "0.7rem",
+                }}
+              >
+                {el.time}
+              </Typography>
+            </Stack>
+          </Box>
+        </MessageContainer>
+
+        <Snackbar
+          open={snackbar.open}
+          autoHideDuration={3000}
+          onClose={hideSnackbar}
+          anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        >
+          <Alert onClose={hideSnackbar} severity={snackbar.severity}>
+            {snackbar.message}
+          </Alert>
+        </Snackbar>
+      </>
+    );
+  }
+);
+
+// =======================
+//  REPLY MESSAGE - HOÀN CHỈNH VỚI DELETE VÀ roomId
+// =======================
+const ReplyMsg = memo(
+  ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
+    const theme = useTheme();
+    const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+    const dispatch = useDispatch();
+
+    const handleMenuAction = useCallback(
+      (action, messageEl) => {
+        switch (action) {
+          case "reply":
+            if (window.setMessageReply) {
+              window.setMessageReply({
+                id: messageEl.id || messageEl._id,
+                content: messageEl.content || messageEl.message,
+                sender: messageEl.sender,
+                type: "reply",
+              });
+            }
+            break;
+          case "forward":
+            showSnackbar("Message forwarded", "info");
+            break;
+          default:
+            break;
+        }
+      },
+      [showSnackbar]
+    );
+
+    // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP
+    const handleDelete = useCallback(
+      (messageEl, messageIsGroup = false, messageRoomId = null) => {
+        console.log("🗑️ Deleting reply message:", {
+          messageId: messageEl.id || messageEl._id,
+          isGroup: messageIsGroup,
+          roomId: messageRoomId,
+        });
+
+        dispatch(
+          deleteMessageThunk(
+            messageEl.id || messageEl._id,
+            messageIsGroup,
+            messageRoomId, // 🆕 TRUYỀN roomId
+            socket
+          )
+        );
+        showSnackbar("Reply message deleted", "success");
+      },
+      [dispatch, showSnackbar]
+    );
+
+    const handleReplyClick = useCallback(() => {
+      if (el.replyTo && window.setMessageReply) {
+        // Handle reply click
+      }
+    }, [el.replyTo]);
+
+    // Hàm xử lý dữ liệu reply an toàn
+    const getReplyData = () => {
+      if (!el.replyTo) {
+        return null;
+      }
+
+      const replyTo = el.replyTo;
+
+      if (typeof replyTo === "string") {
+        return null;
+      }
+
+      if (!replyTo.content && !replyTo.message) {
+        return null;
+      }
+
+      return replyTo;
+    };
+
+    const replyData = getReplyData();
+    const isOwnMessage = el.outgoing;
+
+    const getOriginalSenderName = () => {
+      if (!replyData?.sender) return "Unknown";
+
+      if (typeof replyData.sender === "string") {
+        return "User";
+      }
+
+      const senderName = replyData.sender.name || replyData.sender.username;
+
+      if (replyData.sender.keycloakId && el.sender?.keycloakId) {
+        if (replyData.sender.keycloakId === el.sender.keycloakId) {
+          return "You";
+        }
+      }
+
+      return senderName || "Unknown";
+    };
+
+    const getOriginalContent = () => {
+      return replyData?.content || replyData?.message || "No content";
+    };
+
+    if (!replyData) {
+      return (
+        <>
+          <MessageContainer
+            el={el}
+            menu={menu}
+            onMenuAction={handleMenuAction}
+            onDelete={handleDelete}
+            isGroup={isGroup}
+            roomId={roomId} // 🆕 TRUYỀN roomId CHO CONTAINER
+          >
+            <Box
+              px={1.5}
+              py={1.5}
+              sx={{
+                backgroundColor: isOwnMessage
+                  ? theme.palette.primary.main
+                  : alpha(theme.palette.background.paper, 1),
+                borderRadius: 1.5,
+                width: "max-content",
+                maxWidth: "400px",
+              }}
+            >
+              <Typography
+                variant="body2"
+                color={isOwnMessage ? "#fff" : theme.palette.text.primary}
+                sx={{ wordBreak: "break-word" }}
+              >
+                {el.content || el.message}
+              </Typography>
+
+              <Typography
+                variant="caption"
+                sx={{
+                  display: "block",
+                  textAlign: isOwnMessage ? "right" : "left",
+                  color: isOwnMessage
+                    ? "rgba(255,255,255,0.7)"
+                    : theme.palette.text.secondary,
+                  marginTop: 0.5,
+                  fontSize: "0.7rem",
+                }}
+              >
+                {el.time}
+              </Typography>
+            </Box>
+          </MessageContainer>
+
+          <Snackbar
+            open={snackbar.open}
+            autoHideDuration={3000}
+            onClose={hideSnackbar}
+            anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+          >
+            <Alert onClose={hideSnackbar} severity={snackbar.severity}>
+              {snackbar.message}
+            </Alert>
+          </Snackbar>
+        </>
+      );
+    }
+
+    return (
+      <>
+        <MessageContainer
+          el={el}
+          menu={menu}
+          onMenuAction={handleMenuAction}
+          onDelete={handleDelete}
+          isGroup={isGroup}
+          roomId={roomId} // 🆕 TRUYỀN roomId CHO CONTAINER
         >
           <Box
             px={1.5}
@@ -864,14 +977,75 @@ const ReplyMsg = memo(({ el, menu, onDelete, isGroup = false }) => {
               maxWidth: "400px",
             }}
           >
+            {/* REPLY PREVIEW SECTION */}
+            <Box
+              sx={{
+                padding: 1,
+                backgroundColor: isOwnMessage
+                  ? "rgba(255,255,255,0.2)"
+                  : "rgba(0,0,0,0.05)",
+                borderRadius: 0.5,
+                marginBottom: 1,
+                borderLeft: `3px solid ${
+                  isOwnMessage
+                    ? "rgba(255,255,255,0.5)"
+                    : theme.palette.primary.main
+                }`,
+                cursor: "pointer",
+                "&:hover": {
+                  backgroundColor: isOwnMessage
+                    ? "rgba(255,255,255,0.3)"
+                    : "rgba(0,0,0,0.08)",
+                },
+              }}
+              onClick={handleReplyClick}
+            >
+              <Stack spacing={0.5}>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    fontWeight: 600,
+                    color: isOwnMessage
+                      ? "rgba(255,255,255,0.9)"
+                      : theme.palette.primary.main,
+                    fontSize: "0.7rem",
+                  }}
+                >
+                  {getOriginalSenderName()}
+                </Typography>
+
+                <Typography
+                  variant="body2"
+                  sx={{
+                    color: isOwnMessage
+                      ? "rgba(255,255,255,0.8)"
+                      : theme.palette.text.secondary,
+                    fontSize: "0.8rem",
+                    lineHeight: 1.2,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    display: "-webkit-box",
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: "vertical",
+                  }}
+                >
+                  {getOriginalContent()}
+                </Typography>
+              </Stack>
+            </Box>
+
+            {/* NỘI DUNG REPLY HIỆN TẠI */}
             <Typography
               variant="body2"
-              color={isOwnMessage ? "#fff" : theme.palette.text.primary}
-              sx={{ wordBreak: "break-word" }}
+              sx={{
+                color: isOwnMessage ? "#fff" : theme.palette.text.primary,
+                wordBreak: "break-word",
+              }}
             >
               {el.content || el.message}
             </Typography>
 
+            {/* THỜI GIAN */}
             <Typography
               variant="caption"
               sx={{
@@ -902,127 +1076,7 @@ const ReplyMsg = memo(({ el, menu, onDelete, isGroup = false }) => {
       </>
     );
   }
-
-  return (
-    <>
-      <MessageContainer
-        el={el}
-        menu={menu}
-        onMenuAction={handleMenuAction}
-        onDelete={handleDelete}
-        isGroup={isGroup}
-      >
-        <Box
-          px={1.5}
-          py={1.5}
-          sx={{
-            backgroundColor: isOwnMessage
-              ? theme.palette.primary.main
-              : alpha(theme.palette.background.paper, 1),
-            borderRadius: 1.5,
-            width: "max-content",
-            maxWidth: "400px",
-          }}
-        >
-          {/* REPLY PREVIEW SECTION */}
-          <Box
-            sx={{
-              padding: 1,
-              backgroundColor: isOwnMessage
-                ? "rgba(255,255,255,0.2)"
-                : "rgba(0,0,0,0.05)",
-              borderRadius: 0.5,
-              marginBottom: 1,
-              borderLeft: `3px solid ${
-                isOwnMessage
-                  ? "rgba(255,255,255,0.5)"
-                  : theme.palette.primary.main
-              }`,
-              cursor: "pointer",
-              "&:hover": {
-                backgroundColor: isOwnMessage
-                  ? "rgba(255,255,255,0.3)"
-                  : "rgba(0,0,0,0.08)",
-              },
-            }}
-            onClick={handleReplyClick}
-          >
-            <Stack spacing={0.5}>
-              <Typography
-                variant="caption"
-                sx={{
-                  fontWeight: 600,
-                  color: isOwnMessage
-                    ? "rgba(255,255,255,0.9)"
-                    : theme.palette.primary.main,
-                  fontSize: "0.7rem",
-                }}
-              >
-                {getOriginalSenderName()}
-              </Typography>
-
-              <Typography
-                variant="body2"
-                sx={{
-                  color: isOwnMessage
-                    ? "rgba(255,255,255,0.8)"
-                    : theme.palette.text.secondary,
-                  fontSize: "0.8rem",
-                  lineHeight: 1.2,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  display: "-webkit-box",
-                  WebkitLineClamp: 2,
-                  WebkitBoxOrient: "vertical",
-                }}
-              >
-                {getOriginalContent()}
-              </Typography>
-            </Stack>
-          </Box>
-
-          {/* NỘI DUNG REPLY HIỆN TẠI */}
-          <Typography
-            variant="body2"
-            sx={{
-              color: isOwnMessage ? "#fff" : theme.palette.text.primary,
-              wordBreak: "break-word",
-            }}
-          >
-            {el.content || el.message}
-          </Typography>
-
-          {/* THỜI GIAN */}
-          <Typography
-            variant="caption"
-            sx={{
-              display: "block",
-              textAlign: isOwnMessage ? "right" : "left",
-              color: isOwnMessage
-                ? "rgba(255,255,255,0.7)"
-                : theme.palette.text.secondary,
-              marginTop: 0.5,
-              fontSize: "0.7rem",
-            }}
-          >
-            {el.time}
-          </Typography>
-        </Box>
-      </MessageContainer>
-
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={3000}
-        onClose={hideSnackbar}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-      >
-        <Alert onClose={hideSnackbar} severity={snackbar.severity}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
-    </>
-  );
-});
+);
 
 // =======================
 //  TIMELINE
