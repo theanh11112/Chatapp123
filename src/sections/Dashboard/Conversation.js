@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useRef } from "react";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import {
   Stack,
   Box,
@@ -18,9 +18,140 @@ import Embed from "react-embed";
 import { ReplyInfo } from "../../components/Chat/ReplyComponents";
 import { deleteMessageThunk } from "../../redux/slices/conversation";
 import { socket } from "../../socket";
+import { showSnackbar } from "../../redux/slices/app";
+
+// 🆕 THÊM: Hook để quản lý pin/unpin messages
+// Trong usePinMessage hook - SỬA LẠI
+// 🆕 SỬA: Hook usePinMessage hoàn chỉnh
+const usePinMessage = () => {
+  const dispatch = useDispatch();
+  const { chat_type, room_id } = useSelector((state) => state.app);
+  const { pinned_messages: directPinned = [] } = useSelector(
+    (state) => state.conversation.direct_chat
+  );
+  const { pinned_messages: groupPinned = [] } = useSelector(
+    (state) => state.conversation.group_chat
+  );
+
+  const pinnedMessages = chat_type === "group" ? groupPinned : directPinned;
+
+  const pinMessage = useCallback(
+    (messageId) => {
+      if (window.socket) {
+        console.log("📌 Attempting to pin message:", {
+          messageId,
+          room_id,
+          chat_type,
+        });
+
+        // 🆕 SỬA: Dùng đúng socket event names
+        const socketEvent =
+          chat_type === "group" ? "pin_group_message" : "pin_direct_message";
+
+        const socketData =
+          chat_type === "group"
+            ? { messageId, roomId: room_id }
+            : { messageId };
+
+        window.socket.emit(socketEvent, socketData, (response) => {
+          console.log("📌 Pin message response:", response);
+          if (response.status === "success") {
+            dispatch(
+              showSnackbar({
+                severity: "success",
+                message: "Message pinned successfully",
+              })
+            );
+          } else {
+            dispatch(
+              showSnackbar({
+                severity: "error",
+                message: response.message || "Failed to pin message",
+              })
+            );
+          }
+        });
+      } else {
+        console.error("❌ Socket not available");
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: "Socket connection not available",
+          })
+        );
+      }
+    },
+    [chat_type, room_id, dispatch]
+  );
+
+  const unpinMessage = useCallback(
+    (messageId) => {
+      if (window.socket) {
+        console.log("📌 Attempting to unpin message:", {
+          messageId,
+          room_id,
+          chat_type,
+        });
+
+        const socketEvent =
+          chat_type === "group"
+            ? "unpin_group_message"
+            : "unpin_direct_message";
+
+        const socketData =
+          chat_type === "group"
+            ? { messageId, roomId: room_id }
+            : { messageId };
+
+        window.socket.emit(socketEvent, socketData, (response) => {
+          console.log("📌 Unpin message response:", response);
+          if (response.status === "success") {
+            dispatch(
+              showSnackbar({
+                severity: "success",
+                message: "Message unpinned",
+              })
+            );
+          } else {
+            dispatch(
+              showSnackbar({
+                severity: "error",
+                message: response.message || "Failed to unpin message",
+              })
+            );
+          }
+        });
+      } else {
+        console.error("❌ Socket not available");
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: "Socket connection not available",
+          })
+        );
+      }
+    },
+    [chat_type, room_id, dispatch]
+  );
+
+  // 🆕 THÊM: Hàm kiểm tra tin nhắn đã được ghim
+  const isMessagePinned = useCallback(
+    (messageId) => {
+      return pinnedMessages.some((msg) => msg.id === messageId);
+    },
+    [pinnedMessages]
+  );
+
+  return {
+    pinMessage,
+    unpinMessage,
+    isMessagePinned, // 🆕 THÊM hàm này
+    pinnedMessages,
+  };
+};
 
 // 🆕 THÊM: Hook để quản lý snackbar
-const useSnackbar = () => {
+const useMessageSnackbar = () => {
   const [snackbar, setSnackbar] = React.useState({
     open: false,
     message: "",
@@ -39,12 +170,15 @@ const useSnackbar = () => {
 };
 
 // =======================
-//  MESSAGE OPTION MENU - HOÀN CHỈNH
+//  MESSAGE OPTION MENU - HOÀN CHỈNH VỚI PIN/UNPIN
 // =======================
-const MessageOption = memo(({ onAction }) => {
+const MessageOption = memo(({ onAction, messageId }) => {
   const [anchorEl, setAnchorEl] = React.useState(null);
   const open = Boolean(anchorEl);
   const buttonRef = useRef(null);
+  const { isMessagePinned } = usePinMessage();
+
+  const isPinned = isMessagePinned(messageId);
 
   const handleClick = useCallback((e) => {
     e.stopPropagation();
@@ -79,6 +213,35 @@ const MessageOption = memo(({ onAction }) => {
     },
     [handleClose]
   );
+
+  // 🆕 CẬP NHẬT: Message options với pin/unpin dynamic
+  const getMessageOptions = useCallback(() => {
+    const baseOptions = Message_options.filter(
+      (opt) => opt.action !== "pin" && opt.action !== "unpin"
+    );
+
+    if (isPinned) {
+      return [
+        ...baseOptions,
+        {
+          id: "unpin",
+          title: "Unpin Message",
+          action: "unpin",
+        },
+      ];
+    } else {
+      return [
+        ...baseOptions,
+        {
+          id: "pin",
+          title: "Pin Message",
+          action: "pin",
+        },
+      ];
+    }
+  }, [isPinned]);
+
+  const messageOptions = getMessageOptions();
 
   return (
     <>
@@ -116,12 +279,11 @@ const MessageOption = memo(({ onAction }) => {
         }}
       >
         <Stack spacing={1} px={1}>
-          {Message_options.map((el, index) => (
+          {messageOptions.map((el) => (
             <MenuItem
-              key={el.id || index}
+              key={el.id}
               onClick={() => handleMenuItemClick(el.action)}
               autoFocus={false}
-              // 🆕 Style đặc biệt cho delete
               sx={
                 el.action === "delete"
                   ? {
@@ -129,6 +291,14 @@ const MessageOption = memo(({ onAction }) => {
                       "&:hover": {
                         backgroundColor: "error.light",
                         color: "error.contrastText",
+                      },
+                    }
+                  : el.action === "pin" || el.action === "unpin"
+                  ? {
+                      color: "warning.main",
+                      "&:hover": {
+                        backgroundColor: "warning.light",
+                        color: "warning.contrastText",
                       },
                     }
                   : {}
@@ -206,7 +376,10 @@ const MessageContainer = memo(
               minWidth: "32px",
             }}
           >
-            <MessageOption onAction={handleMenuAction} />
+            <MessageOption
+              onAction={handleMenuAction}
+              messageId={el.id || el._id}
+            />
           </Box>
         )}
 
@@ -221,7 +394,10 @@ const MessageContainer = memo(
               minWidth: "32px",
             }}
           >
-            <MessageOption onAction={handleMenuAction} />
+            <MessageOption
+              onAction={handleMenuAction}
+              messageId={el.id || el._id}
+            />
           </Box>
         )}
       </Stack>
@@ -230,26 +406,35 @@ const MessageContainer = memo(
 );
 
 // =======================
-//  TEXT MESSAGE - HOÀN CHỈNH VỚI DELETE VÀ roomId
+//  TEXT MESSAGE - HOÀN CHỈNH VỚI DELETE, PIN VÀ roomId
 // =======================
 const TextMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
     const theme = useTheme();
-    const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+    const { snackbar, showSnackbar, hideSnackbar } = useMessageSnackbar();
     const dispatch = useDispatch();
+    const { pinMessage, unpinMessage } = usePinMessage();
 
     const handleMenuAction = useCallback(
       (action, messageEl) => {
+        const messageId = messageEl.id || messageEl._id;
+
         switch (action) {
           case "reply":
             if (window.setMessageReply) {
               window.setMessageReply({
-                id: messageEl.id || messageEl._id,
+                id: messageId,
                 content: messageEl.message || messageEl.content,
                 sender: messageEl.sender,
                 type: messageEl.subtype || "text",
               });
             }
+            break;
+          case "pin":
+            pinMessage(messageId);
+            break;
+          case "unpin":
+            unpinMessage(messageId);
             break;
           case "forward":
             showSnackbar("Message forwarded", "info");
@@ -258,7 +443,7 @@ const TextMsg = memo(
             break;
         }
       },
-      [showSnackbar]
+      [pinMessage, unpinMessage, showSnackbar]
     );
 
     // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP
@@ -358,26 +543,35 @@ const TextMsg = memo(
 );
 
 // =======================
-//  MEDIA MESSAGE - HOÀN CHỈNH VỚI DELETE VÀ roomId
+//  MEDIA MESSAGE - HOÀN CHỈNH VỚI DELETE, PIN VÀ roomId
 // =======================
 const MediaMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
     const theme = useTheme();
-    const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+    const { snackbar, showSnackbar, hideSnackbar } = useMessageSnackbar();
     const dispatch = useDispatch();
+    const { pinMessage, unpinMessage } = usePinMessage();
 
     const handleMenuAction = useCallback(
       (action, messageEl) => {
+        const messageId = messageEl.id || messageEl._id;
+
         switch (action) {
           case "reply":
             if (window.setMessageReply) {
               window.setMessageReply({
-                id: messageEl.id || messageEl._id,
+                id: messageId,
                 content: messageEl.message || "📷 Media",
                 sender: messageEl.sender,
                 type: "img",
               });
             }
+            break;
+          case "pin":
+            pinMessage(messageId);
+            break;
+          case "unpin":
+            unpinMessage(messageId);
             break;
           case "download":
             showSnackbar("Media downloaded", "info");
@@ -389,7 +583,7 @@ const MediaMsg = memo(
             break;
         }
       },
-      [showSnackbar]
+      [pinMessage, unpinMessage, showSnackbar]
     );
 
     // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP
@@ -498,26 +692,35 @@ const MediaMsg = memo(
 );
 
 // =======================
-//  DOCUMENT MESSAGE - HOÀN CHỈNH VỚI DELETE VÀ roomId
+//  DOCUMENT MESSAGE - HOÀN CHỈNH VỚI DELETE, PIN VÀ roomId
 // =======================
 const DocMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
     const theme = useTheme();
-    const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+    const { snackbar, showSnackbar, hideSnackbar } = useMessageSnackbar();
     const dispatch = useDispatch();
+    const { pinMessage, unpinMessage } = usePinMessage();
 
     const handleMenuAction = useCallback(
       (action, messageEl) => {
+        const messageId = messageEl.id || messageEl._id;
+
         switch (action) {
           case "reply":
             if (window.setMessageReply) {
               window.setMessageReply({
-                id: messageEl.id || messageEl._id,
+                id: messageId,
                 content: messageEl.message || "📄 Document",
                 sender: messageEl.sender,
                 type: "doc",
               });
             }
+            break;
+          case "pin":
+            pinMessage(messageId);
+            break;
+          case "unpin":
+            unpinMessage(messageId);
             break;
           case "download":
             showSnackbar("Document downloaded", "info");
@@ -529,7 +732,7 @@ const DocMsg = memo(
             break;
         }
       },
-      [showSnackbar]
+      [pinMessage, unpinMessage, showSnackbar]
     );
 
     // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP
@@ -644,26 +847,35 @@ const DocMsg = memo(
 );
 
 // =======================
-//  LINK MESSAGE - HOÀN CHỈNH VỚI DELETE VÀ roomId
+//  LINK MESSAGE - HOÀN CHỈNH VỚI DELETE, PIN VÀ roomId
 // =======================
 const LinkMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
     const theme = useTheme();
-    const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+    const { snackbar, showSnackbar, hideSnackbar } = useMessageSnackbar();
     const dispatch = useDispatch();
+    const { pinMessage, unpinMessage } = usePinMessage();
 
     const handleMenuAction = useCallback(
       (action, messageEl) => {
+        const messageId = messageEl.id || messageEl._id;
+
         switch (action) {
           case "reply":
             if (window.setMessageReply) {
               window.setMessageReply({
-                id: messageEl.id || messageEl._id,
+                id: messageId,
                 content: messageEl.message || "🔗 Link",
                 sender: messageEl.sender,
                 type: "Link",
               });
             }
+            break;
+          case "pin":
+            pinMessage(messageId);
+            break;
+          case "unpin":
+            unpinMessage(messageId);
             break;
           case "copy":
             showSnackbar("Link copied to clipboard", "info");
@@ -675,7 +887,7 @@ const LinkMsg = memo(
             break;
         }
       },
-      [showSnackbar]
+      [pinMessage, unpinMessage, showSnackbar]
     );
 
     // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP
@@ -790,26 +1002,35 @@ const LinkMsg = memo(
 );
 
 // =======================
-//  REPLY MESSAGE - HOÀN CHỈNH VỚI DELETE VÀ roomId
+//  REPLY MESSAGE - HOÀN CHỈNH VỚI DELETE, PIN VÀ roomId
 // =======================
 const ReplyMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
     const theme = useTheme();
-    const { snackbar, showSnackbar, hideSnackbar } = useSnackbar();
+    const { snackbar, showSnackbar, hideSnackbar } = useMessageSnackbar();
     const dispatch = useDispatch();
+    const { pinMessage, unpinMessage } = usePinMessage();
 
     const handleMenuAction = useCallback(
       (action, messageEl) => {
+        const messageId = messageEl.id || messageEl._id;
+
         switch (action) {
           case "reply":
             if (window.setMessageReply) {
               window.setMessageReply({
-                id: messageEl.id || messageEl._id,
+                id: messageId,
                 content: messageEl.content || messageEl.message,
                 sender: messageEl.sender,
                 type: "reply",
               });
             }
+            break;
+          case "pin":
+            pinMessage(messageId);
+            break;
+          case "unpin":
+            unpinMessage(messageId);
             break;
           case "forward":
             showSnackbar("Message forwarded", "info");
@@ -818,7 +1039,7 @@ const ReplyMsg = memo(
             break;
         }
       },
-      [showSnackbar]
+      [pinMessage, unpinMessage, showSnackbar]
     );
 
     // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP

@@ -324,8 +324,8 @@ const Message_options = [
   },
   {
     id: 2,
-    title: "React to message",
-    action: "react",
+    title: "Pin Message",
+    action: "pin",
   },
   {
     id: 3,

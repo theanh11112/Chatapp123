@@ -17,6 +17,7 @@ import {
   updateUserPresence,
   addGroupMessage,
   updateGroupRoom,
+  fetchPinnedMessages,
 } from "../../redux/slices/conversation";
 
 import { SelectConversation, showSnackbar } from "../../redux/slices/app";
@@ -564,7 +565,114 @@ const DashboardLayout = ({ showChat = false, children }) => {
       sock.on("video_call_notification", (data) => {
         dispatch(PushToVideoCallQueue(data));
       });
+      // Trong useEffect socket của DashboardLayout, thêm các listeners sau:
 
+      // 🆕 THÊM: Socket listeners cho pinned messages
+      // Trong useEffect socket của DashboardLayout, thêm các listeners sau:
+
+      // 🆕 THÊM: Socket listeners cho pinned messages real-time
+      sock.on("message_pinned", (data) => {
+        console.log("📌 Socket: message_pinned received", data);
+
+        // 🆕 DISPATCH ACTION ĐỂ CẬP NHẬT REDUX STORE
+        dispatch({
+          type: "conversation/pinMessage",
+          payload: {
+            messageId: data.messageId,
+            chatType: data.chatType,
+          },
+        });
+
+        // 🆕 TỰ ĐỘNG REFETCH PINNED MESSAGES
+        if (data.roomId === room_id && data.chatType === chat_type) {
+          console.log("🔄 Auto-refetching pinned messages for current room");
+          dispatch(fetchPinnedMessages(data.roomId, data.chatType));
+        }
+      });
+
+      sock.on("message_unpinned", (data) => {
+        console.log("📌 Socket: message_unpinned received", data);
+
+        // 🆕 DISPATCH ACTION ĐỂ CẬP NHẬT REDUX STORE
+        dispatch({
+          type: "conversation/unpinMessage",
+          payload: {
+            messageId: data.messageId,
+            chatType: data.chatType,
+          },
+        });
+
+        // 🆕 TỰ ĐỘNG REFETCH PINNED MESSAGES
+        if (data.roomId === room_id && data.chatType === chat_type) {
+          console.log("🔄 Auto-refetching pinned messages for current room");
+          dispatch(fetchPinnedMessages(data.roomId, data.chatType));
+        }
+      });
+
+      sock.on("pin_message_response", (data) => {
+        console.log("📌 Socket: pin_message_response", data);
+
+        // 🆕 XỬ LÝ RESPONSE TỪ SERVER
+        if (data.status === "success") {
+          dispatch(
+            showSnackbar({
+              severity: "success",
+              message: data.message || "Message pinned successfully",
+            })
+          );
+
+          // 🆕 TỰ ĐỘNG REFETCH PINNED MESSAGES SAU KHI PIN THÀNH CÔNG
+          if (room_id && chat_type) {
+            setTimeout(() => {
+              dispatch(fetchPinnedMessages(room_id, chat_type));
+            }, 500);
+          }
+        } else {
+          dispatch(
+            showSnackbar({
+              severity: "error",
+              message: data.message || "Failed to pin message",
+            })
+          );
+        }
+      });
+
+      sock.on("unpin_message_response", (data) => {
+        console.log("📌 Socket: unpin_message_response", data);
+
+        if (data.status === "success") {
+          dispatch(
+            showSnackbar({
+              severity: "success",
+              message: data.message || "Message unpinned successfully",
+            })
+          );
+
+          // 🆕 TỰ ĐỘNG REFETCH PINNED MESSAGES SAU KHI UNPIN THÀNH CÔNG
+          if (room_id && chat_type) {
+            setTimeout(() => {
+              dispatch(fetchPinnedMessages(room_id, chat_type));
+            }, 500);
+          }
+        } else {
+          dispatch(
+            showSnackbar({
+              severity: "error",
+              message: data.message || "Failed to unpin message",
+            })
+          );
+        }
+      });
+
+      // 🆕 THÊM: Listener cho pinned messages updated (broadcast từ server)
+      sock.on("pinned_messages_updated", (data) => {
+        console.log("📌 Socket: pinned_messages_updated", data);
+
+        if (data.roomId === room_id && data.chatType === chat_type) {
+          console.log("🔄 Refetching pinned messages due to broadcast update");
+          dispatch(fetchPinnedMessages(data.roomId, data.chatType));
+        }
+      });
       // Debug: Log tất cả socket events
       sock.onAny((eventName, ...args) => {
         if (
@@ -577,7 +685,7 @@ const DashboardLayout = ({ showChat = false, children }) => {
             "text_message_reply",
           ].includes(eventName)
         ) {
-          console.log("🔌 Socket event:", eventName, args);
+          console.log("🔌 Socket event1111:", eventName, args);
         }
       });
     };

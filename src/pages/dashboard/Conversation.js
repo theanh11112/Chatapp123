@@ -5,7 +5,9 @@ import {
   Typography,
   CircularProgress,
   Avatar,
+  IconButton,
 } from "@mui/material";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { useTheme } from "@mui/material/styles";
 import { SimpleBarStyle } from "../../components/Scrollbar";
 import { ChatHeader, ChatFooter } from "../../components/Chat";
@@ -24,8 +26,15 @@ import {
   setCurrentConversation,
   setCurrentGroupRoom,
   fetchGroupMessages,
+  pinMessage,
+  unpinMessage,
+  clearPinnedMessages,
+  setPinnedMessages,
+  fetchPinnedMessages,
 } from "../../redux/slices/conversation";
+import PinnedMessages from "../../components/Chat/PinnedMessages";
 import { useKeycloak } from "@react-keycloak/web";
+import api from "../../utils/axios";
 
 const Conversation = ({ isMobile, menu }) => {
   const dispatch = useDispatch();
@@ -52,16 +61,39 @@ const Conversation = ({ isMobile, menu }) => {
         console.log("📡 Socket: Message deleted by others", data);
         // Tin nhắn sẽ tự động được xóa khỏi UI nhờ Redux state update từ backend
       };
+      const handleMessagePinned = (data) => {
+        console.log("📌 Socket: Message pinned", data);
+        dispatch(
+          pinMessage({
+            messageId: data.messageId,
+            chatType: data.chatType,
+          })
+        );
+      };
+
+      const handleMessageUnpinned = (data) => {
+        console.log("📌 Socket: Message unpinned", data);
+        dispatch(
+          unpinMessage({
+            messageId: data.messageId,
+            chatType: data.chatType,
+          })
+        );
+      };
 
       window.socket.on("message_deleted", handleMessageDeleted);
+      window.socket.on("message_pinned", handleMessagePinned);
+      window.socket.on("message_unpinned", handleMessageUnpinned);
 
       return () => {
         if (window.socket) {
           window.socket.off("message_deleted", handleMessageDeleted);
+          window.socket.off("message_pinned", handleMessagePinned);
+          window.socket.off("message_unpinned", handleMessageUnpinned);
         }
       };
     }
-  }, []);
+  }, [dispatch]);
 
   const getCurrentChatInfo = () => {
     if (chat_type === "group") {
@@ -417,6 +449,49 @@ const Conversation = ({ isMobile, menu }) => {
     }
   }, [room_id, chat_type, current_room, dispatch]);
 
+  // Trong Conversation component - THÊM useEffect để fetch pinned messages
+  useEffect(() => {
+    const fetchPinnedMessages = async () => {
+      if (!room_id || !currentUserId) return;
+
+      try {
+        console.log(
+          "📌 Fetching pinned messages for room:",
+          room_id,
+          currentUserId
+        );
+
+        // Gọi API để lấy pinned messages
+        const response = await api.post("users/messages/pinned", {
+          roomId: room_id,
+          keycloakId: currentUserId,
+        });
+
+        if (response.data.status === "success") {
+          console.log("✅ Pinned messages fetched:", response.data.data.length);
+
+          // Cập nhật Redux state với pinned messages
+          dispatch(
+            setPinnedMessages({
+              messages: response.data.data,
+              chatType: chat_type,
+            })
+          );
+        }
+      } catch (error) {
+        console.error("❌ Error fetching pinned messages:", error);
+      }
+    };
+
+    fetchPinnedMessages();
+  }, [room_id, chat_type, currentUserId, dispatch]);
+  useEffect(() => {
+    if (room_id && chat_type) {
+      console.log("🔄 Fetching pinned messages for:", { room_id, chat_type });
+      dispatch(fetchPinnedMessages(room_id, chat_type));
+    }
+  }, [room_id, chat_type, dispatch]);
+
   const setCurrentChatFromRoomId = useCallback(() => {
     console.log("🔄 setCurrentChatFromRoomId called", {
       room_id,
@@ -688,10 +763,12 @@ const Conversation = ({ isMobile, menu }) => {
   );
 };
 
+// src/sections/dashboard/ChatComponent.js - CẬP NHẬT
 const ChatComponent = () => {
   const isMobile = useResponsive("between", "md", "xs", "sm");
   const theme = useTheme();
   const messageListRef = useRef(null);
+  const isAutoScrolling = useRef(true);
   const { current_messages, current_conversation } = useSelector(
     (state) => state.conversation.direct_chat
   );
@@ -699,74 +776,124 @@ const ChatComponent = () => {
     (state) => state.conversation.group_chat
   );
   const { chat_type, room_id } = useSelector((state) => state.app);
-  const dispatch = useDispatch(); // 🆕 THÊM dispatch
+  const dispatch = useDispatch();
 
   const currentChatInfo =
     chat_type === "group" ? current_room : current_conversation;
 
-  // 🆕 CẢI THIỆN: Auto-scroll logic
+  // 🆕 CẢI THIỆN: Auto-scroll logic với scroll detection
   useEffect(() => {
     if (!messageListRef.current) return;
+
+    const scrollContainer = messageListRef.current;
+
+    const handleScroll = () => {
+      const isAtBottom =
+        scrollContainer.scrollHeight -
+          scrollContainer.scrollTop -
+          scrollContainer.clientHeight <
+        100;
+
+      isAutoScrolling.current = isAtBottom;
+    };
+
+    scrollContainer.addEventListener("scroll", handleScroll);
+
+    return () => {
+      scrollContainer.removeEventListener("scroll", handleScroll);
+    };
+  }, []);
+
+  // 🆕 CẢI THIỆN: Auto scroll khi có tin nhắn mới
+  useEffect(() => {
+    if (!messageListRef.current || !isAutoScrolling.current) return;
 
     const scrollToBottom = () => {
       const scrollContainer = messageListRef.current;
       if (scrollContainer) {
-        const isNearBottom =
-          scrollContainer.scrollHeight -
-            scrollContainer.scrollTop -
-            scrollContainer.clientHeight <
-          100;
-
-        if (isNearBottom) {
-          scrollContainer.scrollTop = scrollContainer.scrollHeight;
-        }
+        // Sử dụng smooth scroll cho UX tốt hơn
+        scrollContainer.scrollTo({
+          top: scrollContainer.scrollHeight,
+          behavior: "smooth",
+        });
       }
     };
 
-    // Sử dụng setTimeout để đảm bảo DOM đã update
-    setTimeout(scrollToBottom, 100);
+    // Thêm delay nhỏ để đảm bảo DOM đã render xong
+    const timeoutId = setTimeout(scrollToBottom, 150);
+    return () => clearTimeout(timeoutId);
   }, [current_messages, current_room?.messages]);
 
-  // 🆕 THÊM: Socket listener cho real-time delete
+  // 🆕 THÊM: Scroll đến bottom khi vào conversation mới
+  useEffect(() => {
+    if (messageListRef.current && room_id) {
+      // Reset auto-scroll state khi chuyển conversation
+      isAutoScrolling.current = true;
+
+      const timeoutId = setTimeout(() => {
+        if (messageListRef.current) {
+          messageListRef.current.scrollTop =
+            messageListRef.current.scrollHeight;
+        }
+      }, 300);
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [room_id]);
+
+  // 🆕 THÊM: Function để scroll đến bottom manually
+  const scrollToBottom = () => {
+    if (messageListRef.current) {
+      messageListRef.current.scrollTo({
+        top: messageListRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+      isAutoScrolling.current = true;
+    }
+  };
+
+  // 🆕 THÊM: Clear pinned messages khi chuyển conversation
+  useEffect(() => {
+    if (room_id) {
+      dispatch(clearPinnedMessages({ chatType: chat_type }));
+    }
+  }, [room_id, chat_type, dispatch]);
+
+  // 🆕 THÊM: Socket listener cho real-time events
   useEffect(() => {
     if (window.socket) {
       const handleMessageDeleted = (data) => {
         console.log("📡 Socket: Message deleted by others", data);
-        // Tin nhắn sẽ tự động được xóa khỏi UI nhờ Redux state update từ backend
+      };
+
+      const handleNewMessage = () => {
+        // Tự động scroll khi có tin nhắn mới từ người khác
+        if (isAutoScrolling.current) {
+          setTimeout(scrollToBottom, 100);
+        }
       };
 
       window.socket.on("message_deleted", handleMessageDeleted);
+      window.socket.on("new_message", handleNewMessage);
+      window.socket.on("new_group_message", handleNewMessage);
 
       return () => {
         if (window.socket) {
           window.socket.off("message_deleted", handleMessageDeleted);
+          window.socket.off("new_message", handleNewMessage);
+          window.socket.off("new_group_message", handleNewMessage);
         }
       };
     }
   }, [dispatch]);
 
-  useEffect(() => {
-    console.log("🔍 ChatComponent - current state:", {
-      room_id,
-      chat_type,
-      currentChatInfo: currentChatInfo?.id,
-      current_conversation: current_conversation?.id,
-      current_room: current_room?.id,
-      direct_messages_count: current_messages?.length,
-      group_messages_count: current_room?.messages?.length,
-    });
-  }, [
-    chat_type,
-    current_conversation,
-    current_room,
-    room_id,
-    currentChatInfo,
-    current_messages,
-  ]);
-
   return (
     <Stack height="100%" maxHeight="100vh" width={isMobile ? "100vw" : "auto"}>
       <ChatHeader />
+
+      {/* Pinned Messages */}
+      <PinnedMessages />
+
       <Box
         ref={messageListRef}
         width="100%"
@@ -784,11 +911,37 @@ const ChatComponent = () => {
         <SimpleBarStyle timeout={500} clickOnTrack={false}>
           <Conversation menu={true} isMobile={isMobile} />
         </SimpleBarStyle>
+
+        {/* 🆕 THÊM: Scroll to bottom button */}
+        <Box
+          sx={{
+            position: "absolute",
+            bottom: 16,
+            right: 16,
+            opacity: isAutoScrolling.current ? 0 : 1,
+            transition: "opacity 0.3s ease",
+            pointerEvents: isAutoScrolling.current ? "none" : "all",
+          }}
+        >
+          <IconButton
+            onClick={scrollToBottom}
+            sx={{
+              backgroundColor: "primary.main",
+              color: "white",
+              "&:hover": {
+                backgroundColor: "primary.dark",
+              },
+              boxShadow: 2,
+            }}
+            size="small"
+          >
+            <ExpandMoreIcon />
+          </IconButton>
+        </Box>
       </Box>
       <ChatFooter />
     </Stack>
   );
 };
-
 export default ChatComponent;
 export { Conversation };

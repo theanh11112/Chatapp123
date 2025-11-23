@@ -26,6 +26,34 @@ const formatMessageTime = (ts) => {
   }
 };
 
+const findMessageById = (chatState, messageId) => {
+  // Tìm trong current messages
+  if (chatState.current_messages) {
+    const foundInCurrent = chatState.current_messages.find(
+      (msg) => msg.id === messageId
+    );
+    if (foundInCurrent) return foundInCurrent;
+  }
+
+  // Tìm trong current conversation messages
+  if (chatState.current_conversation?.messages) {
+    const foundInConv = chatState.current_conversation.messages.find(
+      (msg) => msg.id === messageId
+    );
+    if (foundInConv) return foundInConv;
+  }
+
+  // Tìm trong current room messages
+  if (chatState.current_room?.messages) {
+    const foundInRoom = chatState.current_room.messages.find(
+      (msg) => msg.id === messageId
+    );
+    if (foundInRoom) return foundInRoom;
+  }
+
+  return null;
+};
+
 const initialState = {
   direct_chat: {
     conversations: [],
@@ -33,12 +61,16 @@ const initialState = {
     current_messages: [],
     isLoading: false,
     error: null,
+    pinned_messages: [],
+    shouldRefetchPinned: false,
   },
   group_chat: {
     rooms: [],
     current_room: null,
     isLoading: false,
     error: null,
+    pinned_messages: [],
+    shouldRefetchPinned: false,
   },
   deletedMessages: [],
   notification: {
@@ -1331,6 +1363,118 @@ const slice = createSlice({
         open: false,
       };
     },
+    pinMessage: (state, action) => {
+      const { messageId, chatType } = action.payload;
+      const targetState =
+        chatType === "group" ? state.group_chat : state.direct_chat;
+
+      if (!targetState.pinned_messages.find((msg) => msg.id === messageId)) {
+        const message = findMessageById(targetState, messageId);
+        if (message) {
+          targetState.pinned_messages.push(message);
+        }
+      }
+    },
+    unpinMessage: (state, action) => {
+      const { messageId, chatType } = action.payload;
+      const targetState =
+        chatType === "group" ? state.group_chat : state.direct_chat;
+
+      targetState.pinned_messages = targetState.pinned_messages.filter(
+        (msg) => msg.id !== messageId
+      );
+    },
+    setPinnedMessages: (state, action) => {
+      const { messages, chatType } = action.payload;
+      const targetState =
+        chatType === "group" ? state.group_chat : state.direct_chat;
+
+      targetState.pinned_messages = messages;
+    },
+    clearPinnedMessages: (state, action) => {
+      const { chatType } = action.payload;
+      const targetState =
+        chatType === "group" ? state.group_chat : state.direct_chat;
+
+      targetState.pinned_messages = [];
+    },
+
+    updatePinnedMessages: (state, action) => {
+      const { messages, chatType } = action.payload;
+      const targetState =
+        chatType === "group" ? state.group_chat : state.direct_chat;
+
+      console.log("📍 Redux: updatePinnedMessages", {
+        chatType,
+        messagesCount: messages.length,
+      });
+
+      targetState.pinned_messages = messages;
+    },
+
+    // 🆕 THÊM: Reducer để cập nhật message pinned status trong current messages
+    updateMessagePinnedStatus: (state, action) => {
+      const { messageId, isPinned, chatType } = action.payload;
+
+      console.log("📍 Redux: updateMessagePinnedStatus", {
+        messageId,
+        isPinned,
+        chatType,
+      });
+
+      if (chatType === "group") {
+        // Cập nhật trong current room messages
+        if (state.group_chat.current_room?.messages) {
+          state.group_chat.current_room.messages =
+            state.group_chat.current_room.messages.map((msg) =>
+              msg.id === messageId || msg._id === messageId
+                ? { ...msg, isPinned }
+                : msg
+            );
+        }
+
+        // Cập nhật trong rooms list
+        state.group_chat.rooms.forEach((room) => {
+          if (room.messages) {
+            room.messages = room.messages.map((msg) =>
+              msg.id === messageId || msg._id === messageId
+                ? { ...msg, isPinned }
+                : msg
+            );
+          }
+        });
+      } else {
+        // Cập nhật trong direct chat messages
+        state.direct_chat.current_messages =
+          state.direct_chat.current_messages.map((msg) =>
+            msg.id === messageId || msg._id === messageId
+              ? { ...msg, isPinned }
+              : msg
+          );
+
+        // Cập nhật trong conversations
+        state.direct_chat.conversations.forEach((conv) => {
+          if (conv.messages) {
+            conv.messages = conv.messages.map((msg) =>
+              msg._id === messageId ? { ...msg, isPinned } : msg
+            );
+          }
+        });
+      }
+    },
+
+    // 🆕 THÊM: Reducer để set refetch flag
+    setShouldRefetchPinned: (state, action) => {
+      const { chatType, shouldRefetch } = action.payload;
+      const targetState =
+        chatType === "group" ? state.group_chat : state.direct_chat;
+
+      if (!targetState.shouldRefetchPinned) {
+        targetState.shouldRefetchPinned = shouldRefetch;
+      } else {
+        targetState.shouldRefetchPinned = shouldRefetch;
+      }
+    },
   },
 });
 
@@ -1361,6 +1505,13 @@ export const {
   restoreMessage,
   showMessage,
   hideMessage,
+  pinMessage,
+  unpinMessage,
+  setPinnedMessages,
+  clearPinnedMessages,
+  updatePinnedMessages,
+  updateMessagePinnedStatus,
+  setShouldRefetchPinned,
 } = slice.actions;
 
 // ==================== THUNKS ====================
@@ -1582,5 +1733,40 @@ export const deleteMessageThunk =
       );
 
       throw error;
+    }
+  };
+
+// 🆕 THÊM: Thunk để fetch pinned messages
+export const fetchPinnedMessages =
+  (roomId, chatType) => async (dispatch, getState) => {
+    try {
+      const state = getState();
+      const keycloakId = state.auth.user_id;
+      console.log("🔄 Fetching pinned messages for room:", roomId, keycloakId);
+
+      if (!keycloakId) {
+        console.error("❌ No keycloakId found in state");
+        return;
+      }
+
+      const res = await api.post("users/messages/pinned", {
+        roomId: roomId,
+        keycloakId: keycloakId,
+      });
+
+      if (res.data && res.data.status === "success") {
+        dispatch(
+          setPinnedMessages({
+            messages: res.data.data,
+            chatType: chatType,
+          })
+        );
+
+        console.log("✅ Pinned messages fetched:", res.data.data.length);
+      } else {
+        console.warn("⚠️ No pinned messages data in response");
+      }
+    } catch (error) {
+      console.error("❌ fetchPinnedMessages error:", error);
     }
   };
