@@ -36,7 +36,14 @@ const GeneralBase = ({ type = "individual" }) => {
   };
 
   return (
-    <Stack direction="row" sx={{ width: "100%" }}>
+    <Stack
+      direction="row"
+      sx={{
+        width: "100%",
+        height: "100vh", // 🆕 THÊM: Chiều cao cố định
+        overflow: "hidden", // 🆕 THÊM: Ngăn scroll toàn page
+      }}
+    >
       {/* Left Panel */}
       <LeftPanel />
 

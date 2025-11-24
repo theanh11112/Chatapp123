@@ -1,4 +1,4 @@
-// src/components/Chat/PinnedMessages.js - HOÀN CHỈNH REAL-TIME
+// src/components/Chat/PinnedMessages.js - ĐÃ ĐIỀU CHỈNH CHIỀU RỘNG
 import React, { useEffect, useState, useCallback } from "react";
 import {
   Box,
@@ -9,6 +9,8 @@ import {
   Divider,
   Tooltip,
   CircularProgress,
+  useTheme,
+  useMediaQuery,
 } from "@mui/material";
 import {
   PushPin as PinIcon,
@@ -38,34 +40,45 @@ const PinnedMessages = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [socket, setSocket] = useState(null);
 
+  // 🆕 THÊM: Responsive design
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
+  const isTablet = useMediaQuery(theme.breakpoints.down("md"));
+
   const pinnedMessages =
     (chat_type === "group" ? groupPinned : directPinned) || [];
 
-  // 🆕 HOÀN THIỆN: Hàm refetch pinned messages với useCallback
+  // 🆕 SỬA: Hàm refetch pinned messages
   const refetchPinnedMessages = useCallback(async () => {
-    if (!room_id || !keycloak?.subject) return;
+    if (!room_id || !keycloak?.subject) {
+      console.log("❌ Missing room_id or keycloak subject");
+      return;
+    }
 
     try {
       setIsLoading(true);
       console.log("🔄 Refetching pinned messages for room:", room_id);
-
-      await dispatch(fetchPinnedMessages(room_id, chat_type)).unwrap();
-
+      await dispatch(fetchPinnedMessages(room_id, chat_type));
       console.log("✅ Pinned messages refetched successfully");
     } catch (error) {
       console.error("❌ Error refetching pinned messages:", error);
-      dispatch(
-        showSnackbar({
-          severity: "error",
-          message: "Failed to refresh pinned messages",
-        })
-      );
+      if (
+        !error.message?.includes("cancel") &&
+        !error.message?.includes("abort")
+      ) {
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: "Failed to refresh pinned messages",
+          })
+        );
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [room_id, keycloak?.subject, dispatch, chat_type]);
+  }, [room_id, chat_type, dispatch, keycloak?.subject]);
 
-  // 🆕 HOÀN THIỆN: Socket listeners cho real-time updates
+  // Socket listeners và các hàm khác giữ nguyên...
   useEffect(() => {
     const currentSocket = window.socket;
     if (!currentSocket) {
@@ -78,8 +91,6 @@ const PinnedMessages = () => {
 
     const handleMessagePinned = (data) => {
       console.log("📌 Socket: Message pinned real-time", data);
-
-      // 🆕 CẬP NHẬT NGAY LẬP TỨC NẾU CÓ DANH SÁCH MỚI
       if (
         data.pinnedMessages &&
         data.roomId === room_id &&
@@ -92,11 +103,8 @@ const PinnedMessages = () => {
           })
         );
       } else {
-        // Refetch nếu không có danh sách mới
         refetchPinnedMessages();
       }
-
-      // 🆕 CẬP NHẬT TRẠNG THÁI PIN TRONG MESSAGE
       dispatch(
         updateMessagePinnedStatus({
           messageId: data.messageId,
@@ -108,8 +116,6 @@ const PinnedMessages = () => {
 
     const handleMessageUnpinned = (data) => {
       console.log("📌 Socket: Message unpinned real-time", data);
-
-      // 🆕 CẬP NHẬT NGAY LẬP TỨC NẾU CÓ DANH SÁCH MỚI
       if (
         data.pinnedMessages &&
         data.roomId === room_id &&
@@ -122,11 +128,8 @@ const PinnedMessages = () => {
           })
         );
       } else {
-        // Refetch nếu không có danh sách mới
         refetchPinnedMessages();
       }
-
-      // 🆕 CẬP NHẬT TRẠNG THÁI PIN TRONG MESSAGE
       dispatch(
         updateMessagePinnedStatus({
           messageId: data.messageId,
@@ -136,91 +139,18 @@ const PinnedMessages = () => {
       );
     };
 
-    const handlePinnedMessagesUpdated = (data) => {
-      console.log("📌 Socket: Pinned messages updated", data);
-
-      if (data.roomId === room_id && data.chatType === chat_type) {
-        // 🆕 CẬP NHẬT DANH SÁCH PINNED MESSAGES TỪ SERVER
-        dispatch(
-          setPinnedMessages({
-            messages: data.pinnedMessages || [],
-            chatType: chat_type,
-          })
-        );
-
-        // 🆕 CẬP NHẬT TRẠNG THÁI PIN CHO MESSAGE CỤ THỂ
-        if (data.action === "pin") {
-          dispatch(
-            updateMessagePinnedStatus({
-              messageId: data.messageId,
-              isPinned: true,
-              chatType: data.chatType,
-            })
-          );
-        } else if (data.action === "unpin") {
-          dispatch(
-            updateMessagePinnedStatus({
-              messageId: data.messageId,
-              isPinned: false,
-              chatType: data.chatType,
-            })
-          );
-        }
-      }
-    };
-
-    // 🆕 THÊM: Listener cho pin response
-    const handlePinResponse = (data) => {
-      console.log("📌 Socket: Pin response", data);
-
-      if (data.status === "success" && data.data?.pinnedMessages) {
-        // Cập nhật danh sách từ response
-        dispatch(
-          setPinnedMessages({
-            messages: data.data.pinnedMessages,
-            chatType: chat_type,
-          })
-        );
-      }
-    };
-
-    const handleUnpinResponse = (data) => {
-      console.log("📌 Socket: Unpin response", data);
-
-      if (data.status === "success" && data.data?.pinnedMessages) {
-        // Cập nhật danh sách từ response
-        dispatch(
-          setPinnedMessages({
-            messages: data.data.pinnedMessages,
-            chatType: chat_type,
-          })
-        );
-      }
-    };
-
     // Đăng ký socket listeners
     currentSocket.on("message_pinned", handleMessagePinned);
     currentSocket.on("message_unpinned", handleMessageUnpinned);
-    currentSocket.on("pinned_messages_updated", handlePinnedMessagesUpdated);
-    currentSocket.on("pin_message_response", handlePinResponse);
-    currentSocket.on("unpin_message_response", handleUnpinResponse);
 
-    // Cleanup
     return () => {
       if (currentSocket) {
         currentSocket.off("message_pinned", handleMessagePinned);
         currentSocket.off("message_unpinned", handleMessageUnpinned);
-        currentSocket.off(
-          "pinned_messages_updated",
-          handlePinnedMessagesUpdated
-        );
-        currentSocket.off("pin_message_response", handlePinResponse);
-        currentSocket.off("unpin_message_response", handleUnpinResponse);
       }
     };
   }, [dispatch, room_id, chat_type, refetchPinnedMessages]);
 
-  // 🆕 HOÀN THIỆN: Auto refetch khi room thay đổi
   useEffect(() => {
     if (room_id && keycloak?.subject) {
       console.log("🔄 Initial fetch pinned messages for room:", room_id);
@@ -228,7 +158,6 @@ const PinnedMessages = () => {
     }
   }, [room_id, keycloak?.subject, refetchPinnedMessages]);
 
-  // 🆕 HOÀN THIỆN: Hàm unpin message
   const handleUnpin = async (messageId) => {
     if (!socket) {
       console.error("❌ Socket not available");
@@ -246,16 +175,8 @@ const PinnedMessages = () => {
     const socketData =
       chat_type === "group" ? { messageId, roomId: room_id } : { messageId };
 
-    console.log("📌 Unpinning message:", {
-      messageId,
-      socketEvent,
-      socketData,
-    });
-
     try {
       setIsLoading(true);
-
-      // 🆕 OPTIMISTIC UPDATE: Cập nhật UI ngay lập tức
       dispatch(unpinMessage({ messageId, chatType: chat_type }));
       dispatch(
         updateMessagePinnedStatus({
@@ -266,8 +187,6 @@ const PinnedMessages = () => {
       );
 
       socket.emit(socketEvent, socketData, (response) => {
-        console.log("📌 Unpin response:", response);
-
         if (response.status === "success") {
           dispatch(
             showSnackbar({
@@ -275,8 +194,6 @@ const PinnedMessages = () => {
               message: "Message unpinned successfully",
             })
           );
-
-          // 🆕 CẬP NHẬT DANH SÁCH TỪ RESPONSE NẾU CÓ
           if (response.data?.pinnedMessages) {
             dispatch(
               setPinnedMessages({
@@ -285,53 +202,39 @@ const PinnedMessages = () => {
               })
             );
           } else {
-            // Refetch để đảm bảo đồng bộ
             refetchPinnedMessages();
           }
         } else {
-          // 🆕 ROLLBACK NẾU LỖI
           dispatch(
             showSnackbar({
               severity: "error",
               message: response.message || "Failed to unpin message",
             })
           );
-          // Rollback optimistic update bằng cách refetch
           refetchPinnedMessages();
         }
       });
     } catch (error) {
       console.error("❌ Error unpinning message:", error);
-      // Rollback optimistic update
       refetchPinnedMessages();
     } finally {
       setIsLoading(false);
     }
   };
 
-  // 🆕 HOÀN THIỆN: Hàm scroll to message
   const handleScrollToMessage = (messageId) => {
-    console.log(
-      "🔍 Searching for message element with ID:",
-      `message-${messageId}`
-    );
-
     const messageElement = document.getElementById(`message-${messageId}`);
     if (messageElement) {
       messageElement.scrollIntoView({
         behavior: "smooth",
         block: "center",
       });
-
-      // Highlight effect
       messageElement.style.backgroundColor = "rgba(255, 235, 59, 0.3)";
       messageElement.style.transition = "background-color 0.5s ease";
-
       setTimeout(() => {
         messageElement.style.backgroundColor = "";
       }, 2000);
     } else {
-      console.warn("❌ Message element not found for ID:", messageId);
       dispatch(
         showSnackbar({
           severity: "warning",
@@ -342,12 +245,9 @@ const PinnedMessages = () => {
     }
   };
 
-  // 🆕 HOÀN THIỆN: Format message content
   const getMessageContent = (message) => {
     if (message.message) return message.message;
     if (message.content) return message.content;
-
-    // Xử lý các loại message khác
     switch (message.subtype) {
       case "img":
         return "📷 Image";
@@ -362,7 +262,6 @@ const PinnedMessages = () => {
     }
   };
 
-  // 🆕 HOÀN THIỆN: Format time
   const formatTime = (timestamp) => {
     if (!timestamp) return "";
     try {
@@ -370,10 +269,7 @@ const PinnedMessages = () => {
       return (
         date.toLocaleDateString() +
         " " +
-        date.toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        })
+        date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
       );
     } catch (error) {
       return "";
@@ -388,24 +284,44 @@ const PinnedMessages = () => {
     <Paper
       elevation={1}
       sx={{
-        mx: 2,
+        // 🆕 ĐIỀU CHỈNH CHIỀU RỘNG
+        mx: isMobile ? 1 : 2,
         mt: 1,
         mb: 1,
-        p: 1.5,
+        p: isMobile ? 1 : 1.5,
         backgroundColor: "background.paper",
         border: "1px solid",
         borderColor: "divider",
         borderRadius: 2,
         boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+        // 🆕 GIỚI HẠN CHIỀU RỘNG TỐI ĐA
+        maxWidth: "100%",
+        width: "auto",
+        // 🆕 ĐẢM BẢO KHÔNG VƯỢT QUÁ CHIỀU RỘNG CONTAINER
+        boxSizing: "border-box",
       }}
     >
       <Stack spacing={1.5}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <PinIcon sx={{ fontSize: 18, color: "primary.main" }} />
-          <Typography variant="subtitle2" fontWeight="bold">
+          <PinIcon
+            sx={{
+              fontSize: isMobile ? 16 : 18,
+              color: "primary.main",
+            }}
+          />
+          <Typography
+            variant={isMobile ? "caption" : "subtitle2"}
+            fontWeight="bold"
+            sx={{
+              // 🆕 XỬ LÝ TEXT TRÀN TRÊN MOBILE
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
             Pinned Messages ({pinnedMessages.length})
           </Typography>
-          {isLoading && <CircularProgress size={16} />}
+          {isLoading && <CircularProgress size={isMobile ? 14 : 16} />}
         </Box>
 
         <Divider />
@@ -417,8 +333,8 @@ const PinnedMessages = () => {
               sx={{
                 display: "flex",
                 alignItems: "flex-start",
-                gap: 1.5,
-                p: 1.5,
+                gap: isMobile ? 1 : 1.5,
+                p: isMobile ? 1 : 1.5,
                 borderRadius: 1.5,
                 backgroundColor: "action.hover",
                 border: "1px solid",
@@ -429,32 +345,56 @@ const PinnedMessages = () => {
                   transform: "translateY(-1px)",
                   boxShadow: 1,
                 },
+                // 🆕 ĐẢM BẢO KHÔNG VƯỢT QUÁ CHIỀU RỘNG
+                maxWidth: "100%",
+                overflow: "hidden",
               }}
             >
-              <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Box
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  // 🆕 GIỚI HẠN CHIỀU RỘNG NỘI DUNG
+                  maxWidth: "calc(100% - 80px)",
+                }}
+              >
                 <Typography
-                  variant="caption"
+                  variant={isMobile ? "caption" : "caption"}
                   color="text.secondary"
                   fontWeight="500"
+                  sx={{
+                    display: "block",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
                 >
                   {message.sender?.name || "Unknown User"}
                 </Typography>
                 <Typography
-                  variant="body2"
+                  variant={isMobile ? "caption" : "body2"}
                   sx={{
+                    // 🆕 CẢI THIỆN HIỂN THỊ NỘI DUNG DÀI
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
                     mt: 0.5,
+                    display: "block",
+                    // 🆕 ĐẢM BẢO KHÔNG TRÀN
+                    maxWidth: "100%",
                   }}
                 >
                   {getMessageContent(message)}
                 </Typography>
                 {message.pinnedAt && (
                   <Typography
-                    variant="caption"
+                    variant={isMobile ? "caption" : "caption"}
                     color="text.disabled"
-                    sx={{ mt: 0.5, display: "block" }}
+                    sx={{
+                      mt: 0.5,
+                      display: "block",
+                      fontSize: isMobile ? "0.7rem" : "0.75rem",
+                    }}
                   >
                     Pinned {formatTime(message.pinnedAt)}
                   </Typography>
@@ -473,9 +413,12 @@ const PinnedMessages = () => {
                         backgroundColor: "primary.light",
                         color: "primary.contrastText",
                       },
+                      // 🆕 ĐIỀU CHỈNH KÍCH THƯỚC CHO MOBILE
+                      minWidth: "auto",
+                      padding: isMobile ? "4px" : "8px",
                     }}
                   >
-                    <LaunchIcon sx={{ fontSize: 16 }} />
+                    <LaunchIcon sx={{ fontSize: isMobile ? 14 : 16 }} />
                   </IconButton>
                 </Tooltip>
 
@@ -490,9 +433,12 @@ const PinnedMessages = () => {
                         backgroundColor: "error.light",
                         color: "error.contrastText",
                       },
+                      // 🆕 ĐIỀU CHỈNH KÍCH THƯỚC CHO MOBILE
+                      minWidth: "auto",
+                      padding: isMobile ? "4px" : "8px",
                     }}
                   >
-                    <CloseIcon sx={{ fontSize: 16 }} />
+                    <CloseIcon sx={{ fontSize: isMobile ? 14 : 16 }} />
                   </IconButton>
                 </Tooltip>
               </Stack>

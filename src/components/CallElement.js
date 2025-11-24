@@ -1,161 +1,547 @@
+// components/CallElements.js - COMPLETE FIXED VERSION
 import React from "react";
 import {
   Box,
-  Badge,
   Stack,
   Avatar,
   Typography,
   IconButton,
+  Chip,
 } from "@mui/material";
 import { styled, useTheme } from "@mui/material/styles";
 import {
-  ArrowDownLeft,
-  ArrowUpRight,
-  VideoCamera,
   Phone,
+  VideoCamera,
+  CheckCircle,
+  XCircle,
+  Clock,
 } from "phosphor-react";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { StartAudioCall } from "../redux/slices/audioCall";
-import { StartVideoCall } from "../redux/slices/videoCall";
-import { AWS_S3_REGION, S3_BUCKET_NAME } from "../config";
+import { StartDirectVideoCall } from "../redux/slices/videoCall";
+import { timeAgo } from "../utils/timeAgo";
 
-const StyledChatBox = styled(Box)(({ theme }) => ({
+const CallCard = styled(Box)(({ theme }) => ({
+  borderRadius: 12,
+  backgroundColor: theme.palette.background.paper,
+  border: `1px solid ${theme.palette.divider}`,
+  transition: "all 0.2s ease-in-out",
   "&:hover": {
-    cursor: "pointer",
+    transform: "translateY(-2px)",
+    boxShadow: theme.shadows[4],
+    borderColor: theme.palette.primary.light,
   },
 }));
 
-const StyledBadge = styled(Badge)(({ theme }) => ({
-  "& .MuiBadge-badge": {
-    backgroundColor: "#44b700",
-    color: "#44b700",
-    boxShadow: `0 0 0 2px ${theme.palette.background.paper}`,
-    "&::after": {
-      position: "absolute",
-      top: 0,
-      left: 0,
-      width: "100%",
-      height: "100%",
-      borderRadius: "50%",
-      animation: "ripple 1.2s infinite ease-in-out",
-      border: "1px solid currentColor",
-      content: '""',
-    },
-  },
-  "@keyframes ripple": {
+const StatusBadge = styled(Box)(({ theme, status }) => ({
+  width: 8,
+  height: 8,
+  borderRadius: "50%",
+  backgroundColor:
+    status === "ongoing" || status === "Ongoing"
+      ? theme.palette.success.main
+      : theme.palette.text.disabled,
+  animation:
+    status === "ongoing" || status === "Ongoing" ? "pulse 2s infinite" : "none",
+  "@keyframes pulse": {
     "0%": {
-      transform: "scale(.8)",
+      transform: "scale(0.95)",
+      opacity: 0.7,
+    },
+    "50%": {
+      transform: "scale(1.1)",
       opacity: 1,
     },
     "100%": {
-      transform: "scale(2.4)",
-      opacity: 0,
+      transform: "scale(0.95)",
+      opacity: 0.7,
     },
   },
 }));
 
-const CallLogElement = ({ img, name, incoming, missed, online, id }) => {
+const CallLogElement = ({ call, currentUserId, onCallAgain }) => {
   const theme = useTheme();
+  const dispatch = useDispatch();
+  const { user } = useSelector((state) => state.auth);
+
+  // 🆕 FIX: Lấy thông tin người tham gia
+  const getOtherParticipant = () => {
+    if (!call.participants || !Array.isArray(call.participants)) return null;
+    return call.participants.find((p) => p !== currentUserId);
+  };
+
+  // 🆕 FIX: Lấy display name
+  const getDisplayName = () => {
+    // For group calls
+    if (call.callType === "group") {
+      return call.callTitle || "Group Call";
+    }
+
+    const otherParticipantId = getOtherParticipant();
+
+    // Cấu trúc mới: participantDetails là array
+    if (call.participantDetails && Array.isArray(call.participantDetails)) {
+      const otherUser = call.participantDetails.find(
+        (p) => p.keycloakId !== currentUserId
+      );
+      return otherUser?.userName || otherUser?.firstName || "Unknown User";
+    }
+
+    // Cấu trúc cũ: participantsDetails là object
+    if (call.participantsDetails) {
+      const otherUser = Object.values(call.participantsDetails).find(
+        (p) => p.keycloakId !== currentUserId
+      );
+      return otherUser?.username || otherUser?.fullName || "Unknown User";
+    }
+
+    // Fallback to startedBy info
+    if (call.startedBy) {
+      if (typeof call.startedBy === "object") {
+        if (call.startedBy._id !== currentUserId) {
+          return call.startedBy.userName || call.startedBy.firstName || "User";
+        }
+      } else if (call.startedBy !== currentUserId) {
+        return "Other User";
+      }
+    }
+
+    return "Unknown User";
+  };
+
+  // 🆕 FIX: Lấy avatar
+  const getAvatar = () => {
+    if (call.callType === "group") {
+      return call.avatar || null;
+    }
+
+    // Cấu trúc mới: participantDetails là array
+    if (call.participantDetails && Array.isArray(call.participantDetails)) {
+      const otherUser = call.participantDetails.find(
+        (p) => p.keycloakId !== currentUserId
+      );
+      return otherUser?.avatar;
+    }
+
+    // Cấu trúc cũ: participantsDetails là object
+    if (call.participantsDetails) {
+      const otherUser = Object.values(call.participantsDetails).find(
+        (p) => p.keycloakId !== currentUserId
+      );
+      return otherUser?.avatar;
+    }
+
+    // Fallback to startedBy avatar
+    if (call.startedBy && typeof call.startedBy === "object") {
+      if (call.startedBy._id !== currentUserId) {
+        return call.startedBy.avatar;
+      }
+    }
+
+    return null;
+  };
+
+  // 🆕 FIX: Tính duration
+  const getCallDuration = () => {
+    // Ưu tiên duration từ backend trước
+    if (call.duration) {
+      const minutes = Math.floor(call.duration / 60);
+      const seconds = call.duration % 60;
+      return `${minutes}m ${seconds}s`;
+    }
+
+    // Fallback: tính từ startedAt và endedAt
+    const startedAt = call.startedAt || call.createdAt;
+    const endedAt = call.endedAt;
+
+    if (!endedAt || call.status === "ongoing" || call.status === "Ongoing")
+      return null;
+
+    try {
+      const duration = new Date(endedAt) - new Date(startedAt);
+      const minutes = Math.floor(duration / 60000);
+      const seconds = Math.floor((duration % 60000) / 1000);
+      return `${minutes}m ${seconds}s`;
+    } catch (error) {
+      return null;
+    }
+  };
+
+  // 🆕 FIX: Xác định call direction
+  const isIncoming = () => {
+    if (call.startedBy) {
+      if (typeof call.startedBy === "object") {
+        return call.startedBy._id !== currentUserId;
+      } else {
+        return call.startedBy !== currentUserId;
+      }
+    }
+
+    // Fallback: check participants array
+    if (call.participants && call.participants.length > 0) {
+      return call.participants[0] !== currentUserId;
+    }
+
+    return false;
+  };
+
+  // 🆕 FIX: Status info
+  const getStatusInfo = () => {
+    const status = call.status || "";
+    const statusLower = status.toLowerCase();
+
+    switch (statusLower) {
+      case "ongoing":
+        return { label: "Ongoing", color: "success", icon: Clock };
+      case "completed":
+        return { label: "Completed", color: "primary", icon: CheckCircle };
+      case "missed":
+        return { label: "Missed", color: "error", icon: XCircle };
+      case "declined":
+        return { label: "Declined", color: "warning", icon: XCircle };
+      case "ringing":
+        return { label: "Ringing", color: "info", icon: Clock };
+      default:
+        return { label: status || "Unknown", color: "default", icon: Clock };
+    }
+  };
+
+  // 🆕 FIX: Call type info
+  const getCallTypeInfo = () => {
+    const isAudio = call.type === "audio" || !call.type; // Mặc định là audio
+    const CallIcon = isAudio ? Phone : VideoCamera;
+    const callTypeColor = isAudio
+      ? theme.palette.primary.main
+      : theme.palette.error.main;
+    const callTypeLabel = isAudio ? "Audio" : "Video";
+
+    return { isAudio, CallIcon, callTypeColor, callTypeLabel };
+  };
+
+  const statusInfo = getStatusInfo();
+  const callTypeInfo = getCallTypeInfo();
+  const StatusIcon = statusInfo.icon;
+  const duration = getCallDuration();
+  const incoming = isIncoming();
+
+  // 🆕 FIX: Sửa hàm handleCallAgain cho video call
+  const handleCallAgain = (type = "audio") => {
+    const otherParticipant = getOtherParticipant();
+    if (otherParticipant) {
+      if (type === "audio") {
+        dispatch(StartAudioCall(otherParticipant, call.callType || "direct"));
+      } else {
+        // 🆕 SỬA: Tạo call data đầy đủ cho video call
+        const callData = {
+          from: user?.keycloakId || currentUserId,
+          from_name: user?.userName || user?.firstName || "User",
+          to: otherParticipant,
+          to_name: getDisplayName(),
+          roomID: `video_room_${Date.now()}_${Math.random()
+            .toString(36)
+            .substr(2, 9)}`,
+          streamID: `video_stream_${user?.keycloakId}_${Date.now()}`,
+          callType: call.callType || "direct",
+          conversationId: call.conversationId,
+        };
+
+        // Sử dụng action mới để khởi tạo call trực tiếp
+        dispatch(StartDirectVideoCall(callData));
+      }
+    } else {
+      console.error("❌ Cannot find other participant for call again");
+    }
+  };
+
+  // 🆕 FIX: Format timestamp an toàn
+  const getSafeTimestamp = () => {
+    try {
+      return timeAgo(new Date(call.startedAt || call.createdAt || Date.now()));
+    } catch (error) {
+      return "Recently";
+    }
+  };
 
   return (
-    <StyledChatBox
-      sx={{
-        width: "100%",
+    <CallCard sx={{ p: 2, mb: 1.5 }}>
+      <Stack direction="row" spacing={2} alignItems="flex-start">
+        {/* Avatar với status */}
+        <Box position="relative">
+          <Avatar
+            src={getAvatar()}
+            sx={{
+              width: 50,
+              height: 50,
+              borderRadius: 2,
+              backgroundColor: theme.palette.action.hover,
+            }}
+          >
+            {getDisplayName().charAt(0).toUpperCase()}
+          </Avatar>
+          <StatusBadge
+            status={call.status}
+            sx={{
+              position: "absolute",
+              bottom: 2,
+              right: 2,
+              border: `2px solid ${theme.palette.background.paper}`,
+            }}
+          />
+        </Box>
 
-        borderRadius: 1,
-
-        backgroundColor: theme.palette.background.paper,
-      }}
-      p={2}
-    >
-      <Stack
-        direction="row"
-        alignItems={"center"}
-        justifyContent="space-between"
-      >
-        <Stack direction="row" spacing={2}>
-          {" "}
-          {online ? (
-            <StyledBadge
-              overlap="circular"
-              anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-              variant="dot"
-            >
-              <Avatar alt={name} src={`https://${S3_BUCKET_NAME}.s3.${AWS_S3_REGION}.amazonaws.com/${img}`} />
-            </StyledBadge>
-          ) : (
-            <Avatar alt={name} src={`https://${S3_BUCKET_NAME}.s3.${AWS_S3_REGION}.amazonaws.com/${img}`} />
-          )}
-          <Stack spacing={0.3}>
-            <Typography variant="subtitle2">{name}</Typography>
-            <Stack spacing={1} alignItems="center" direction={"row"}>
-              {incoming ? (
-                <ArrowDownLeft color={missed ? "red" : "green"} />
-              ) : (
-                <ArrowUpRight color={missed ? "red" : "green"} />
-              )}
-              <Typography variant="caption">Yesterday 21:24</Typography>
-            </Stack>
+        {/* Call Info */}
+        <Stack sx={{ flexGrow: 1 }} spacing={0.5}>
+          {/* Header - Name và Time */}
+          <Stack
+            direction="row"
+            justifyContent="space-between"
+            alignItems="flex-start"
+          >
+            <Typography variant="subtitle1" fontWeight={600}>
+              {getDisplayName()}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {getSafeTimestamp()}
+            </Typography>
           </Stack>
-        </Stack>
-        <Stack direction={"row"} spacing={2} alignItems={"center"}>
-          <Phone />
 
-          <VideoCamera />
+          {/* Call Type và Direction */}
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Chip
+              icon={<callTypeInfo.CallIcon size={14} />}
+              label={callTypeInfo.callTypeLabel}
+              size="small"
+              variant="outlined"
+              sx={{
+                borderColor: callTypeInfo.callTypeColor,
+                color: callTypeInfo.callTypeColor,
+                "& .MuiChip-icon": { color: callTypeInfo.callTypeColor },
+                height: 24,
+              }}
+            />
+            <Chip
+              label={
+                call.callType === "group"
+                  ? "Group"
+                  : incoming
+                  ? "Incoming"
+                  : "Outgoing"
+              }
+              size="small"
+              variant="filled"
+              sx={{
+                backgroundColor:
+                  call.callType === "group"
+                    ? theme.palette.secondary.main + "20"
+                    : incoming
+                    ? theme.palette.info.main + "20"
+                    : theme.palette.warning.main + "20",
+                color:
+                  call.callType === "group"
+                    ? theme.palette.secondary.main
+                    : incoming
+                    ? theme.palette.info.main
+                    : theme.palette.warning.main,
+                height: 24,
+              }}
+            />
+          </Stack>
+
+          {/* Status và Duration */}
+          <Stack direction="row" spacing={1} alignItems="center">
+            <StatusIcon
+              size={14}
+              color={
+                theme.palette[statusInfo.color]?.main ||
+                theme.palette.text.secondary
+              }
+            />
+            <Typography
+              variant="caption"
+              color={statusInfo.color}
+              fontWeight={500}
+            >
+              {statusInfo.label} {duration ? `• ${duration}` : ""}
+            </Typography>
+          </Stack>
+
+          {/* Participants count for group calls */}
+          {call.callType === "group" && call.participants && (
+            <Typography variant="caption" color="text.secondary">
+              {call.participants.length} participants
+            </Typography>
+          )}
+
+          {/* Room Info (nếu có) - Cho cả 2 cấu trúc */}
+          {call.room?.name && (
+            <Typography variant="caption" color="text.secondary">
+              In {call.room.name}
+            </Typography>
+          )}
+        </Stack>
+
+        {/* Call Again Buttons */}
+        <Stack direction="column" spacing={0.5}>
+          <IconButton
+            size="small"
+            onClick={() => handleCallAgain("audio")}
+            disabled={!getOtherParticipant()}
+            sx={{
+              backgroundColor: theme.palette.primary.main + "08",
+              border: `1px solid ${theme.palette.primary.main + "20"}`,
+              "&:hover": {
+                backgroundColor: theme.palette.primary.main + "15",
+              },
+              "&:disabled": {
+                backgroundColor: theme.palette.action.disabledBackground,
+                borderColor: theme.palette.action.disabled,
+              },
+              width: 36,
+              height: 36,
+            }}
+          >
+            <Phone
+              size={18}
+              color={
+                getOtherParticipant()
+                  ? theme.palette.primary.main
+                  : theme.palette.action.disabled
+              }
+            />
+          </IconButton>
+
+          <IconButton
+            size="small"
+            onClick={() => handleCallAgain("video")}
+            disabled={!getOtherParticipant()}
+            sx={{
+              backgroundColor: theme.palette.error.main + "08",
+              border: `1px solid ${theme.palette.error.main + "20"}`,
+              "&:hover": {
+                backgroundColor: theme.palette.error.main + "15",
+              },
+              "&:disabled": {
+                backgroundColor: theme.palette.action.disabledBackground,
+                borderColor: theme.palette.action.disabled,
+              },
+              width: 36,
+              height: 36,
+            }}
+          >
+            <VideoCamera
+              size={18}
+              color={
+                getOtherParticipant()
+                  ? theme.palette.error.main
+                  : theme.palette.action.disabled
+              }
+            />
+          </IconButton>
         </Stack>
       </Stack>
-    </StyledChatBox>
+
+      {/* 🆕 FIX: Missed/Declined Call Indicator */}
+      {(call.status === "missed" ||
+        call.status === "declined" ||
+        call.missed) && (
+        <Box
+          sx={{
+            mt: 1,
+            p: 1,
+            borderRadius: 1,
+            backgroundColor: theme.palette.error.main + "08",
+            border: `1px solid ${theme.palette.error.main + "20"}`,
+          }}
+        >
+          <Stack direction="row" spacing={1} alignItems="center">
+            <XCircle size={16} color={theme.palette.error.main} />
+            <Typography variant="caption" color={theme.palette.error.main}>
+              {call.status === "missed" || call.missed
+                ? "Missed call"
+                : "Call declined"}
+            </Typography>
+          </Stack>
+        </Box>
+      )}
+    </CallCard>
   );
 };
 
+// 🆕 FIX: CallElement cho start call với video call đã sửa
 const CallElement = ({ img, name, id, handleClose }) => {
   const dispatch = useDispatch();
   const theme = useTheme();
+  const { user } = useSelector((state) => state.auth);
+
+  const handleAudioCall = () => {
+    dispatch(StartAudioCall(id, "direct"));
+    if (handleClose) handleClose();
+  };
+
+  const handleVideoCall = () => {
+    // 🆕 SỬA: Tạo call data đầy đủ cho video call
+    const callData = {
+      from: user?.keycloakId,
+      from_name: user?.userName || user?.firstName || "User",
+      to: id,
+      to_name: name || "User",
+      roomID: `video_room_${Date.now()}_${Math.random()
+        .toString(36)
+        .substr(2, 9)}`,
+      streamID: `video_stream_${user?.keycloakId}_${Date.now()}`,
+      callType: "direct",
+    };
+
+    dispatch(StartDirectVideoCall(callData));
+    if (handleClose) handleClose();
+  };
 
   return (
-    <StyledChatBox
-      sx={{
-        width: "100%",
-
-        borderRadius: 1,
-
-        backgroundColor: theme.palette.background.paper,
-      }}
-      p={2}
-    >
-      <Stack
-        direction="row"
-        alignItems={"center"}
-        justifyContent="space-between"
-      >
-        <Stack direction="row" spacing={2}>
-          {" "}
-          <Avatar alt={name} src={img} />
-          <Stack spacing={0.3} alignItems="center" direction={"row"}>
-            <Typography variant="subtitle2">{name}</Typography>
-          </Stack>
+    <CallCard sx={{ p: 2, mb: 1 }}>
+      <Stack direction="row" alignItems="center" justifyContent="space-between">
+        <Stack direction="row" spacing={2} alignItems="center">
+          <Avatar
+            src={img}
+            sx={{
+              width: 45,
+              height: 45,
+              borderRadius: 2,
+            }}
+          />
+          <Typography variant="subtitle1" fontWeight={500}>
+            {name}
+          </Typography>
         </Stack>
-        <Stack direction={"row"} spacing={2} alignItems={"center"}>
+
+        <Stack direction="row" spacing={1}>
           <IconButton
-            onClick={() => {
-              dispatch(StartAudioCall(id));
-              handleClose();
+            onClick={handleAudioCall}
+            sx={{
+              backgroundColor: theme.palette.primary.main + "08",
+              border: `1px solid ${theme.palette.primary.main + "20"}`,
+              "&:hover": {
+                backgroundColor: theme.palette.primary.main + "15",
+              },
             }}
           >
-            <Phone style={{ color: theme.palette.primary.main }} />
+            <Phone size={20} color={theme.palette.primary.main} />
           </IconButton>
 
           <IconButton
-            onClick={() => {
-              dispatch(StartVideoCall(id));
-              handleClose();
+            onClick={handleVideoCall}
+            sx={{
+              backgroundColor: theme.palette.error.main + "08",
+              border: `1px solid ${theme.palette.error.main + "20"}`,
+              "&:hover": {
+                backgroundColor: theme.palette.error.main + "15",
+              },
             }}
           >
-            <VideoCamera style={{ color: theme.palette.primary.main }} />
+            <VideoCamera size={20} color={theme.palette.error.main} />
           </IconButton>
         </Stack>
       </Stack>
-    </StyledChatBox>
+    </CallCard>
   );
 };
 

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   Box,
   Badge,
@@ -7,12 +7,14 @@ import {
   Typography,
   IconButton,
   Button,
+  CircularProgress,
 } from "@mui/material";
 import { styled, useTheme } from "@mui/material/styles";
 import { Chat } from "phosphor-react";
 import { socket } from "../socket";
-
-const user_id = window.localStorage.getItem("user_id");
+import { useKeycloak } from "@react-keycloak/web";
+import { useDispatch } from "react-redux";
+import { showSnackbar } from "../redux/slices/app";
 
 const StyledChatBox = styled(Box)(({ theme }) => ({
   "&:hover": {
@@ -49,21 +51,57 @@ const StyledBadge = styled(Badge)(({ theme }) => ({
   },
 }));
 
-const UserElement = ({ img, firstName, lastName, online, _id }) => {
+const UserElement = ({
+  keycloakId,
+  name,
+  username,
+  avatar,
+  img,
+  online,
+  status,
+  friendRequestStatus = "none",
+  onSendRequest,
+  onCancelRequest,
+}) => {
   const theme = useTheme();
+  const [isLoading, setIsLoading] = useState(false);
 
-  const name = `${firstName} ${lastName}`;
+  const userId = keycloakId;
+
+  const handleSendRequest = async () => {
+    if (onSendRequest && userId) {
+      setIsLoading(true);
+      try {
+        await onSendRequest(userId);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  const handleCancelRequest = async () => {
+    if (onCancelRequest && userId) {
+      setIsLoading(true);
+      try {
+        await onCancelRequest(userId);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  const displayName = name || username || "Unknown User";
+  const displayAvatar = avatar || img;
+  const displayStatus = status || (online ? "Online" : "Offline");
 
   return (
     <StyledChatBox
       sx={{
         width: "100%",
-
         borderRadius: 1,
-
         backgroundColor: theme.palette.background.paper,
+        p: 2,
       }}
-      p={2}
     >
       <Stack
         direction="row"
@@ -71,32 +109,47 @@ const UserElement = ({ img, firstName, lastName, online, _id }) => {
         justifyContent="space-between"
       >
         <Stack direction="row" alignItems={"center"} spacing={2}>
-          {" "}
           {online ? (
             <StyledBadge
               overlap="circular"
               anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
               variant="dot"
             >
-              <Avatar alt={name} src={img} />
+              <Avatar alt={displayName} src={displayAvatar} />
             </StyledBadge>
           ) : (
-            <Avatar alt={name} src={img} />
+            <Avatar alt={displayName} src={displayAvatar} />
           )}
           <Stack spacing={0.3}>
-            <Typography variant="subtitle2">{name}</Typography>
+            <Typography variant="subtitle2">{displayName}</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {displayStatus}
+            </Typography>
           </Stack>
         </Stack>
         <Stack direction={"row"} spacing={2} alignItems={"center"}>
-          <Button
-            onClick={() => {
-              socket.emit("friend_request", { to: _id, from: user_id }, () => {
-                alert("request sent");
-              });
-            }}
-          >
-            Send Request
-          </Button>
+          {friendRequestStatus === "pending" ? (
+            <Button
+              onClick={handleCancelRequest}
+              disabled={isLoading}
+              variant="outlined"
+              color="error"
+              size="small"
+              startIcon={isLoading ? <CircularProgress size={16} /> : null}
+            >
+              {isLoading ? "Canceling..." : "Cancel Request"}
+            </Button>
+          ) : (
+            <Button
+              onClick={handleSendRequest}
+              disabled={isLoading}
+              variant="contained"
+              size="small"
+              startIcon={isLoading ? <CircularProgress size={16} /> : null}
+            >
+              {isLoading ? "Sending..." : "Send Request"}
+            </Button>
+          )}
         </Stack>
       </Stack>
     </StyledChatBox>
@@ -105,27 +158,130 @@ const UserElement = ({ img, firstName, lastName, online, _id }) => {
 
 const FriendRequestElement = ({
   img,
-  firstName,
-  lastName,
+  username,
   incoming,
   missed,
   online,
   id,
+  sender,
 }) => {
   const theme = useTheme();
+  const { keycloak } = useKeycloak();
+  const dispatch = useDispatch();
+  const [isLoading, setIsLoading] = useState(false);
 
-  const name = `${firstName} ${lastName}`;
+  const name = username || sender?.username || "Unknown User";
+  const userAvatar = img || sender?.avatar;
+  const userOnline = online || sender?.online;
+
+  const handleAcceptRequest = async () => {
+    try {
+      setIsLoading(true);
+
+      // Gọi API chấp nhận friend request
+      const response = await fetch("/users/accept-friend-request", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${keycloak.token}`,
+        },
+        body: JSON.stringify({
+          requestId: id,
+          keycloakId: keycloak.subject,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.status === "success") {
+        dispatch(
+          showSnackbar({
+            severity: "success",
+            message: "Friend request accepted successfully! 🎉",
+          })
+        );
+
+        // Emit socket event để cập nhật real-time
+        socket.emit("accept_request", { request_id: id });
+      } else {
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: data.message || "Failed to accept friend request",
+          })
+        );
+      }
+    } catch (error) {
+      console.error("Error accepting friend request:", error);
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "Failed to accept friend request",
+        })
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRejectRequest = async () => {
+    try {
+      setIsLoading(true);
+
+      // Gọi API từ chối friend request
+      const response = await fetch("/users/reject-friend-request", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${keycloak.token}`,
+        },
+        body: JSON.stringify({
+          requestId: id,
+          keycloakId: keycloak.subject,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.status === "success") {
+        dispatch(
+          showSnackbar({
+            severity: "success",
+            message: "Friend request rejected",
+          })
+        );
+
+        // Emit socket event để cập nhật real-time
+        socket.emit("reject_request", { request_id: id });
+      } else {
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: data.message || "Failed to reject friend request",
+          })
+        );
+      }
+    } catch (error) {
+      console.error("Error rejecting friend request:", error);
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "Failed to reject friend request",
+        })
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <StyledChatBox
       sx={{
         width: "100%",
-
         borderRadius: 1,
-
         backgroundColor: theme.palette.background.paper,
+        p: 2,
       }}
-      p={2}
     >
       <Stack
         direction="row"
@@ -133,30 +289,42 @@ const FriendRequestElement = ({
         justifyContent="space-between"
       >
         <Stack direction="row" alignItems={"center"} spacing={2}>
-          {" "}
-          {online ? (
+          {userOnline ? (
             <StyledBadge
               overlap="circular"
               anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
               variant="dot"
             >
-              <Avatar alt={name} src={img} />
+              <Avatar alt={name} src={userAvatar} />
             </StyledBadge>
           ) : (
-            <Avatar alt={name} src={img} />
+            <Avatar alt={name} src={userAvatar} />
           )}
           <Stack spacing={0.3}>
             <Typography variant="subtitle2">{name}</Typography>
+            <Typography variant="caption" color="text.secondary">
+              Sent you a friend request
+            </Typography>
           </Stack>
         </Stack>
-        <Stack direction={"row"} spacing={2} alignItems={"center"}>
+        <Stack direction={"row"} spacing={1} alignItems={"center"}>
           <Button
-            onClick={() => {
-              //  emit "accept_request" event
-              socket.emit("accept_request", { request_id: id });
-            }}
+            onClick={handleAcceptRequest}
+            disabled={isLoading}
+            variant="contained"
+            size="small"
+            startIcon={isLoading ? <CircularProgress size={16} /> : null}
           >
-            Accept Request
+            Accept
+          </Button>
+          <Button
+            onClick={handleRejectRequest}
+            disabled={isLoading}
+            variant="outlined"
+            color="error"
+            size="small"
+          >
+            Reject
           </Button>
         </Stack>
       </Stack>
@@ -164,31 +332,55 @@ const FriendRequestElement = ({
   );
 };
 
-// FriendElement
-
 const FriendElement = ({
   img,
-  firstName,
-  lastName,
-  incoming,
-  missed,
+  username,
   online,
   _id,
+  keycloakId,
+  name,
+  avatar,
 }) => {
   const theme = useTheme();
+  const { keycloak } = useKeycloak();
+  const dispatch = useDispatch();
 
-  const name = `${firstName} ${lastName}`;
+  const displayName = name || username || "Unknown User";
+  const displayAvatar = avatar || img;
+
+  const handleStartConversation = () => {
+    try {
+      // start a new conversation
+      socket.emit("start_conversation", {
+        to: keycloakId || _id,
+        from: keycloak.subject,
+      });
+
+      dispatch(
+        showSnackbar({
+          severity: "success",
+          message: "Starting conversation...",
+        })
+      );
+    } catch (error) {
+      console.error("Error starting conversation:", error);
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "Failed to start conversation",
+        })
+      );
+    }
+  };
 
   return (
     <StyledChatBox
       sx={{
         width: "100%",
-
         borderRadius: 1,
-
         backgroundColor: theme.palette.background.paper,
+        p: 2,
       }}
-      p={2}
     >
       <Stack
         direction="row"
@@ -196,29 +388,26 @@ const FriendElement = ({
         justifyContent="space-between"
       >
         <Stack direction="row" alignItems={"center"} spacing={2}>
-          {" "}
           {online ? (
             <StyledBadge
               overlap="circular"
               anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
               variant="dot"
             >
-              <Avatar alt={name} src={img} />
+              <Avatar alt={displayName} src={displayAvatar} />
             </StyledBadge>
           ) : (
-            <Avatar alt={name} src={img} />
+            <Avatar alt={displayName} src={displayAvatar} />
           )}
           <Stack spacing={0.3}>
-            <Typography variant="subtitle2">{name}</Typography>
+            <Typography variant="subtitle2">{displayName}</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {online ? "Online" : "Offline"}
+            </Typography>
           </Stack>
         </Stack>
         <Stack direction={"row"} spacing={2} alignItems={"center"}>
-          <IconButton
-            onClick={() => {
-              // start a new conversation
-              socket.emit("start_conversation", { to: _id, from: user_id });
-            }}
-          >
+          <IconButton onClick={handleStartConversation}>
             <Chat />
           </IconButton>
         </Stack>

@@ -27,7 +27,7 @@ import {
   UpdateAudioCallDialog,
 } from "../../redux/slices/audioCall";
 import AudioCallNotification from "../../sections/dashboard/Audio/CallNotification";
-import AudioCallDialog from "../../sections/dashboard/Audio/CallDialog";
+import AudioCallDialog from "../../sections/dashboard/Audio/AudioCallDialog";
 
 import {
   PushToVideoCallQueue,

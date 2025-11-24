@@ -1,4 +1,4 @@
-// Group.js - ĐÃ SỬA LỖI TRUYỀN MESSAGES
+// Group.js - ĐÃ SỬA LỖI SCROLL HOÀN TOÀN
 import React, { useState, useEffect } from "react";
 import {
   Box,
@@ -63,13 +63,13 @@ const Group = () => {
   const pinnedRooms = filteredRooms.filter((room) => room?.pinned);
   const allRooms = filteredRooms.filter((room) => !room?.pinned);
 
-  // 🆕 THÊM: Render loading state
+  // Render loading state
   if (isLoading && rooms.length === 0) {
     return (
       <Box
         sx={{
           position: "relative",
-          height: "100%",
+          height: "100vh",
           width: 320,
           backgroundColor:
             theme.palette.mode === "light"
@@ -91,13 +91,13 @@ const Group = () => {
     );
   }
 
-  // 🆕 THÊM: Render error state
+  // Render error state
   if (error && rooms.length === 0) {
     return (
       <Box
         sx={{
           position: "relative",
-          height: "100%",
+          height: "100vh",
           width: 320,
           backgroundColor:
             theme.palette.mode === "light"
@@ -120,7 +120,7 @@ const Group = () => {
     <Box
       sx={{
         position: "relative",
-        height: "100%",
+        height: "100vh",
         width: 320,
         backgroundColor:
           theme.palette.mode === "light"
@@ -129,27 +129,32 @@ const Group = () => {
         boxShadow: "0px 0px 2px rgba(0, 0, 0, 0.25)",
       }}
     >
-      <Stack p={3} spacing={2} sx={{ maxHeight: "100vh" }}>
-        {/* Header */}
-        <Stack
-          alignItems={"center"}
-          justifyContent="space-between"
-          direction="row"
-        >
-          <Stack alignItems="center" direction="row" spacing={1}>
-            <Typography variant="h5">Groups</Typography>
-            <Typography variant="caption" color="text.secondary">
-              {rooms.length} groups
-            </Typography>
+      <Stack
+        p={3}
+        spacing={2}
+        sx={{
+          height: "100%",
+          overflow: "hidden",
+        }}
+      >
+        {/* Header - Chiếm khoảng 80px */}
+        <Box sx={{ minHeight: "40px" }}>
+          <Stack
+            alignItems={"center"}
+            justifyContent="space-between"
+            direction="row"
+          >
+            <Stack alignItems="center" direction="row" spacing={1}>
+              <Typography variant="h5">Groups</Typography>
+              <Typography variant="caption" color="text.secondary">
+                {rooms.length} groups
+              </Typography>
+            </Stack>
           </Stack>
+        </Box>
 
-          <IconButton onClick={handleOpenDialog}>
-            <Plus style={{ color: theme.palette.primary.main }} />
-          </IconButton>
-        </Stack>
-
-        {/* Search */}
-        <Stack sx={{ width: "100%" }}>
+        {/* Search - Chiếm khoảng 56px */}
+        <Box sx={{ minHeight: "56px" }}>
           <Search>
             <SearchIconWrapper>
               <MagnifyingGlass color="#709CE6" />
@@ -161,27 +166,41 @@ const Group = () => {
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </Search>
-        </Stack>
+        </Box>
 
-        {/* Create Group */}
-        <Stack
-          justifyContent={"space-between"}
-          alignItems={"center"}
-          direction={"row"}
-        >
-          <Typography variant="subtitle2" sx={{ cursor: "pointer" }}>
-            Create New Group
-          </Typography>
-          <IconButton onClick={handleOpenDialog}>
-            <Plus style={{ color: theme.palette.primary.main }} />
-          </IconButton>
-        </Stack>
+        {/* Create Group - Chiếm khoảng 40px */}
+        <Box sx={{ minHeight: "40px" }}>
+          <Stack
+            justifyContent={"space-between"}
+            alignItems={"center"}
+            direction={"row"}
+          >
+            <Typography variant="subtitle2" sx={{ cursor: "pointer" }}>
+              Create New Group
+            </Typography>
+            <IconButton onClick={handleOpenDialog}>
+              <Plus style={{ color: theme.palette.primary.main }} />
+            </IconButton>
+          </Stack>
+        </Box>
 
         <Divider />
 
-        {/* Groups List */}
-        <Stack sx={{ flexGrow: 1, overflow: "hidden", height: "100%" }}>
-          <SimpleBarStyle timeout={500} clickOnTrack={false}>
+        {/* 🎯 PHẦN QUAN TRỌNG: Groups List với chiều cao động */}
+        <Box
+          sx={{
+            flex: 1, // Chiếm toàn bộ không gian còn lại
+            minHeight: 0, // QUAN TRỌNG: Cho phép shrink
+            overflow: "hidden",
+            border: "1px solid transparent", // Debug border (có thể xóa sau)
+          }}
+        >
+          <SimpleBarStyle
+            style={{
+              height: "100%",
+              maxHeight: "100%",
+            }}
+          >
             <Stack spacing={2.4}>
               {/* Pinned Groups */}
               {pinnedRooms.length > 0 && (
@@ -200,9 +219,8 @@ const Group = () => {
                       online={room.onlineMembers > 0}
                       currentRoomId={room_id}
                       isActive={room_id === room.id}
-                      // 🆕 SỬA QUAN TRỌNG: Truyền đúng messages từ room
                       conversation={{
-                        messages: room.messages || [], // 🆕 SỬ DỤNG room.messages thay vì []
+                        messages: room.messages || [],
                         user_id: room.createdBy?.keycloakId,
                       }}
                       isGroup={true}
@@ -218,60 +236,61 @@ const Group = () => {
                 </>
               )}
 
-              {/* All Groups */}
+              {/* All Groups - PHẦN CẦN SCROLL */}
               <Typography variant="subtitle2" sx={{ color: "#676667" }}>
                 All Groups ({allRooms.length})
               </Typography>
 
-              {allRooms.length > 0 ? (
-                allRooms.map((room) => (
-                  <ChatElement
-                    key={room.id}
-                    id={room.id}
-                    name={room.name || "Unnamed Group"}
-                    msg={room.msg || "No messages yet"}
-                    time={room.time || ""}
-                    unread={room.unread || 0}
-                    online={room.onlineMembers > 0}
-                    currentRoomId={room_id}
-                    isActive={room_id === room.id}
-                    // 🆕 SỬA QUAN TRỌNG: Truyền đúng messages từ room
-                    conversation={{
-                      messages: room.messages || [], // 🆕 SỬ DỤNG room.messages thay vì []
-                      user_id: room.createdBy?.keycloakId,
-                    }}
-                    isGroup={true}
-                    membersCount={room.membersCount || 0}
-                    onlineMembers={room.onlineMembers || 0}
-                    img={room.img}
-                    about={room.about}
-                    user_id={room.createdBy?.keycloakId}
-                    pinned={room.pinned}
-                  />
-                ))
-              ) : rooms.length === 0 ? (
-                <Box sx={{ textAlign: "center", py: 4 }}>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    gutterBottom
-                  >
-                    No groups found
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    Create your first group to get started!
-                  </Typography>
-                </Box>
-              ) : filteredRooms.length === 0 ? (
-                <Box sx={{ textAlign: "center", py: 4 }}>
-                  <Typography variant="body2" color="text.secondary">
-                    No groups match your search
-                  </Typography>
-                </Box>
-              ) : null}
+              <Stack spacing={1.5}>
+                {allRooms.length > 0 ? (
+                  allRooms.map((room) => (
+                    <ChatElement
+                      key={room.id}
+                      id={room.id}
+                      name={room.name || "Unnamed Group"}
+                      msg={room.msg || "No messages yet"}
+                      time={room.time || ""}
+                      unread={room.unread || 0}
+                      online={room.onlineMembers > 0}
+                      currentRoomId={room_id}
+                      isActive={room_id === room.id}
+                      conversation={{
+                        messages: room.messages || [],
+                        user_id: room.createdBy?.keycloakId,
+                      }}
+                      isGroup={true}
+                      membersCount={room.membersCount || 0}
+                      onlineMembers={room.onlineMembers || 0}
+                      img={room.img}
+                      about={room.about}
+                      user_id={room.createdBy?.keycloakId}
+                      pinned={room.pinned}
+                    />
+                  ))
+                ) : rooms.length === 0 ? (
+                  <Box sx={{ textAlign: "center", py: 4 }}>
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
+                      gutterBottom
+                    >
+                      No groups found
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Create your first group to get started!
+                    </Typography>
+                  </Box>
+                ) : filteredRooms.length === 0 ? (
+                  <Box sx={{ textAlign: "center", py: 4 }}>
+                    <Typography variant="body2" color="text.secondary">
+                      No groups match your search
+                    </Typography>
+                  </Box>
+                ) : null}
+              </Stack>
             </Stack>
           </SimpleBarStyle>
-        </Stack>
+        </Box>
       </Stack>
 
       {/* Create Group Dialog */}

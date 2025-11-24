@@ -2,7 +2,8 @@
 import { createSlice } from "@reduxjs/toolkit";
 import api from "../../utils/axios";
 import { v4 } from "uuid";
-import S3 from "../../utils/s3";
+// SỬA: Import named exports thay vì default import
+import { uploadToS3, getS3Url } from "../../utils/s3";
 import { S3_BUCKET_NAME } from "../../config";
 
 // ----------------------------------------------------------------------
@@ -39,6 +40,19 @@ const slice = createSlice({
   reducers: {
     fetchCallLogs(state, action) {
       state.call_logs = action.payload.call_logs;
+    },
+    addNewCallLog: (state, action) => {
+      state.call_logs.unshift(action.payload.call);
+    },
+    updateCallLogStatus: (state, action) => {
+      const { callId, status, endedAt } = action.payload;
+      const callIndex = state.call_logs.findIndex(
+        (call) => call._id === callId
+      );
+      if (callIndex !== -1) {
+        state.call_logs[callIndex].status = status;
+        state.call_logs[callIndex].endedAt = endedAt;
+      }
     },
     fetchUser(state, action) {
       state.user = action.payload.user;
@@ -169,23 +183,163 @@ export const FetchAllUsers = () => async (dispatch) => {
   }
 };
 
-export const FetchFriends = () => async (dispatch) => {
+export const FetchFriends = (keycloakId) => async (dispatch) => {
   try {
-    const res = await api.get("/users/get-friends");
+    console.log("🔍 Fetching friends for:", keycloakId);
+
+    const res = await api.post("/users/get-friends", { keycloakId });
+
+    console.log("✅ Friends fetched:", res.data.data);
     dispatch(slice.actions.updateFriends({ friends: res.data.data }));
   } catch (err) {
     console.error("FetchFriends error:", err);
+    // Có thể dispatch action error nếu cần
+    dispatch(
+      showSnackbar({
+        severity: "error",
+        message: "Failed to fetch friends",
+      })
+    );
   }
 };
 
-export const FetchFriendRequests = () => async (dispatch) => {
+export const FetchFriendRequests = (keycloakId) => async (dispatch) => {
   try {
-    const res = await api.get("/users/get-requests");
+    console.log("🔍 Fetching friend requests for:", keycloakId);
+
+    const res = await api.post("/users/get-requests", { keycloakId });
+
+    console.log("✅ Friend requests fetched:", res.data.data);
     dispatch(slice.actions.updateFriendRequests({ requests: res.data.data }));
   } catch (err) {
     console.error("FetchFriendRequests error:", err);
+    dispatch(
+      showSnackbar({
+        severity: "error",
+        message: "Failed to fetch friend requests",
+      })
+    );
   }
 };
+
+export const SendFriendRequest =
+  (senderKeycloakId, receiverKeycloakId) => async (dispatch) => {
+    try {
+      console.log("📨 Sending friend request:", {
+        senderKeycloakId,
+        receiverKeycloakId,
+      });
+
+      const res = await api.post("/users/send-friend-request", {
+        senderKeycloakId,
+        receiverKeycloakId,
+      });
+
+      console.log("✅ Friend request sent:", res.data.data);
+
+      dispatch(
+        showSnackbar({
+          severity: "success",
+          message: "Friend request sent successfully",
+        })
+      );
+
+      return res.data;
+    } catch (err) {
+      console.error("SendFriendRequest error:", err);
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "Failed to send friend request",
+        })
+      );
+      throw err;
+    }
+  };
+
+export const CancelFriendRequest =
+  (senderKeycloakId, recipientKeycloakId) => async (dispatch) => {
+    try {
+      console.log("🗑️ Canceling friend request:", {
+        senderKeycloakId,
+        recipientKeycloakId,
+      });
+
+      const res = await api.post("/users/cancel-friend-request", {
+        senderKeycloakId,
+        recipientKeycloakId,
+      });
+
+      console.log("✅ Friend request canceled:", res.data);
+
+      dispatch(
+        showSnackbar({
+          severity: "success",
+          message: "Friend request canceled",
+        })
+      );
+
+      return res.data;
+    } catch (err) {
+      console.error("CancelFriendRequest error:", err);
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "Failed to cancel friend request",
+        })
+      );
+      throw err;
+    }
+  };
+
+export const RespondToFriendRequest =
+  (requestId, keycloakId, action) => async (dispatch) => {
+    try {
+      console.log("📨 Responding to friend request:", {
+        requestId,
+        keycloakId,
+        action,
+      });
+
+      const res = await api.post("/users/respond-friend-request", {
+        requestId,
+        keycloakId,
+        action, // 'accept' or 'reject'
+      });
+
+      console.log("✅ Friend request responded:", res.data.data);
+
+      // Cập nhật state
+      if (action === "accept") {
+        dispatch(
+          showSnackbar({
+            severity: "success",
+            message: "Friend request accepted",
+          })
+        );
+        // Có thể fetch lại danh sách bạn bè
+        dispatch(FetchFriends(keycloakId));
+      } else {
+        dispatch(
+          showSnackbar({
+            severity: "info",
+            message: "Friend request rejected",
+          })
+        );
+      }
+
+      return res.data;
+    } catch (err) {
+      console.error("RespondToFriendRequest error:", err);
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "Failed to respond to friend request",
+        })
+      );
+      throw err;
+    }
+  };
 
 // 🆕 Cập nhật SelectConversation để hỗ trợ cả group
 export const SelectConversation =
@@ -204,10 +358,16 @@ export const SelectConversation =
 // call logs
 export const FetchCallLogs = () => async (dispatch) => {
   try {
-    const res = await api.get("/users/get-call-logs");
+    const res = await api.get("/users/call/history");
     dispatch(slice.actions.fetchCallLogs({ call_logs: res.data.data }));
   } catch (err) {
     console.error("FetchCallLogs error:", err);
+    dispatch(
+      showSnackbar({
+        severity: "error",
+        message: "Failed to fetch call logs",
+      })
+    );
   }
 };
 
@@ -218,36 +378,60 @@ export const FetchUserProfile = () => async (dispatch) => {
     dispatch(slice.actions.fetchUser({ user: res.data.data }));
   } catch (err) {
     console.error("FetchUserProfile error:", err);
+    dispatch(
+      showSnackbar({
+        severity: "error",
+        message: "Failed to fetch user profile",
+      })
+    );
   }
 };
 
+// SỬA: UpdateUserProfile với uploadToS3
 export const UpdateUserProfile = (formValues) => async (dispatch) => {
   const file = formValues.avatar;
-  const key = v4();
 
   try {
-    S3.getSignedUrl(
-      "putObject",
-      { Bucket: S3_BUCKET_NAME, Key: key, ContentType: `image/${file.type}` },
-      async (_err, presignedURL) => {
-        if (presignedURL) {
-          await fetch(presignedURL, {
-            method: "PUT",
-            body: file,
-            headers: { "Content-Type": file.type },
-          });
-        }
-      }
-    );
+    if (file) {
+      console.log("📤 Uploading avatar...");
 
-    const res = await api.put("/users/update-me", {
-      ...formValues,
-      avatar: key,
-    });
+      // Sử dụng hàm uploadToS3 từ utils/s3
+      const uploadResult = await uploadToS3(file);
 
-    dispatch(slice.actions.updateUser({ user: res.data.data }));
+      console.log("✅ Avatar uploaded:", uploadResult);
+
+      // Gọi API update user với avatar fileKey
+      const res = await api.put("/users/update-me", {
+        ...formValues,
+        avatar: uploadResult.fileKey, // Lưu fileKey vào database
+      });
+
+      dispatch(slice.actions.updateUser({ user: res.data.data }));
+      dispatch(
+        showSnackbar({
+          severity: "success",
+          message: "Profile updated successfully",
+        })
+      );
+    } else {
+      // Nếu không có file avatar, chỉ update thông tin khác
+      const res = await api.put("/users/update-me", formValues);
+      dispatch(slice.actions.updateUser({ user: res.data.data }));
+      dispatch(
+        showSnackbar({
+          severity: "success",
+          message: "Profile updated successfully",
+        })
+      );
+    }
   } catch (err) {
     console.error("UpdateUserProfile error:", err);
+    dispatch(
+      showSnackbar({
+        severity: "error",
+        message: "Failed to update profile",
+      })
+    );
   }
 };
 

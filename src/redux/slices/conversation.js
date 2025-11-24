@@ -289,12 +289,17 @@ const slice = createSlice({
       // Cho phép set null để clear conversation
       if (action.payload === null) {
         state.direct_chat.current_conversation = { id: null, messages: [] };
-        state.direct_chat.current_messages = [];
+        state.direct_chat.current_messages = []; // 🆕 QUAN TRỌNG: Clear current_messages
         console.log("✅ Current conversation cleared");
         return;
       }
 
+      // 🆕 QUAN TRỌNG: Clear current_messages khi chuyển conversation
+      state.direct_chat.current_messages = [];
+
       state.direct_chat.current_conversation = action.payload;
+
+      console.log("✅ Current conversation set, messages cleared");
     },
 
     // Clear current room
