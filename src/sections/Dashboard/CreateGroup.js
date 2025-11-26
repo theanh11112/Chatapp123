@@ -65,7 +65,7 @@ const CreateGroupForm = ({ handleClose, users, isLoadingUsers }) => {
 
       console.log("🚀 Sending to server:", groupData);
 
-      const response = await api.post("users/creats/group", groupData);
+      const response = await api.post("/users/creats/group", groupData);
 
       if (response.data.status === "success") {
         console.log("✅ Group created successfully:", response.data);

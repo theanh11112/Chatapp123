@@ -1612,7 +1612,7 @@ export const fetchDirectConversations =
 export const fetchGroupRooms = (keycloakId) => async (dispatch) => {
   dispatch(fetchGroupRoomsStart());
   try {
-    const res = await api.post("/users/rooms/group", {
+    const res = await api.post("users/rooms/group", {
       keycloakId,
     });
     console.log("✅ Group rooms response:", {

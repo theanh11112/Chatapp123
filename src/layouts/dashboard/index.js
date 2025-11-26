@@ -7,7 +7,7 @@ import { useKeycloak } from "@react-keycloak/web";
 import SideBar from "./SideNav";
 import LoadingScreen from "../../components/LoadingScreen";
 
-import { setKeycloakUser } from "../../redux/slices/auth";
+import { setKeycloakUser, setUserInfo } from "../../redux/slices/auth"; // ✅ THÊM setUserInfo
 import { connectSocket, getSocket } from "../../socket";
 
 import {
@@ -35,6 +35,7 @@ import {
 } from "../../redux/slices/videoCall";
 import VideoCallNotification from "../../sections/dashboard/video/CallNotification";
 import VideoCallDialog from "../../sections/dashboard/video/CallDialog";
+import CompanyChatBox from "../../components/ChatBox/CompanyChatBox";
 
 const formatMessageTime = (ts) =>
   ts
@@ -51,7 +52,7 @@ const DashboardLayout = ({ showChat = false, children }) => {
   const [isReady, setIsReady] = useState(false);
   const [socketReady, setSocketReady] = useState(false);
 
-  const { user_id, role, isLoggedIn } = useSelector((s) => s.auth);
+  const { user_id, role, isLoggedIn, userInfo } = useSelector((s) => s.auth); // ✅ LẤY userInfo từ auth
   const { conversations, current_conversation } = useSelector(
     (s) => s.conversation.direct_chat
   );
@@ -65,7 +66,7 @@ const DashboardLayout = ({ showChat = false, children }) => {
     (s) => s.videoCall
   );
 
-  // 1️⃣ Đồng bộ Keycloak vào Redux
+  // 🆕 HOÀN THIỆN: Đồng bộ Keycloak vào Redux với UserInfo đầy đủ và ROLE CAO NHẤT
   useEffect(() => {
     if (!initialized || !keycloak.authenticated) return;
 
@@ -88,16 +89,44 @@ const DashboardLayout = ({ showChat = false, children }) => {
         ].includes(r)
     );
 
-    const userRole =
-      filteredRoles.find((r) =>
-        ["admin", "moderator", "bot", "guest"].includes(r)
-      ) || "user";
+    // ✅ XÁC ĐỊNH ROLE CAO NHẤT THEO THỨ TỰ ƯU TIÊN
+    const rolePriority = ["admin", "moderator", "user"];
+    let highestRole = "user";
 
+    for (const role of rolePriority) {
+      if (filteredRoles.includes(role)) {
+        highestRole = role;
+        break;
+      }
+    }
+
+    console.log("🎯 Role determination:", {
+      allRoles: filteredRoles,
+      highestRole: highestRole,
+    });
+
+    // ✅ TẠO userInfo CHUẨN cho chatbot
+    const userInfoData = {
+      user_id: tokenData.sub || "user001",
+      employee_id:
+        tokenData.employee_id || `EMP${tokenData.sub?.slice(-4) || "001"}`,
+      department: tokenData.department || "General",
+      role: highestRole, // ✅ DÙNG ROLE CAO NHẤT
+      permission_level: parseInt(tokenData.permission_level) || 2,
+    };
+
+    console.log("👤 Dashboard - Setting userInfo:", userInfoData);
+
+    // ✅ SET USERINFO RIÊNG
+    dispatch(setUserInfo(userInfoData));
+
+    // ✅ SET KEYCLOAK USER với userInfo
     dispatch(
       setKeycloakUser({
-        user_id: tokenData.sub,
-        role: userRole,
+        user_id: userInfoData.user_id,
+        role: highestRole, // ✅ DÙNG ROLE CAO NHẤT
         token: keycloak.token,
+        userInfo: userInfoData, // ✅ TRUYỀN userInfo vào đây
       })
     );
 
@@ -194,8 +223,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
       });
 
       // 🆕 THÊM: Listener cho direct reply messages
-      // THAY THẾ đoạn code text_message_reply listener hiện tại bằng:
-
       sock.on("text_message_reply", (data) => {
         console.log("11111", data);
 
@@ -565,10 +592,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
       sock.on("video_call_notification", (data) => {
         dispatch(PushToVideoCallQueue(data));
       });
-      // Trong useEffect socket của DashboardLayout, thêm các listeners sau:
-
-      // 🆕 THÊM: Socket listeners cho pinned messages
-      // Trong useEffect socket của DashboardLayout, thêm các listeners sau:
 
       // 🆕 THÊM: Socket listeners cho pinned messages real-time
       sock.on("message_pinned", (data) => {
@@ -673,6 +696,7 @@ const DashboardLayout = ({ showChat = false, children }) => {
           dispatch(fetchPinnedMessages(data.roomId, data.chatType));
         }
       });
+
       // Debug: Log tất cả socket events
       sock.onAny((eventName, ...args) => {
         if (
@@ -726,6 +750,7 @@ const DashboardLayout = ({ showChat = false, children }) => {
 
   useEffect(() => {
     console.log("🔍 DashboardLayout - current state:", {
+      userInfo, // ✅ LOG userInfo để debug
       direct_conversation: {
         id: current_conversation?.id,
         user_id: current_conversation?.user_id,
@@ -741,15 +766,14 @@ const DashboardLayout = ({ showChat = false, children }) => {
       conversations_count: conversations.length,
       rooms_count: rooms.length,
     });
-  }, [current_conversation, current_room, conversations, rooms]);
+  }, [userInfo, current_conversation, current_room, conversations, rooms]);
 
   if (!isReady || !isLoggedIn || !socketReady) return <LoadingScreen />;
 
   return (
     <Stack direction="row">
-      <SideBar role={role} />
+      <SideBar role={role} /> {/* ✅ SẼ HIỂN THỊ ROLE CAO NHẤT */}
       <Outlet />
-
       {open_audio_notification_dialog && (
         <AudioCallNotification open={open_audio_notification_dialog} />
       )}
@@ -759,7 +783,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
           handleClose={() => dispatch(UpdateAudioCallDialog({ state: false }))}
         />
       )}
-
       {open_video_notification_dialog && (
         <VideoCallNotification open={open_video_notification_dialog} />
       )}
@@ -769,6 +792,8 @@ const DashboardLayout = ({ showChat = false, children }) => {
           handleClose={() => dispatch(UpdateVideoCallDialog({ state: false }))}
         />
       )}
+      {/* ✅ COMPANY CHATBOX SẼ TỰ ĐỘNG NHẬN userInfo TỪ REDUX */}
+      <CompanyChatBox />
     </Stack>
   );
 };

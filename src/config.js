@@ -11,7 +11,10 @@ export const ZEGO_SERVER_SECRET =
 export const ZEGO_SERVER_URL =
   "wss://webliveroom1642584767-api.coolzcloud.com/ws";
 
-export const BASE_URL = "http://localhost:3001/";
+export const BASE_URL = "http://localhost:3001";
+
+export const CHATBOT_API_URL =
+  process.env.REACT_APP_CHATBOT_URL || "http://localhost:8001";
 
 // 🚨 QUAN TRỌNG: XÓA AWS CREDENTIALS KHỎI SOURCE CODE
 // Đây là security risk rất lớn!

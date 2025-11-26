@@ -1,4 +1,4 @@
-// App.js - SỬA PHẦN SNACKBAR
+// App.js - HOÀN THIỆN VỚI USERINFO
 import React, { useEffect, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useKeycloak } from "@react-keycloak/web";
@@ -8,12 +8,11 @@ import ThemeSettings from "./components/settings";
 import ThemeProvider from "./theme";
 import Router from "./routes";
 import { closeSnackBar } from "./redux/slices/app";
-import { setKeycloakUser, signOut } from "./redux/slices/auth";
+import { setKeycloakUser, signOut, setUserInfo } from "./redux/slices/auth"; // ✅ THÊM setUserInfo
 import { AuthProvider } from "./contexts/AuthContext";
 import { socket } from "./socket";
 import LoadingScreen from "./components/LoadingScreen";
 
-// 🆕 SỬA: Thay đổi vertical từ "bottom" thành "top"
 const vertical = "top";
 const horizontal = "center";
 
@@ -29,7 +28,7 @@ function App() {
     (state) => state.app?.snackbar ?? {}
   );
 
-  // 🆕 THÊM: Sync Redux với Keycloak
+  // 🆕 HOÀN THIỆN: Sync Redux với Keycloak + UserInfo
   useEffect(() => {
     if (initialized) {
       console.log("🔑 App - Keycloak initialized:", {
@@ -38,14 +37,33 @@ function App() {
       });
 
       if (keycloak.authenticated && keycloak.token) {
+        const tokenData = keycloak.tokenParsed || {};
+
+        // ✅ TẠO userInfo CHUẨN cho chatbot
         const userInfo = {
-          user_id: keycloak.tokenParsed?.sub,
-          role: keycloak.tokenParsed?.realm_access?.roles?.[0] || "user",
-          token: keycloak.token,
+          user_id: tokenData.sub || "user001",
+          employee_id:
+            tokenData.employee_id || `EMP${tokenData.sub?.slice(-4) || "001"}`,
+          department: tokenData.department || "General",
+          role:
+            tokenData.role || tokenData.realm_access?.roles?.[0] || "employee",
+          permission_level: parseInt(tokenData.permission_level) || 2,
         };
 
-        console.log("👤 App - Setting Redux state:", userInfo);
-        dispatch(setKeycloakUser(userInfo));
+        console.log("👤 App - Setting Redux state with userInfo:", userInfo);
+
+        // ✅ SET USERINFO RIÊNG trước
+        dispatch(setUserInfo(userInfo));
+
+        // ✅ SET KEYCLOAK USER với userInfo
+        dispatch(
+          setKeycloakUser({
+            user_id: userInfo.user_id,
+            role: userInfo.role,
+            token: keycloak.token,
+            userInfo: userInfo, // ✅ TRUYỀN userInfo vào đây
+          })
+        );
       } else if (!keycloak.authenticated) {
         console.log("🚪 App - User logged out, clearing Redux");
         dispatch(signOut());
@@ -82,7 +100,6 @@ function App() {
   return (
     <>
       <ThemeProvider>
-        {/* 🆕 SỬA: Chỉ còn một AuthProvider duy nhất */}
         <AuthProvider>
           <ThemeSettings>
             <Router />
@@ -90,20 +107,18 @@ function App() {
         </AuthProvider>
       </ThemeProvider>
 
-      {/* 🆕 SỬA: Snackbar hiển thị ở giữa phía trên */}
       <Snackbar
         anchorOrigin={{ vertical, horizontal }}
         open={open}
         autoHideDuration={4000}
         key={vertical + horizontal}
         onClose={handleCloseSnackbar}
-        // 🆕 THÊM: CSS để căn giữa và đẹp hơn
         sx={{
           "&.MuiSnackbar-root": {
-            top: "80px", // Điều chỉnh khoảng cách từ top
+            top: "80px",
             marginLeft: "100px",
           },
-          zIndex: 9999, // Đảm bảo hiển thị trên cùng
+          zIndex: 9999,
         }}
       >
         <Alert
@@ -111,11 +126,11 @@ function App() {
           severity={severity}
           sx={{
             width: "100%",
-            minWidth: "300px", // 🆕 THÊM: Độ rộng tối thiểu
+            minWidth: "300px",
             "& .MuiAlert-message": {
               overflow: "hidden",
               textOverflow: "ellipsis",
-              textAlign: "center", // 🆕 THÊM: Căn giữa text
+              textAlign: "center",
               flex: 1,
             },
           }}

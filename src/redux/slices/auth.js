@@ -7,6 +7,7 @@ const initialState = {
   role: "user",
   isLoading: false,
   error: false,
+  userInfo: null,
 };
 
 const slice = createSlice({
@@ -14,17 +15,30 @@ const slice = createSlice({
   initialState,
   reducers: {
     setKeycloakUser(state, action) {
-      const { user_id, role, token } = action.payload;
+      const { user_id, role, token, userInfo } = action.payload;
       state.isLoggedIn = true;
       state.user_id = user_id;
       state.role = role || "user";
       state.token = token || "";
+      state.userInfo = userInfo || null;
     },
+    setUserInfo(state, action) {
+      state.userInfo = action.payload;
+    },
+    updateUserInfo(state, action) {
+      if (state.userInfo) {
+        state.userInfo = { ...state.userInfo, ...action.payload };
+      } else {
+        state.userInfo = action.payload;
+      }
+    },
+
     signOut(state) {
       state.isLoggedIn = false;
       state.token = "";
       state.user_id = null;
       state.role = "user";
+      state.userInfo = null;
     },
     setLoading(state, action) {
       state.isLoading = action.payload;
@@ -34,4 +48,10 @@ const slice = createSlice({
 });
 
 export default slice.reducer;
-export const { setKeycloakUser, signOut, setLoading } = slice.actions;
+export const {
+  setKeycloakUser,
+  signOut,
+  setLoading,
+  setUserInfo,
+  updateUserInfo,
+} = slice.actions;

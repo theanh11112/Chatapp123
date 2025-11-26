@@ -462,7 +462,7 @@ const Conversation = ({ isMobile, menu }) => {
         );
 
         // Gọi API để lấy pinned messages
-        const response = await api.post("users/messages/pinned", {
+        const response = await api.post("/users/messages/pinned", {
           roomId: room_id,
           keycloakId: currentUserId,
         });
