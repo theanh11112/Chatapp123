@@ -9,6 +9,7 @@ import {
   Users,
 } from "phosphor-react";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
+import { Person, AccountCircle, PersonOutline } from "@mui/icons-material";
 
 const Profile_Menu = [
   {
@@ -40,6 +41,11 @@ const Nav_Buttons = [
     index: 2,
     icon: <Phone />,
     roles: ["user", "admin", "moderator", "guest"],
+  },
+  {
+    index: 4, // Sửa thành index 3
+    icon: <Person />, // hoặc <AccountCircle />, <PersonOutline />
+    roles: ["user", "moderator", "guest"], // tất cả trừ admin
   },
   {
     index: 4,
