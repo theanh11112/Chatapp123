@@ -1,183 +1,91 @@
-import React, { useState } from "react";
-import {
-  Avatar,
-  Box,
-  Divider,
-  IconButton,
-  Stack,
-  Typography,
-} from "@mui/material";
-
-import {
-  CaretLeft,
-  Bell,
-  Lock,
-  Key,
-  PencilCircle,
-  Image,
-  Note,
-  Keyboard,
-  Info,
-} from "phosphor-react";
-
+// src/pages/dashboard/Settings/index.js
+import React, { useEffect } from "react";
+import { Stack, Box } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
-import { faker } from "@faker-js/faker";
-import ThemeDialog from "../../../sections/dashboard/Settings/ThemeDialog";
-import ShortcutDialog from "../../../sections/dashboard/Settings/ShortcutDialog";
+import { useDispatch, useSelector } from "react-redux";
+import { syncProfileWithApp } from "../../../redux/slices/settingsSlice";
+import { settingServices } from "../../../services/settingServices";
+import { setSettingsFromAPI } from "../../../redux/slices/settingsSlice";
+
+// Components
+import SettingsSidebar from "./components/SettingsSidebar";
+import SettingsContent from "./components/SettingsContent";
+
+// Dialogs
+import ProfileDialog from "./components/dialogs/ProfileDialog";
+import ThemeDialog from "./components/dialogs/ThemeDialog";
+import NotificationsDialog from "./components/dialogs/NotificationsDialog";
+import PrivacyDialog from "./components/dialogs/PrivacyDialog";
+import HelpDialog from "./components/dialogs/HelpDialog";
 
 const Settings = () => {
   const theme = useTheme();
+  const dispatch = useDispatch();
+  const { user } = useSelector((state) => state.app);
+  const { userInfo } = useSelector((state) => state.auth);
 
-  const [openTheme, setOpenTheme] = useState(false);
+  // Sync profile data với app state khi component mount
+  useEffect(() => {
+    console.log("11111", user);
+    dispatch(syncProfileWithApp({ user, userInfo }));
+  }, [dispatch, user, userInfo]);
 
-  const handleOpenTheme = () => {
-    setOpenTheme(true);
-  };
+  // Load settings từ API khi component mount
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        if (userInfo?.keycloakId) {
+          const result = await settingServices.getSettings(userInfo.user_id);
+          dispatch(setSettingsFromAPI(result.data));
+        }
+      } catch (error) {
+        console.error("Error loading settings:", error);
+      }
+    };
 
-  const handleCloseTheme = () => {
-    setOpenTheme(false);
-  };
-  const [openShortcuts, setOpenShortcuts] = useState(false);
-
-  const handleOpenShortcuts = () => {
-    setOpenShortcuts(true);
-  };
-
-  const handleCloseShortcuts = () => {
-    setOpenShortcuts(false);
-  };
-
-  const list = [
-    {
-      key: 0,
-      icon: <Bell size={20} />,
-      title: "Notifications",
-      onclick: () => {},
-    },
-    {
-      key: 1,
-      icon: <Lock size={20} />,
-      title: "Privacy",
-      onclick: () => {},
-    },
-    {
-      key: 2,
-      icon: <Key size={20} />,
-      title: "Security",
-      onclick: () => {},
-    },
-    {
-      key: 3,
-      icon: <PencilCircle size={20} />,
-      title: "Theme",
-      onclick: handleOpenTheme,
-    },
-    {
-      key: 4,
-      icon: <Image size={20} />,
-      title: "Chat Wallpaper",
-      onclick: () => {},
-    },
-    {
-      key: 5,
-      icon: <Note size={20} />,
-      title: "Request Account Info",
-      onclick: () => {},
-    },
-    {
-      key: 6,
-      icon: <Keyboard size={20} />,
-      title: "Keyboard Shortcuts",
-      onclick: handleOpenShortcuts,
-    },
-    {
-      key: 7,
-      icon: <Info size={20} />,
-      title: "Help",
-      onclick: () => {},
-    },
-  ];
+    loadSettings();
+  }, [dispatch, userInfo?.user_id]);
 
   return (
     <>
-      <Stack direction="row" sx={{ width: "100%" }}>
-        {/* LeftPane */}
+      <Stack
+        direction="row"
+        sx={{
+          width: "100%",
+          height: "100vh",
+          overflow: "hidden",
+          backgroundColor: theme.palette.background.default,
+        }}
+      >
+        {/* Left Pane - Sidebar */}
+        <SettingsSidebar />
+
+        {/* Right Pane - Content */}
         <Box
           sx={{
-            overflowY: "scroll",
-     
+            flex: 1,
             height: "100vh",
-            width: 320,
+            overflowY: "auto",
             backgroundColor:
               theme.palette.mode === "light"
-                ? "#F8FAFF"
-                : theme.palette.background,
-
-            boxShadow: "0px 0px 2px rgba(0, 0, 0, 0.25)",
+                ? "#FAFBFC"
+                : theme.palette.background.paper,
+            boxShadow:
+              theme.palette.mode === "light"
+                ? "inset 1px 0 2px rgba(0,0,0,0.04)"
+                : "inset 1px 0 2px rgba(255,255,255,0.04)",
           }}
         >
-          
-          <Stack p={4} spacing={5}>
-            {/* Header */}
-            <Stack direction="row" alignItems={"center"} spacing={3}>
-              <IconButton>
-                <CaretLeft size={24} color={"#4B4B4B"} />
-              </IconButton>
-
-              <Typography variant="h5">Settings</Typography>
-            </Stack>
-
-            {/* Profile */}
-            <Stack direction="row" spacing={3}>
-              <Avatar
-                src={faker.image.avatar()}
-                sx={{ height: 56, width: 56 }}
-              />
-              <Stack spacing={0.5}>
-                <Typography variant="article">{`${faker.name.firstName()} ${faker.name.lastName()}`}</Typography>
-                <Typography variant="body2">{faker.random.words()}</Typography>
-              </Stack>
-            </Stack>
-            {/* List */}
-            <Stack spacing={4}>
-              {list.map(({ key, icon, title, onclick }) => {
-                return (
-                  <>
-                    <Stack
-                      onClick={onclick}
-                      sx={{ cursor: "pointer" }}
-                      spacing={2}
-                    >
-                      <Stack alignItems={"center"} direction="row" spacing={2}>
-                        {icon}
-                        <Typography variant="body2">{title}</Typography>
-                      </Stack>
-                      {key !== 7 && <Divider />}
-                    </Stack>
-                  </>
-                );
-              })}
-            </Stack>
-          </Stack>
+          <SettingsContent />
         </Box>
-        {/* Right Pane */}
-        <Box
-          sx={{
-            height: "100%",
-            width: "calc(100vw - 420px )",
-            backgroundColor:
-              theme.palette.mode === "light"
-                ? "#FFF"
-                : theme.palette.background.paper,
-            borderBottom: "6px solid #0162C4",
-          }}
-        ></Box>
       </Stack>
-      {openTheme && (
-        <ThemeDialog open={openTheme} handleClose={handleCloseTheme} />
-      )}
-      {openShortcuts && <ShortcutDialog open={openShortcuts} handleClose={handleCloseShortcuts} /> }
-      
+
+      {/* Dialogs */}
+      <ProfileDialog />
+      <ThemeDialog />
+      <NotificationsDialog />
+      <PrivacyDialog />
+      <HelpDialog />
     </>
   );
 };

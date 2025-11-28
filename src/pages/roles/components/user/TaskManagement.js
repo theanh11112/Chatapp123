@@ -204,13 +204,6 @@ const TaskManagement = ({
                   : "Hoàn thành"}
               </Button>
               <Button
-                startIcon={<Add />}
-                variant="contained"
-                onClick={handleCreateTask}
-              >
-                Thêm công việc
-              </Button>
-              <Button
                 startIcon={<Refresh />}
                 onClick={handleRefresh}
                 variant="outlined"

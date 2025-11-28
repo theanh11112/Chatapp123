@@ -17,7 +17,6 @@ const taskService = {
 
   // 🆕 Lấy danh sách tasks của user - keycloakId đã có trong body
   async getUserTasks(keycloakId, filters = {}) {
-    console.log("111111", keycloakId);
     try {
       const response = await api.post("/tasks/get-user-tasks", {
         keycloakId,

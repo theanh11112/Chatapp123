@@ -11,6 +11,7 @@ import {
   Box,
   Typography,
   Grid,
+  Alert,
 } from "@mui/material";
 import { Add } from "@mui/icons-material";
 
@@ -38,9 +39,65 @@ export default function CreateTaskDialog({
     dueDate: "",
   });
   const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState({});
+
+  // 🆕 Hàm validate form
+  const validateForm = () => {
+    const newErrors = {};
+
+    if (!newTask.title.trim()) {
+      newErrors.title = "Tiêu đề không được để trống";
+    }
+
+    if (!newTask.assigneeId) {
+      newErrors.assigneeId = "Người nhận không được để trống";
+    }
+
+    // 🆕 Validate due date nếu có
+    if (newTask.dueDate) {
+      const dueDateTime = new Date(newTask.dueDate);
+      const now = new Date();
+
+      if (dueDateTime <= now) {
+        newErrors.dueDate = "Hạn hoàn thành phải ở tương lai";
+      }
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  // 🆕 Hàm kiểm tra có thể submit không
+  const canSubmit = () => {
+    const hasRequiredFields = newTask.title.trim() && newTask.assigneeId;
+
+    if (!hasRequiredFields) return false;
+
+    // Check if due date is valid (if provided)
+    if (newTask.dueDate) {
+      const dueDateTime = new Date(newTask.dueDate);
+      const now = new Date();
+      return dueDateTime > now;
+    }
+
+    return true; // Cho phép tạo task không có due date
+  };
 
   const handleCreateTask = async () => {
-    if (!newTask.title || !newTask.assigneeId) return;
+    if (!validateForm()) return;
+
+    // 🆕 Double-check due date validation
+    if (newTask.dueDate) {
+      const dueDateTime = new Date(newTask.dueDate);
+      const now = new Date();
+
+      if (dueDateTime <= now) {
+        setErrors({
+          dueDate: "Hạn hoàn thành phải ở tương lai",
+        });
+        return;
+      }
+    }
 
     setLoading(true);
     try {
@@ -53,10 +110,52 @@ export default function CreateTaskDialog({
         priority: "medium",
         dueDate: "",
       });
+      setErrors({});
     } catch (error) {
       console.error("Error creating task:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleChange = (field) => (event) => {
+    const value = event.target.value;
+    setNewTask((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+
+    // Clear error when user starts typing
+    if (errors[field]) {
+      setErrors((prev) => ({
+        ...prev,
+        [field]: "",
+      }));
+    }
+
+    // 🆕 Validate due date immediately when changed
+    if (field === "dueDate") {
+      validateDueDate();
+    }
+  };
+
+  // 🆕 Hàm validate due date
+  const validateDueDate = () => {
+    if (newTask.dueDate) {
+      const dueDateTime = new Date(newTask.dueDate);
+      const now = new Date();
+
+      if (dueDateTime <= now) {
+        setErrors((prev) => ({
+          ...prev,
+          dueDate: "Hạn hoàn thành phải ở tương lai",
+        }));
+      } else {
+        setErrors((prev) => ({
+          ...prev,
+          dueDate: "",
+        }));
+      }
     }
   };
 
@@ -68,7 +167,16 @@ export default function CreateTaskDialog({
       priority: "medium",
       dueDate: "",
     });
+    setErrors({});
     onClose();
+  };
+
+  // 🆕 Lấy thời gian mặc định (1 giờ sau)
+  const getDefaultDueDate = () => {
+    const nextHour = new Date();
+    nextHour.setHours(nextHour.getHours() + 1);
+    nextHour.setMinutes(0);
+    return nextHour.toISOString().slice(0, 16); // Format: YYYY-MM-DDTHH:mm
   };
 
   return (
@@ -87,9 +195,9 @@ export default function CreateTaskDialog({
               fullWidth
               label="Tiêu đề task"
               value={newTask.title}
-              onChange={(e) =>
-                setNewTask({ ...newTask, title: e.target.value })
-              }
+              onChange={handleChange("title")}
+              error={!!errors.title}
+              helperText={errors.title}
               placeholder="Nhập tiêu đề task..."
               required
             />
@@ -102,9 +210,7 @@ export default function CreateTaskDialog({
               rows={3}
               label="Mô tả"
               value={newTask.description}
-              onChange={(e) =>
-                setNewTask({ ...newTask, description: e.target.value })
-              }
+              onChange={handleChange("description")}
               placeholder="Mô tả chi tiết task..."
             />
           </Grid>
@@ -115,9 +221,9 @@ export default function CreateTaskDialog({
               select
               label="Người nhận"
               value={newTask.assigneeId}
-              onChange={(e) =>
-                setNewTask({ ...newTask, assigneeId: e.target.value })
-              }
+              onChange={handleChange("assigneeId")}
+              error={!!errors.assigneeId}
+              helperText={errors.assigneeId}
               required
             >
               {users.map((user) => (
@@ -134,9 +240,7 @@ export default function CreateTaskDialog({
               select
               label="Độ ưu tiên"
               value={newTask.priority}
-              onChange={(e) =>
-                setNewTask({ ...newTask, priority: e.target.value })
-              }
+              onChange={handleChange("priority")}
             >
               <MenuItem value="low">Thấp</MenuItem>
               <MenuItem value="medium">Trung bình</MenuItem>
@@ -149,13 +253,38 @@ export default function CreateTaskDialog({
               fullWidth
               type="datetime-local"
               label="Hạn hoàn thành"
-              value={newTask.dueDate}
-              onChange={(e) =>
-                setNewTask({ ...newTask, dueDate: e.target.value })
-              }
+              value={newTask.dueDate || getDefaultDueDate()}
+              onChange={handleChange("dueDate")}
+              error={!!errors.dueDate}
+              helperText={errors.dueDate || "Để trống nếu không có hạn cụ thể"}
               InputLabelProps={{ shrink: true }}
+              inputProps={{
+                min: new Date().toISOString().slice(0, 16), // Không cho chọn thời gian trong quá khứ
+              }}
             />
           </Grid>
+
+          {/* 🆕 Due Date Validation Alert */}
+          {newTask.dueDate &&
+            (() => {
+              const dueDateTime = new Date(newTask.dueDate);
+              const now = new Date();
+              const isValid = dueDateTime > now;
+
+              return (
+                <Grid item xs={12}>
+                  <Alert severity={isValid ? "success" : "error"}>
+                    {isValid
+                      ? `✅ Task cần hoàn thành trước: ${dueDateTime.toLocaleString(
+                          "vi-VN"
+                        )}`
+                      : `❌ Hạn hoàn thành phải ở tương lai! Đã chọn: ${dueDateTime.toLocaleString(
+                          "vi-VN"
+                        )}`}
+                  </Alert>
+                </Grid>
+              );
+            })()}
         </Grid>
       </DialogContent>
 
@@ -166,7 +295,7 @@ export default function CreateTaskDialog({
         <Button
           variant="contained"
           onClick={handleCreateTask}
-          disabled={!newTask.title || !newTask.assigneeId || loading}
+          disabled={!canSubmit() || loading}
         >
           {loading ? "Đang tạo..." : "Tạo Task"}
         </Button>

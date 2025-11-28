@@ -11,7 +11,6 @@ import {
   List,
   ListItem,
   ListItemIcon,
-  ListItemText,
   ListItemSecondaryAction,
   Divider,
   Alert,
@@ -213,89 +212,87 @@ const ReminderSystem = ({
                         {getReminderTypeIcon(reminder.type)}
                       </Box>
                     </ListItemIcon>
-                    <ListItemText
-                      primary={
+
+                    {/* Thay thế ListItemText bằng custom layout để tránh lỗi nesting */}
+                    <Box sx={{ flex: 1, mr: 2 }}>
+                      {/* Primary content */}
+                      <Box
+                        sx={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 1,
+                          mb: 0.5,
+                        }}
+                      >
+                        <Typography
+                          variant="subtitle1"
+                          fontWeight="medium"
+                          color={
+                            reminder.isActive === false
+                              ? "text.secondary"
+                              : "text.primary"
+                          }
+                        >
+                          {reminder.title}
+                        </Typography>
+                        <Chip
+                          label={getReminderTypeText(reminder.type)}
+                          size="small"
+                          color={getReminderTypeColor(reminder.type)}
+                          variant={
+                            reminder.isActive === false ? "outlined" : "filled"
+                          }
+                        />
+                      </Box>
+
+                      {/* Secondary content */}
+                      <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        sx={{ mb: 0.5 }}
+                      >
+                        {reminder.description}
+                      </Typography>
+
+                      {/* Timestamp and status */}
+                      <Box
+                        sx={{ display: "flex", gap: 2, alignItems: "center" }}
+                      >
                         <Box
                           sx={{
                             display: "flex",
                             alignItems: "center",
-                            gap: 1,
-                            mb: 0.5,
+                            gap: 0.5,
                           }}
                         >
-                          <Typography
-                            variant="subtitle1"
-                            fontWeight="medium"
-                            component="div"
-                            color={
-                              reminder.isActive === false
-                                ? "text.secondary"
-                                : "text.primary"
-                            }
-                          >
-                            {reminder.title}
-                          </Typography>
-                          <Chip
-                            label={getReminderTypeText(reminder.type)}
-                            size="small"
-                            color={getReminderTypeColor(reminder.type)}
-                            variant={
-                              reminder.isActive === false
-                                ? "outlined"
-                                : "filled"
-                            }
-                          />
-                        </Box>
-                      }
-                      secondary={
-                        <Box component="div">
-                          <Typography
-                            variant="body2"
-                            color="text.secondary"
-                            component="div"
-                          >
-                            {reminder.description}
-                          </Typography>
-                          <Box
-                            sx={{ display: "flex", gap: 2, mt: 0.5 }}
-                            component="div"
-                          >
-                            <Typography
-                              variant="caption"
-                              sx={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 0.5,
-                              }}
-                              component="div"
-                            >
-                              <AccessTime fontSize="small" />
-                              {reminder.remindAt
-                                ? new Date(reminder.remindAt).toLocaleString(
-                                    "vi-VN"
-                                  )
-                                : "Không có thời gian"}
-                            </Typography>
-                            <Chip
-                              label={getTimeDifference(reminder.remindAt)}
-                              size="small"
-                              variant="outlined"
-                              color={
-                                getTimeDifference(reminder.remindAt).includes(
-                                  "quá hạn"
+                          <AccessTime fontSize="small" />
+                          <Typography variant="caption" color="text.secondary">
+                            {reminder.remindAt
+                              ? new Date(reminder.remindAt).toLocaleString(
+                                  "vi-VN"
                                 )
-                                  ? "error"
-                                  : getTimeDifference(
-                                      reminder.remindAt
-                                    ).includes("Sắp đến")
-                                  ? "warning"
-                                  : "primary"
-                              }
-                            />
-                          </Box>
+                              : "Không có thời gian"}
+                          </Typography>
                         </Box>
-                      }
-                    />
+                        <Chip
+                          label={getTimeDifference(reminder.remindAt)}
+                          size="small"
+                          variant="outlined"
+                          color={
+                            getTimeDifference(reminder.remindAt).includes(
+                              "quá hạn"
+                            )
+                              ? "error"
+                              : getTimeDifference(reminder.remindAt).includes(
+                                  "Sắp đến"
+                                )
+                              ? "warning"
+                              : "primary"
+                          }
+                        />
+                      </Box>
+                    </Box>
+
                     <ListItemSecondaryAction>
                       <IconButton
                         edge="end"
@@ -309,6 +306,8 @@ const ReminderSystem = ({
                       </IconButton>
                     </ListItemSecondaryAction>
                   </ListItem>
+
+                  {index < filteredReminders.length - 1 && <Divider />}
                 </div>
               ))}
             </List>

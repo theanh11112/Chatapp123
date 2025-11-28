@@ -182,8 +182,7 @@ const Call = () => {
               direction="row"
             >
               <Typography variant="h5">Call Log</Typography>
-              <Stack direction="row" spacing={1}>
-                {/* Socket Status Indicator */}
+              {/* <Stack direction="row" spacing={1}>
                 <Box
                   sx={{
                     width: 8,
@@ -195,7 +194,7 @@ const Call = () => {
                     mt: 1,
                   }}
                 />
-              </Stack>
+              </Stack> */}
             </Stack>
 
             {/* Search */}

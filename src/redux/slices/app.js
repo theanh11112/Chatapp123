@@ -401,7 +401,7 @@ export const UpdateUserProfile = (formValues) => async (dispatch) => {
       console.log("✅ Avatar uploaded:", uploadResult);
 
       // Gọi API update user với avatar fileKey
-      const res = await api.put("/users/update-me", {
+      const res = await api.patch("/users/update-me", {
         ...formValues,
         avatar: uploadResult.fileKey, // Lưu fileKey vào database
       });
@@ -415,7 +415,7 @@ export const UpdateUserProfile = (formValues) => async (dispatch) => {
       );
     } else {
       // Nếu không có file avatar, chỉ update thông tin khác
-      const res = await api.put("/users/update-me", formValues);
+      const res = await api.patch("/users/update-me", formValues);
       dispatch(slice.actions.updateUser({ user: res.data.data }));
       dispatch(
         showSnackbar({

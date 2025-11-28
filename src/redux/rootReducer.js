@@ -7,7 +7,7 @@ import videoCallReducer from "./slices/videoCall";
 import authReducer from "./slices/auth";
 import conversationReducer from "./slices/conversation";
 import chatboxReducer from "./slices/chatboxSlice";
-
+import settingsReducer from "./slices/settingsSlice";
 // ----------------------------------------------------------------------
 
 const rootPersistConfig = {
@@ -25,6 +25,7 @@ const rootReducer = combineReducers({
   audioCall: audioCallReducer,
   videoCall: videoCallReducer,
   chatbox: chatboxReducer,
+  settings: settingsReducer,
 });
 
 export { rootPersistConfig, rootReducer };

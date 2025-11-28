@@ -1,3 +1,4 @@
+// src/pages/dashboard/DashboardLayout.js - COMPLETE VERSION
 import React, { useEffect, useState } from "react";
 import { Stack } from "@mui/material";
 import { Outlet } from "react-router-dom";
@@ -7,7 +8,7 @@ import { useKeycloak } from "@react-keycloak/web";
 import SideBar from "./SideNav";
 import LoadingScreen from "../../components/LoadingScreen";
 
-import { setKeycloakUser, setUserInfo } from "../../redux/slices/auth"; // ✅ THÊM setUserInfo
+import { setKeycloakUser, setUserInfo } from "../../redux/slices/auth";
 import { connectSocket, getSocket } from "../../socket";
 
 import {
@@ -20,7 +21,11 @@ import {
   fetchPinnedMessages,
 } from "../../redux/slices/conversation";
 
-import { SelectConversation, showSnackbar } from "../../redux/slices/app";
+import {
+  SelectConversation,
+  showSnackbar,
+  FetchUserProfile,
+} from "../../redux/slices/app";
 
 import {
   PushToAudioCallQueue,
@@ -52,7 +57,8 @@ const DashboardLayout = ({ showChat = false, children }) => {
   const [isReady, setIsReady] = useState(false);
   const [socketReady, setSocketReady] = useState(false);
 
-  const { user_id, role, isLoggedIn, userInfo } = useSelector((s) => s.auth); // ✅ LẤY userInfo từ auth
+  const { user_id, role, isLoggedIn, userInfo } = useSelector((s) => s.auth);
+  const { user } = useSelector((s) => s.app);
   const { conversations, current_conversation } = useSelector(
     (s) => s.conversation.direct_chat
   );
@@ -65,6 +71,14 @@ const DashboardLayout = ({ showChat = false, children }) => {
   const { open_video_notification_dialog, open_video_dialog } = useSelector(
     (s) => s.videoCall
   );
+
+  // 🆕 THÊM: Fetch user profile khi app khởi động
+  useEffect(() => {
+    if (isLoggedIn && !user?._id) {
+      console.log("🔄 DashboardLayout - Fetching user profile");
+      dispatch(FetchUserProfile());
+    }
+  }, [dispatch, isLoggedIn, userInfo, user]);
 
   // 🆕 HOÀN THIỆN: Đồng bộ Keycloak vào Redux với UserInfo đầy đủ và ROLE CAO NHẤT
   useEffect(() => {
@@ -111,7 +125,7 @@ const DashboardLayout = ({ showChat = false, children }) => {
       employee_id:
         tokenData.employee_id || `EMP${tokenData.sub?.slice(-4) || "001"}`,
       department: tokenData.department || "General",
-      role: highestRole, // ✅ DÙNG ROLE CAO NHẤT
+      role: highestRole,
       permission_level: parseInt(tokenData.permission_level) || 2,
     };
 
@@ -124,16 +138,16 @@ const DashboardLayout = ({ showChat = false, children }) => {
     dispatch(
       setKeycloakUser({
         user_id: userInfoData.user_id,
-        role: highestRole, // ✅ DÙNG ROLE CAO NHẤT
+        role: highestRole,
         token: keycloak.token,
-        userInfo: userInfoData, // ✅ TRUYỀN userInfo vào đây
+        userInfo: userInfoData,
       })
     );
 
     setIsReady(true);
   }, [initialized, keycloak, dispatch]);
 
-  // 2️⃣ Kết nối Socket và lắng nghe realtime - ĐÃ THÊM DIRECT MESSAGE LISTENERS
+  // 2️⃣ Kết nối Socket và lắng nghe realtime
   useEffect(() => {
     if (!isReady || !isLoggedIn || !keycloak.token) return;
     let active = true;
@@ -146,7 +160,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
       setSocketReady(true);
 
       // ==================== DIRECT CHAT EVENTS ====================
-      // 🆕 THÊM: Listener cho direct messages
       sock.on("text_message", (data) => {
         console.log("🔌 Socket: text_message received - DIRECT CHAT:", data);
 
@@ -222,11 +235,9 @@ const DashboardLayout = ({ showChat = false, children }) => {
         );
       });
 
-      // 🆕 THÊM: Listener cho direct reply messages
       sock.on("text_message_reply", (data) => {
-        console.log("11111", data);
+        console.log("🔌 Socket: text_message_reply received:", data);
 
-        // 🆕 SỬA QUAN TRỌNG: Xử lý trực tiếp reply message thay vì emit lại
         if (!data || !data.conversation_id) {
           console.warn("🚨 Socket: Invalid direct reply message data", data);
           return;
@@ -245,7 +256,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
           has_replyTo: !!data.replyTo,
         });
 
-        // 🆕 XỬ LÝ replyTo.sender
         let processedReplyTo = data.replyTo;
         if (processedReplyTo && typeof processedReplyTo.sender === "string") {
           processedReplyTo = {
@@ -286,7 +296,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
           has_replyTo: !!messageData.replyTo,
         });
 
-        // 🆕 DISPATCH DIRECT REPLY MESSAGE
         dispatch(
           addDirectMessage({
             message: messageData,
@@ -418,7 +427,7 @@ const DashboardLayout = ({ showChat = false, children }) => {
         );
       });
 
-      // Lắng nghe sự kiện message bị xóa từ server
+      // Các listeners khác giữ nguyên
       sock.on("message_deleted", (data) => {
         try {
           console.log("📨 Received message_deleted event:", data);
@@ -432,9 +441,7 @@ const DashboardLayout = ({ showChat = false, children }) => {
             timestamp,
           } = data;
 
-          // 🆕 DISPATCH ACTION ĐỂ CẬP NHẬT REDUX STORE
           if (isGroup) {
-            // Xóa message khỏi group chat
             dispatch({
               type: "conversation/deleteMessage",
               payload: {
@@ -443,7 +450,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
               },
             });
           } else {
-            // Xóa message khỏi direct chat
             dispatch({
               type: "conversation/deleteMessage",
               payload: {
@@ -459,7 +465,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
         }
       });
 
-      // Các listeners khác giữ nguyên
       sock.on("start_chat", (data) => {
         console.log("🔌 Socket: start_chat received", {
           conversation_id: data._id,
@@ -597,7 +602,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
       sock.on("message_pinned", (data) => {
         console.log("📌 Socket: message_pinned received", data);
 
-        // 🆕 DISPATCH ACTION ĐỂ CẬP NHẬT REDUX STORE
         dispatch({
           type: "conversation/pinMessage",
           payload: {
@@ -606,7 +610,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
           },
         });
 
-        // 🆕 TỰ ĐỘNG REFETCH PINNED MESSAGES
         if (data.roomId === room_id && data.chatType === chat_type) {
           console.log("🔄 Auto-refetching pinned messages for current room");
           dispatch(fetchPinnedMessages(data.roomId, data.chatType));
@@ -616,7 +619,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
       sock.on("message_unpinned", (data) => {
         console.log("📌 Socket: message_unpinned received", data);
 
-        // 🆕 DISPATCH ACTION ĐỂ CẬP NHẬT REDUX STORE
         dispatch({
           type: "conversation/unpinMessage",
           payload: {
@@ -625,7 +627,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
           },
         });
 
-        // 🆕 TỰ ĐỘNG REFETCH PINNED MESSAGES
         if (data.roomId === room_id && data.chatType === chat_type) {
           console.log("🔄 Auto-refetching pinned messages for current room");
           dispatch(fetchPinnedMessages(data.roomId, data.chatType));
@@ -635,7 +636,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
       sock.on("pin_message_response", (data) => {
         console.log("📌 Socket: pin_message_response", data);
 
-        // 🆕 XỬ LÝ RESPONSE TỪ SERVER
         if (data.status === "success") {
           dispatch(
             showSnackbar({
@@ -644,7 +644,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
             })
           );
 
-          // 🆕 TỰ ĐỘNG REFETCH PINNED MESSAGES SAU KHI PIN THÀNH CÔNG
           if (room_id && chat_type) {
             setTimeout(() => {
               dispatch(fetchPinnedMessages(room_id, chat_type));
@@ -671,7 +670,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
             })
           );
 
-          // 🆕 TỰ ĐỘNG REFETCH PINNED MESSAGES SAU KHI UNPIN THÀNH CÔNG
           if (room_id && chat_type) {
             setTimeout(() => {
               dispatch(fetchPinnedMessages(room_id, chat_type));
@@ -687,7 +685,6 @@ const DashboardLayout = ({ showChat = false, children }) => {
         }
       });
 
-      // 🆕 THÊM: Listener cho pinned messages updated (broadcast từ server)
       sock.on("pinned_messages_updated", (data) => {
         console.log("📌 Socket: pinned_messages_updated", data);
 
@@ -709,7 +706,7 @@ const DashboardLayout = ({ showChat = false, children }) => {
             "text_message_reply",
           ].includes(eventName)
         ) {
-          console.log("🔌 Socket event1111:", eventName, args);
+          console.log("🔌 Socket event:", eventName, args);
         }
       });
     };
@@ -750,7 +747,8 @@ const DashboardLayout = ({ showChat = false, children }) => {
 
   useEffect(() => {
     console.log("🔍 DashboardLayout - current state:", {
-      userInfo, // ✅ LOG userInfo để debug
+      userInfo,
+      user,
       direct_conversation: {
         id: current_conversation?.id,
         user_id: current_conversation?.user_id,
@@ -766,13 +764,20 @@ const DashboardLayout = ({ showChat = false, children }) => {
       conversations_count: conversations.length,
       rooms_count: rooms.length,
     });
-  }, [userInfo, current_conversation, current_room, conversations, rooms]);
+  }, [
+    userInfo,
+    user,
+    current_conversation,
+    current_room,
+    conversations,
+    rooms,
+  ]);
 
   if (!isReady || !isLoggedIn || !socketReady) return <LoadingScreen />;
 
   return (
     <Stack direction="row">
-      <SideBar role={role} /> {/* ✅ SẼ HIỂN THỊ ROLE CAO NHẤT */}
+      <SideBar role={role} />
       <Outlet />
       {open_audio_notification_dialog && (
         <AudioCallNotification open={open_audio_notification_dialog} />

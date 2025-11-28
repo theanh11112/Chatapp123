@@ -213,20 +213,17 @@ export default function AdminDashboard() {
           setNotificationStats({});
         }
       } else if (activeTab === 1) {
-        // Load users data với fallback
+        // 🆕 SỬA: Load users data với getAllUsers mới
         try {
-          let usersResponse;
-          if (
-            analyticsService.getUsersList &&
-            typeof analyticsService.getUsersList === "function"
-          ) {
-            usersResponse = await analyticsService.getUsersList();
-            setUsersList(
-              usersResponse?.data ||
-                usersResponse ||
-                getFallbackData("usersList")
+          const usersResponse = await analyticsService.getAllUsers();
+          if (usersResponse && usersResponse.status === "success") {
+            console.log(
+              "✅ Users loaded successfully:",
+              usersResponse.data.length
             );
+            setUsersList(usersResponse.data || []);
           } else {
+            console.warn("⚠️ Using fallback users data");
             setUsersList(getFallbackData("usersList"));
           }
         } catch (error) {
@@ -542,6 +539,7 @@ export default function AdminDashboard() {
             <UsersTab
               loading={loading}
               usersList={usersList}
+              currentUser={currentUser}
               onRefresh={loadDashboardData}
               onUserStatusChange={async (userId, newStatus) => {
                 try {
@@ -654,6 +652,7 @@ export default function AdminDashboard() {
                 }
               }}
               onDeleteTask={handleOpenDeleteDialog}
+              onCreateTask={() => setCreateTaskDialog(true)}
             />
           </Box>
         )}
@@ -731,6 +730,7 @@ export default function AdminDashboard() {
                   showSnackbarMessage("Lỗi khi đánh dấu thông báo", "error");
                 }
               }}
+              onCreateNotification={() => setCreateNotificationDialog(true)}
             />
           </Box>
         )}

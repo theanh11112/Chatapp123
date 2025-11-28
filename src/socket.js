@@ -1,4 +1,4 @@
-// src/socket.js - COMPLETE FIXED VERSION
+// src/socket.js - COMPLETE VERSION WITH NOTIFICATION INTEGRATION
 import { io } from "socket.io-client";
 import { EventEmitter } from "events";
 import { store } from "./redux/store";
@@ -13,6 +13,7 @@ import {
   ResetAudioCallQueue,
   CloseAudioNotificationDialog,
 } from "./redux/slices/audioCall";
+import notificationService from "./services/notificationService";
 
 let socket = null;
 export const socketEvents = new EventEmitter();
@@ -44,6 +45,74 @@ export const connectSocket = (token) => {
       store.dispatch(updateUserPresence({ userId, status, lastSeen }));
     });
 
+    // 🆕 THÊM: Message Notification Handlers
+    socket.on("text_message", (data) => {
+      console.log("🔌 Socket: text_message received - DIRECT CHAT:", data);
+
+      // Lấy cài đặt thông báo từ Redux
+      const { notifications } = store.getState().settings;
+      const { user_id } = store.getState().auth;
+
+      // VALIDATE DATA
+      if (!data || !data.conversation_id) {
+        console.warn("🚨 Socket: Invalid direct message data", data);
+        return;
+      }
+
+      const isOwnMessage = data.from === user_id;
+
+      // 🆕 HIỂN THỊ THÔNG BÁO CHO TIN NHẮN KHÔNG PHẢI CỦA MÌNH
+      if (!isOwnMessage) {
+        console.log("🔔 Showing notification for direct message");
+        notificationService.showMessageNotification(data, notifications, false);
+      }
+    });
+
+    socket.on("text_message_reply", (data) => {
+      console.log("🔌 Socket: text_message_reply received:", data);
+
+      // Lấy cài đặt thông báo từ Redux
+      const { notifications } = store.getState().settings;
+      const { user_id } = store.getState().auth;
+
+      if (!data || !data.conversation_id) {
+        console.warn("🚨 Socket: Invalid direct reply message data", data);
+        return;
+      }
+
+      const isOwnMessage = data.from === user_id;
+
+      // 🆕 HIỂN THỊ THÔNG BÁO CHO TIN NHẮN REPLY KHÔNG PHẢI CỦA MÌNH
+      if (!isOwnMessage) {
+        console.log("🔔 Showing notification for direct reply message");
+        notificationService.showMessageNotification(data, notifications, false);
+      }
+    });
+
+    socket.on("new_group_message", (data) => {
+      console.log("🔌 Socket: new_group_message received:", data);
+
+      // Lấy cài đặt thông báo từ Redux
+      const { notifications } = store.getState().settings;
+      const { user_id } = store.getState().auth;
+
+      const roomId = data.roomId || data.room_id;
+      const msg = data.message || data;
+
+      if (!msg || !roomId) {
+        console.warn("🚨 Socket: Invalid group message data", data);
+        return;
+      }
+
+      const isOwnMessage = msg.sender?.keycloakId === user_id;
+
+      // 🆕 HIỂN THỊ THÔNG BÁO CHO TIN NHẮN NHÓM KHÔNG PHẢI CỦA MÌNH
+      if (!isOwnMessage) {
+        console.log("🔔 Showing notification for group message");
+        notificationService.showMessageNotification(msg, notifications, true);
+      }
+    });
+
     // 🆕 THÊM: Audio Call Events
     socket.on("audio_call_notification", (data) => {
       console.log("📞 Incoming audio call:", data);
@@ -52,7 +121,6 @@ export const connectSocket = (token) => {
 
     socket.on("audio_call_accepted", (data) => {
       console.log("✅ Audio call accepted:", data);
-      // Có thể dispatch action để cập nhật trạng thái call
     });
 
     socket.on("audio_call_rejected", (data) => {
@@ -78,7 +146,6 @@ export const connectSocket = (token) => {
 
     socket.on("video_call_accepted", (data) => {
       console.log("✅ Video call accepted:", data);
-      // Có thể dispatch action để cập nhật trạng thái call
     });
 
     socket.on("video_call_rejected", (data) => {
@@ -131,12 +198,11 @@ export const connectSocket = (token) => {
 
     socket.on("disconnect", (reason) => {
       console.warn("❌ Socket disconnected:", reason);
-      window.socket = null; // 🆕 XÓA KHI DISCONNECT
+      window.socket = null;
     });
 
     socket.on("connect_error", (err) => {
       console.error("⚠️ Socket connection error:", err.message);
-      // 🆕 THÊM: Tự động thử kết nối lại sau 5 giây
       setTimeout(() => {
         if (!socket.connected) {
           console.log("🔄 Attempting to reconnect socket...");
@@ -170,7 +236,7 @@ export const connectSocket = (token) => {
 
   return new Promise((resolve, reject) => {
     if (socket.connected) {
-      window.socket = socket; // 🆕 ĐẢM BẢO GÁN VÀO WINDOW
+      window.socket = socket;
       resolve(socket);
     } else {
       const timeout = setTimeout(() => {
@@ -179,7 +245,7 @@ export const connectSocket = (token) => {
 
       socket.once("connect", () => {
         clearTimeout(timeout);
-        window.socket = socket; // 🆕 ĐẢM BẢO GÁN VÀO WINDOW
+        window.socket = socket;
         resolve(socket);
       });
 

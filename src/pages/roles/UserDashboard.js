@@ -23,6 +23,7 @@ import OverviewTab from "./components/user/OverviewTab";
 import TaskManagement from "./components/user/TaskManagement";
 import ReminderSystem from "./components/user/ReminderSystem";
 import NotificationCenter from "./components/user/NotificationCenter";
+import CreateReminderDialog from "./components/dialogs/CreateReminderDialog";
 
 // Import services
 import taskService from "../../services/taskService";
@@ -34,6 +35,7 @@ import { useDispatch, useSelector } from "react-redux";
 export default function UserDashboard() {
   const [activeTab, setActiveTab] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [createReminderDialog, setCreateReminderDialog] = useState(false);
 
   // State cho dữ liệu
   const [tasks, setTasks] = useState([]);
@@ -289,6 +291,51 @@ export default function UserDashboard() {
     [user_id, showSnackbarMessage, loadDashboardData]
   );
 
+  // 🎯 Hàm xử lý tạo reminder mới
+  const handleCreateReminder = useCallback(
+    async (reminderData) => {
+      // Sử dụng user_id từ auth
+      if (!user_id) {
+        showSnackbarMessage("Không tìm thấy thông tin người dùng", "error");
+        return;
+      }
+
+      try {
+        setLoading(true);
+        const response = await reminderService.createReminder({
+          ...reminderData,
+          keycloakId: user_id, // Sử dụng user_id
+        });
+
+        if (response.status === "success") {
+          showSnackbarMessage("Tạo nhắc nhở thành công!", "success");
+          setCreateReminderDialog(false);
+          loadDashboardData();
+        } else {
+          showSnackbarMessage(
+            response.message || "Lỗi khi tạo nhắc nhở",
+            "error"
+          );
+        }
+      } catch (error) {
+        console.error("Error creating reminder:", error);
+        showSnackbarMessage("Lỗi khi tạo nhắc nhở", "error");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [user_id, showSnackbarMessage, loadDashboardData]
+  );
+
+  // 🎯 Hàm mở dialog tạo reminder
+  const handleOpenCreateReminder = useCallback(() => {
+    setCreateReminderDialog(true);
+  }, []);
+
+  const handleCloseCreateReminder = useCallback(() => {
+    setCreateReminderDialog(false);
+  }, []);
+
   // 🎯 Hàm xử lý đánh dấu thông báo đã đọc
   const handleMarkNotificationAsRead = useCallback(
     async (notificationId) => {
@@ -472,6 +519,7 @@ export default function UserDashboard() {
               currentUser={currentUser}
               onRefresh={loadDashboardData}
               onDeleteReminder={handleDeleteReminder}
+              onCreateReminder={handleOpenCreateReminder} // 🆕 THÊM DÒNG NÀY
             />
           </Box>
         )}
@@ -490,6 +538,15 @@ export default function UserDashboard() {
           </Box>
         )}
       </Box>
+
+      {/* 🆕 CreateReminderDialog Component */}
+      <CreateReminderDialog
+        open={createReminderDialog}
+        onClose={handleCloseCreateReminder}
+        currentUser={currentUser}
+        onCreateReminder={handleCreateReminder}
+        tasks={tasks}
+      />
 
       {/* Snackbar từ Redux */}
       <Snackbar

@@ -28,10 +28,10 @@ import {
 // Utility functions
 const getStatusColor = (status) => {
   const colors = {
-    todo: "#ff6b6b",
+    pending: "#ff6b6b",
     in_progress: "#4ecdc4",
-    review: "#45b7d1",
     done: "#96ceb4",
+    cancelled: "#666666",
   };
   return colors[status] || "#666";
 };
@@ -47,10 +47,10 @@ const getPriorityColor = (priority) => {
 
 const getStatusText = (status) => {
   const statusMap = {
-    todo: "Chưa làm",
+    pending: "Chờ xử lý",
     in_progress: "Đang làm",
-    review: "Chờ duyệt",
     done: "Hoàn thành",
+    cancelled: "Đã hủy",
   };
   return statusMap[status] || status;
 };
@@ -72,6 +72,7 @@ export default function TasksTab({
   onViewTask,
   onUpdateTaskStatus,
   onDeleteTask,
+  onCreateTask,
 }) {
   if (loading) {
     return (
@@ -96,15 +97,17 @@ export default function TasksTab({
             >
               <Typography variant="h5">Quản lý Tasks</Typography>
               <Box sx={{ display: "flex", gap: 1 }}>
-                <Button startIcon={<Refresh />} onClick={onRefresh}>
-                  Refresh
+                <Button
+                  startIcon={<Refresh />}
+                  onClick={onRefresh}
+                  variant="outlined"
+                >
+                  Làm mới
                 </Button>
                 <Button
                   variant="contained"
                   startIcon={<Add />}
-                  onClick={() => {
-                    /* This will be handled by parent */
-                  }}
+                  onClick={onCreateTask}
                   disabled={!currentUser}
                 >
                   Tạo Task
@@ -172,6 +175,7 @@ export default function TasksTab({
                             display: "flex",
                             alignItems: "center",
                             gap: 2,
+                            flexWrap: "wrap",
                           }}
                         >
                           <Typography variant="h6">{task.title}</Typography>
@@ -194,17 +198,28 @@ export default function TasksTab({
                         </Box>
                       }
                       secondary={
-                        <Box sx={{ display: "flex", gap: 3, mt: 1 }}>
+                        <Box
+                          sx={{
+                            display: "flex",
+                            gap: 3,
+                            mt: 1,
+                            flexWrap: "wrap",
+                          }}
+                        >
                           <Typography variant="body2">
                             Người giao:{" "}
                             <strong>
-                              {task.assignerId?.username || "Unknown User"}
+                              {task.assignerId?.username ||
+                                task.assignerId?.firstName ||
+                                "Unknown User"}
                             </strong>
                           </Typography>
                           <Typography variant="body2">
                             Người nhận:{" "}
                             <strong>
-                              {task.assigneeId?.username || "Unknown User"}
+                              {task.assigneeId?.username ||
+                                task.assigneeId?.firstName ||
+                                "Unknown User"}
                             </strong>
                           </Typography>
                           {task.dueDate && (
@@ -215,6 +230,11 @@ export default function TasksTab({
                                   "vi-VN"
                                 )}
                               </strong>
+                            </Typography>
+                          )}
+                          {task.progress !== undefined && (
+                            <Typography variant="body2">
+                              Tiến độ: <strong>{task.progress}%</strong>
                             </Typography>
                           )}
                         </Box>
