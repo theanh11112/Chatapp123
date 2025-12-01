@@ -1,5 +1,5 @@
-// src/pages/roles/components/user/CreateReminderDialog.js
-import React, { useState } from "react";
+// src/pages/roles/components/dialogs/CreateReminderDialog.js - ĐÃ SỬA CHO ADMIN
+import React, { useState, useEffect } from "react";
 import {
   Dialog,
   DialogTitle,
@@ -17,7 +17,9 @@ import {
   Autocomplete,
   Alert,
   Grid,
+  CircularProgress,
 } from "@mui/material";
+import { Schedule } from "@mui/icons-material";
 
 const CreateReminderDialog = ({
   open,
@@ -25,11 +27,13 @@ const CreateReminderDialog = ({
   currentUser,
   onCreateReminder,
   tasks = [],
+  loading = false,
+  isAdmin = false, // 🆕 THÊM PROP ĐỂ PHÂN BIỆT ADMIN/USER
 }) => {
   const [formData, setFormData] = useState({
     title: "",
     description: "",
-    type: "personal",
+    reminderType: "personal",
     remindDate: "",
     remindTime: "",
     taskId: "",
@@ -38,25 +42,96 @@ const CreateReminderDialog = ({
   const [errors, setErrors] = useState({});
   const [touched, setTouched] = useState({});
 
-  // 🆕 Filter tasks để chỉ lấy những task chưa hoàn thành
-  const availableTasks = tasks.filter(
-    (task) => task.status !== "done" && task.status !== "cancelled"
-  );
+  // Reset form khi dialog mở/đóng
+  useEffect(() => {
+    if (open) {
+      const tomorrow = getTomorrowDate();
+      const nextHour = getNextHourTime();
+
+      setFormData({
+        title: "",
+        description: "",
+        reminderType: "personal",
+        remindDate: tomorrow,
+        remindTime: nextHour,
+        taskId: "",
+      });
+      setErrors({});
+      setTouched({});
+
+      console.log("📋 CreateReminderDialog - Mode:", {
+        isAdmin,
+        totalTasks: tasks.length,
+        currentUserId: currentUser?.user_id,
+      });
+    }
+  }, [open, currentUser, tasks, isAdmin]);
+
+  // 🆕 SỬA: Filter tasks chỉ áp dụng cho user thường, admin có thể thấy tất cả tasks
+  const availableTasks = isAdmin
+    ? tasks // 🆕 ADMIN: Hiển thị tất cả tasks
+    : tasks.filter((task) => {
+        console.log("🔍 Checking task for user:", {
+          id: task._id,
+          title: task.title,
+          status: task.status,
+          assignees: task.assignees,
+          assigneeIds: task.assigneeIds,
+          assignee: task.assignee,
+          currentUser: currentUser?.user_id,
+        });
+
+        // Kiểm tra task status
+        const isActiveTask =
+          task.status !== "done" && task.status !== "cancelled";
+
+        // Kiểm tra assignment - sử dụng nhiều cách
+        const isAssignedToCurrentUser =
+          // Cách 1: Kiểm tra assignees array
+          task.assignees?.some(
+            (assignee) => assignee.keycloakId === currentUser?.user_id
+          ) ||
+          // Cách 2: Kiểm tra assigneeIds array
+          task.assigneeIds?.includes(currentUser?.user_id) ||
+          // Cách 3: Kiểm tra assignee string
+          task.assignee === currentUser?.user_id ||
+          // Cách 4: Fallback - nếu không có assignment info, coi như assigned
+          (!task.assignees && !task.assigneeIds && !task.assignee);
+
+        console.log("✅ Task assignment check:", {
+          title: task.title,
+          isActiveTask,
+          isAssignedToCurrentUser,
+          finalResult: isActiveTask && isAssignedToCurrentUser,
+        });
+
+        return isActiveTask && isAssignedToCurrentUser;
+      });
+
+  console.log("🎯 Available tasks for reminder:", {
+    isAdmin,
+    totalTasks: tasks.length,
+    availableTasks: availableTasks.length,
+    availableTasksList: availableTasks.map((t) => ({
+      id: t._id,
+      title: t.title,
+      status: t.status,
+    })),
+  });
 
   const handleChange = (field) => (event) => {
     const value = event.target ? event.target.value : event;
+
     setFormData((prev) => ({
       ...prev,
       [field]: value,
     }));
 
-    // Mark field as touched
     setTouched((prev) => ({
       ...prev,
       [field]: true,
     }));
 
-    // Clear error when user starts typing
     if (errors[field]) {
       setErrors((prev) => ({
         ...prev,
@@ -64,37 +139,38 @@ const CreateReminderDialog = ({
       }));
     }
 
-    // 🆕 Validate date/time immediately when changed
     if (field === "remindDate" || field === "remindTime") {
       validateDateTime();
     }
   };
 
-  // 🆕 Khi chọn task, tự động điền title và description
+  // 🆕 SỬA: Xử lý khi chọn và clear task
   const handleTaskChange = (event, value) => {
+    console.log("🎯 Task selected:", value);
     if (value) {
       setFormData((prev) => ({
         ...prev,
         taskId: value._id,
         title: `Nhắc nhở: ${value.title}`,
         description: value.description || `Nhắc nhở cho task: ${value.title}`,
-        type: "task", // Tự động set type là task
+        reminderType: "task_reminder",
       }));
     } else {
+      // 🆕 SỬA: Reset về giá trị rỗng
       setFormData((prev) => ({
         ...prev,
-        taskId: "",
-        title: "",
+        taskId: "", // ĐẢM BẢO LÀ CHUỖI RỖNG
+        title: prev.title.startsWith("Nhắc nhở: ")
+          ? prev.title.replace("Nhắc nhở: ", "")
+          : prev.title,
         description: "",
-        type: "personal",
+        reminderType: "personal",
       }));
     }
   };
 
-  // 🆕 Hàm validate date/time
+  // Validate real-time
   const validateDateTime = () => {
-    const newErrors = { ...errors };
-
     if (formData.remindDate && formData.remindTime) {
       const remindDateTime = new Date(
         `${formData.remindDate}T${formData.remindTime}`
@@ -102,16 +178,20 @@ const CreateReminderDialog = ({
       const now = new Date();
 
       if (remindDateTime <= now) {
-        newErrors.remindDate = "Thời gian nhắc nhở phải ở tương lai";
-        newErrors.remindTime = "Thời gian nhắc nhở phải ở tương lai";
+        setErrors((prev) => ({
+          ...prev,
+          remindDate: "Thời gian nhắc nhở phải ở tương lai",
+          remindTime: "Thời gian nhắc nhở phải ở tương lai",
+        }));
       } else {
-        // Clear errors if valid
-        delete newErrors.remindDate;
-        delete newErrors.remindTime;
+        setErrors((prev) => {
+          const newErrors = { ...prev };
+          delete newErrors.remindDate;
+          delete newErrors.remindTime;
+          return newErrors;
+        });
       }
     }
-
-    setErrors(newErrors);
   };
 
   const validateForm = () => {
@@ -129,7 +209,7 @@ const CreateReminderDialog = ({
       newErrors.remindTime = "Thời gian nhắc nhở không được để trống";
     }
 
-    // 🆕 Kiểm tra nếu ngày/giờ đã qua - với validation chi tiết hơn
+    // Kiểm tra date/time
     if (formData.remindDate && formData.remindTime) {
       const remindDateTime = new Date(
         `${formData.remindDate}T${formData.remindTime}`
@@ -146,10 +226,10 @@ const CreateReminderDialog = ({
     return Object.keys(newErrors).length === 0;
   };
 
+  // 🆕 SỬA: Hàm submit đã fix
   const handleSubmit = () => {
     if (!validateForm()) return;
 
-    // 🆕 Double-check date/time validation
     const remindDateTime = new Date(
       `${formData.remindDate}T${formData.remindTime}`
     );
@@ -163,44 +243,35 @@ const CreateReminderDialog = ({
       return;
     }
 
-    // Tạo remindAt từ date và time
-    const remindAt = remindDateTime.toISOString();
-
+    // 🆕 SỬA: Chỉ gửi taskId nếu có giá trị
     const reminderData = {
-      title: formData.title,
-      description: formData.description,
-      type: formData.type,
-      remindAt: remindAt,
-      isActive: true,
-      taskId: formData.taskId || undefined, // Chỉ gửi nếu có taskId
+      title: formData.title.trim(),
+      description: formData.description ? formData.description.trim() : "",
+      reminderType: formData.reminderType,
+      remindAt: remindDateTime.toISOString(),
     };
 
+    // 🆕 CHỈ THÊM taskId NẾU CÓ GIÁ TRỊ (không phải undefined hoặc chuỗi rỗng)
+    if (formData.taskId && formData.taskId.trim() !== "") {
+      reminderData.taskId = formData.taskId;
+    }
+
+    console.log("🎯 Sending reminder data:", reminderData);
     onCreateReminder(reminderData);
-    handleClose();
   };
 
   const handleClose = () => {
-    setFormData({
-      title: "",
-      description: "",
-      type: "personal",
-      remindDate: "",
-      remindTime: "",
-      taskId: "",
-    });
-    setErrors({});
-    setTouched({});
     onClose();
   };
 
-  // 🆕 Hàm kiểm tra xem form có thể submit không
+  // Kiểm tra có thể submit không
   const canSubmit = () => {
     const hasRequiredFields =
       formData.title.trim() && formData.remindDate && formData.remindTime;
 
     if (!hasRequiredFields) return false;
 
-    // Check if date/time is in future
+    // Check date/time
     if (formData.remindDate && formData.remindTime) {
       const remindDateTime = new Date(
         `${formData.remindDate}T${formData.remindTime}`
@@ -216,33 +287,32 @@ const CreateReminderDialog = ({
     { value: "personal", label: "Cá nhân", emoji: "👤" },
     { value: "meeting", label: "Cuộc họp", emoji: "👥" },
     { value: "deadline", label: "Hạn chót", emoji: "⏰" },
-    { value: "task", label: "Công việc", emoji: "✅" },
+    { value: "task_reminder", label: "Công việc", emoji: "✅" },
+    { value: "due_date", label: "Hạn task", emoji: "⏳" },
+    { value: "start_date", label: "Bắt đầu task", emoji: "🚀" },
     { value: "birthday", label: "Sinh nhật", emoji: "🎂" },
     { value: "appointment", label: "Lịch hẹn", emoji: "📅" },
   ];
 
-  // 🆕 Hàm lấy trạng thái task
-  const getTaskStatusInfo = (task) => {
-    const statusMap = {
-      pending: { text: "Chờ xử lý", color: "default" },
-      in_progress: { text: "Đang làm", color: "warning" },
-      done: { text: "Hoàn thành", color: "success" },
-      cancelled: { text: "Đã hủy", color: "error" },
-    };
-
-    return statusMap[task.status] || { text: task.status, color: "default" };
+  // Utility functions
+  const getTomorrowDate = () => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow.toISOString().split("T")[0];
   };
 
-  const getPriorityInfo = (task) => {
-    const priorityMap = {
-      high: { text: "Cao", color: "error" },
-      medium: { text: "Trung bình", color: "warning" },
-      low: { text: "Thấp", color: "success" },
-    };
+  const getNextHourTime = () => {
+    const nextHour = new Date();
+    nextHour.setHours(nextHour.getHours() + 1);
+    nextHour.setMinutes(0);
+    return `${nextHour.getHours().toString().padStart(2, "0")}:${nextHour
+      .getMinutes()
+      .toString()
+      .padStart(2, "0")}`;
+  };
 
-    return (
-      priorityMap[task.priority] || { text: task.priority, color: "default" }
-    );
+  const getTodayDate = () => {
+    return new Date().toISOString().split("T")[0];
   };
 
   // Tạo danh sách giờ
@@ -256,133 +326,221 @@ const CreateReminderDialog = ({
     }
   }
 
-  // Lấy ngày mai làm mặc định
-  const getTomorrowDate = () => {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    return tomorrow.toISOString().split("T")[0];
-  };
-
-  // Lấy giờ tiếp theo làm mặc định
-  const getNextHourTime = () => {
-    const nextHour = new Date();
-    nextHour.setHours(nextHour.getHours() + 1);
-    nextHour.setMinutes(0);
-    return `${nextHour.getHours().toString().padStart(2, "0")}:${nextHour
-      .getMinutes()
-      .toString()
-      .padStart(2, "0")}`;
-  };
-
-  // 🆕 Lấy ngày hiện tại để set min cho date picker
-  const getTodayDate = () => {
-    return new Date().toISOString().split("T")[0];
-  };
-
   return (
-    <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
-      {/* 🆕 SỬA: Thêm component="div" để tránh lỗi DOM nesting */}
+    <Dialog
+      open={open}
+      onClose={handleClose}
+      maxWidth="md"
+      fullWidth
+      PaperProps={{
+        sx: { borderRadius: 3 },
+      }}
+    >
       <DialogTitle>
-        <Typography variant="h6" component="div" fontWeight="bold">
-          🆕 Tạo Nhắc Nhở Mới
-        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <Schedule color="primary" />
+          <Typography variant="h5" fontWeight="bold">
+            🎯 Tạo Nhắc Nhở Mới {isAdmin && "(Admin)"}
+          </Typography>
+        </Box>
       </DialogTitle>
 
       <DialogContent>
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}>
-          {/* 🆕 Task Selection - Chỉ hiển thị nếu có tasks */}
-          {availableTasks.length > 0 && (
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 3, mt: 1 }}>
+          {/* Task Selection - CHỈ HIỆN KHI CÓ TASKS */}
+          {tasks.length > 0 && (
             <Box>
-              <Typography variant="subtitle2" gutterBottom>
-                🔗 Liên kết với công việc (tùy chọn)
+              <Typography variant="subtitle1" gutterBottom fontWeight="medium">
+                🔗 Liên kết với công việc (tùy chọn) -
+                <Typography
+                  component="span"
+                  color="primary.main"
+                  fontWeight="bold"
+                >
+                  {" "}
+                  {isAdmin ? "Tất cả tasks" : "Tasks của bạn"}:{" "}
+                  {availableTasks.length} tasks khả dụng
+                </Typography>
               </Typography>
-              <Autocomplete
-                options={availableTasks}
-                getOptionLabel={(option) => option.title}
-                onChange={handleTaskChange}
-                renderInput={(params) => (
-                  <TextField
-                    {...params}
-                    label="Chọn công việc cần nhắc nhở"
-                    placeholder="Tìm kiếm công việc..."
-                  />
-                )}
-                renderOption={(props, option) => (
-                  <li {...props}>
-                    <Box sx={{ width: "100%" }}>
-                      <Box
-                        sx={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                        }}
-                      >
-                        <Typography variant="body1">{option.title}</Typography>
-                        <Box sx={{ display: "flex", gap: 0.5 }}>
-                          <Chip
-                            label={getTaskStatusInfo(option).text}
-                            size="small"
-                            color={getTaskStatusInfo(option).color}
-                            variant="outlined"
-                          />
-                          <Chip
-                            label={getPriorityInfo(option).text}
-                            size="small"
-                            color={getPriorityInfo(option).color}
-                          />
+
+              {availableTasks.length > 0 ? (
+                <>
+                  <Autocomplete
+                    options={availableTasks}
+                    getOptionLabel={(option) =>
+                      option.title || "Không có tiêu đề"
+                    }
+                    onChange={handleTaskChange}
+                    value={
+                      availableTasks.find(
+                        (task) => task._id === formData.taskId
+                      ) || null
+                    }
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="Chọn công việc cần nhắc nhở"
+                        placeholder="Tìm kiếm công việc..."
+                        fullWidth
+                      />
+                    )}
+                    renderOption={(props, option) => (
+                      <li {...props}>
+                        <Box sx={{ width: "100%" }}>
+                          <Box
+                            sx={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "flex-start",
+                              mb: 1,
+                            }}
+                          >
+                            <Typography variant="body1" fontWeight="medium">
+                              {option.title}
+                            </Typography>
+                            <Box
+                              sx={{
+                                display: "flex",
+                                gap: 0.5,
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              <Chip
+                                label={
+                                  option.status === "todo"
+                                    ? "Cần làm"
+                                    : option.status === "in_progress"
+                                    ? "Đang làm"
+                                    : option.status === "review"
+                                    ? "Chờ duyệt"
+                                    : option.status || "Không xác định"
+                                }
+                                size="small"
+                                color={
+                                  option.status === "in_progress"
+                                    ? "warning"
+                                    : option.status === "review"
+                                    ? "info"
+                                    : "default"
+                                }
+                                variant="outlined"
+                              />
+                              <Chip
+                                label={
+                                  option.priority === "high"
+                                    ? "Cao"
+                                    : option.priority === "medium"
+                                    ? "Trung bình"
+                                    : option.priority === "low"
+                                    ? "Thấp"
+                                    : "Không xác định"
+                                }
+                                size="small"
+                                color={
+                                  option.priority === "high"
+                                    ? "error"
+                                    : option.priority === "medium"
+                                    ? "warning"
+                                    : "success"
+                                }
+                              />
+                            </Box>
+                          </Box>
+                          {option.description && (
+                            <Typography
+                              variant="body2"
+                              color="text.secondary"
+                              sx={{ mb: 1 }}
+                            >
+                              {option.description.length > 100
+                                ? `${option.description.substring(0, 100)}...`
+                                : option.description}
+                            </Typography>
+                          )}
+                          {option.dueDate && (
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              sx={{ display: "block" }}
+                            >
+                              📅 Hạn:{" "}
+                              {new Date(option.dueDate).toLocaleDateString(
+                                "vi-VN"
+                              )}
+                            </Typography>
+                          )}
+                          {isAdmin && (
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              sx={{ display: "block", mt: 0.5 }}
+                            >
+                              👤 Assignment:{" "}
+                              {option.assignees
+                                ? `Assignees (${option.assignees.length})`
+                                : option.assigneeIds
+                                ? `Assignee IDs (${option.assigneeIds.length})`
+                                : option.assignee
+                                ? `Single assignee`
+                                : "No assignment info"}
+                            </Typography>
+                          )}
                         </Box>
-                      </Box>
-                      {option.description && (
-                        <Typography
-                          variant="body2"
-                          color="text.secondary"
-                          sx={{ mt: 0.5 }}
-                        >
-                          {option.description.length > 100
-                            ? `${option.description.substring(0, 100)}...`
-                            : option.description}
-                        </Typography>
-                      )}
-                      {option.dueDate && (
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ mt: 0.5, display: "block" }}
-                        >
-                          📅 Hạn:{" "}
-                          {new Date(option.dueDate).toLocaleDateString("vi-VN")}
-                        </Typography>
-                      )}
-                    </Box>
-                  </li>
-                )}
-              />
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ mt: 0.5 }}
-              >
-                💡 Chọn công việc để tự động điền thông tin
-              </Typography>
+                      </li>
+                    )}
+                  />
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ mt: 0.5, display: "block" }}
+                  >
+                    💡 Chọn công việc để tự động điền thông tin nhắc nhở
+                  </Typography>
+                </>
+              ) : (
+                <Alert severity="info" sx={{ mt: 1 }}>
+                  {isAdmin ? (
+                    <>
+                      📝 Không có công việc nào đang hoạt động trong hệ thống.
+                      <br />
+                      <strong>
+                        Tổng số tasks trong hệ thống: {tasks.length}
+                      </strong>
+                    </>
+                  ) : (
+                    <>
+                      📝 Không có công việc nào đang thực hiện được giao cho
+                      bạn.
+                      <br />
+                      <strong>
+                        Tổng số tasks trong hệ thống: {tasks.length}
+                      </strong>
+                      <br />
+                      Bạn vẫn có thể tạo nhắc nhở cá nhân.
+                    </>
+                  )}
+                </Alert>
+              )}
             </Box>
           )}
 
-          {availableTasks.length === 0 && (
+          {/* 🆕 THÔNG BÁO KHI KHÔNG CÓ TASKS */}
+          {tasks.length === 0 && (
             <Alert severity="info">
-              📝 Hiện không có công việc nào đang thực hiện. Bạn vẫn có thể tạo
-              nhắc nhở cá nhân.
+              ℹ️ Hiện tại không có công việc nào trong hệ thống. Bạn vẫn có thể
+              tạo nhắc nhở cá nhân.
             </Alert>
           )}
 
-          {/* Title */}
           <TextField
-            label="Tiêu đề nhắc nhở"
+            label="Tiêu đề nhắc nhở *"
             value={formData.title}
             onChange={handleChange("title")}
             error={!!errors.title}
             helperText={errors.title}
             fullWidth
             required
+            placeholder="Nhập tiêu đề nhắc nhở..."
           />
 
           {/* Description */}
@@ -393,52 +551,54 @@ const CreateReminderDialog = ({
             multiline
             rows={3}
             fullWidth
+            placeholder="Nhập mô tả chi tiết cho nhắc nhở..."
           />
 
-          {/* Type */}
-          <FormControl fullWidth>
-            <InputLabel>Loại nhắc nhở</InputLabel>
-            <Select
-              value={formData.type}
-              label="Loại nhắc nhở"
-              onChange={handleChange("type")}
-            >
-              {reminderTypes.map((type) => (
-                <MenuItem key={type.value} value={type.value}>
-                  <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                    <span>{type.emoji}</span>
-                    <span>{type.label}</span>
-                  </Box>
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
-          {/* Date and Time Selection */}
+          {/* Type and DateTime Grid */}
           <Grid container spacing={2}>
-            <Grid item xs={6}>
+            <Grid item xs={12} sm={6}>
+              <FormControl fullWidth>
+                <InputLabel>Loại nhắc nhở</InputLabel>
+                <Select
+                  value={formData.reminderType}
+                  label="Loại nhắc nhở"
+                  onChange={handleChange("reminderType")}
+                >
+                  {reminderTypes.map((type) => (
+                    <MenuItem key={type.value} value={type.value}>
+                      <Box
+                        sx={{ display: "flex", alignItems: "center", gap: 1 }}
+                      >
+                        <span>{type.emoji}</span>
+                        <span>{type.label}</span>
+                      </Box>
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+
+            {/* Date and Time Selection */}
+            <Grid item xs={6} sm={3}>
               <TextField
-                label="Ngày nhắc nhở"
+                label="Ngày *"
                 type="date"
-                value={formData.remindDate || getTomorrowDate()}
+                value={formData.remindDate}
                 onChange={handleChange("remindDate")}
                 error={!!errors.remindDate}
-                helperText={errors.remindDate || "Chọn ngày trong tương lai"}
+                helperText={errors.remindDate}
                 fullWidth
-                InputLabelProps={{
-                  shrink: true,
-                }}
-                inputProps={{
-                  min: getTodayDate(), // 🆕 Không cho chọn ngày trong quá khứ
-                }}
+                InputLabelProps={{ shrink: true }}
+                inputProps={{ min: getTodayDate() }}
+                required
               />
             </Grid>
-            <Grid item xs={6}>
+            <Grid item xs={6} sm={3}>
               <FormControl fullWidth error={!!errors.remindTime}>
-                <InputLabel>Thời gian</InputLabel>
+                <InputLabel>Giờ *</InputLabel>
                 <Select
-                  value={formData.remindTime || getNextHourTime()}
-                  label="Thời gian"
+                  value={formData.remindTime}
+                  label="Giờ *"
                   onChange={handleChange("remindTime")}
                 >
                   {timeOptions.map((time) => (
@@ -452,45 +612,44 @@ const CreateReminderDialog = ({
                     {errors.remindTime}
                   </Typography>
                 )}
-                {!errors.remindTime && (
-                  <Typography variant="caption" color="text.secondary">
-                    Chọn thời gian trong tương lai
-                  </Typography>
-                )}
               </FormControl>
             </Grid>
           </Grid>
 
-          {/* 🆕 Date/Time Validation Alert */}
-          {formData.remindDate &&
-            formData.remindTime &&
-            (() => {
-              const remindDateTime = new Date(
-                `${formData.remindDate}T${formData.remindTime}`
-              );
-              const now = new Date();
-              const isValid = remindDateTime > now;
-
-              return (
-                <Alert severity={isValid ? "success" : "error"} sx={{ mt: 1 }}>
-                  {isValid
-                    ? `✅ Nhắc nhở sẽ được kích hoạt vào: ${remindDateTime.toLocaleString(
-                        "vi-VN"
-                      )}`
-                    : `❌ Thời gian nhắc nhở phải ở tương lai! Đã chọn: ${remindDateTime.toLocaleString(
-                        "vi-VN"
-                      )}`}
-                </Alert>
-              );
-            })()}
+          {/* Date/Time Validation */}
+          {formData.remindDate && formData.remindTime && (
+            <Alert
+              severity={
+                new Date(`${formData.remindDate}T${formData.remindTime}`) >
+                new Date()
+                  ? "success"
+                  : "error"
+              }
+            >
+              {new Date(`${formData.remindDate}T${formData.remindTime}`) >
+              new Date()
+                ? `✅ Nhắc nhở sẽ được kích hoạt vào: ${new Date(
+                    `${formData.remindDate}T${formData.remindTime}`
+                  ).toLocaleString("vi-VN")}`
+                : `❌ Thời gian nhắc nhở phải ở tương lai!`}
+            </Alert>
+          )}
 
           {/* Preview */}
-          <Box sx={{ p: 2, bgcolor: "background.default", borderRadius: 1 }}>
+          <Box
+            sx={{
+              p: 2,
+              bgcolor: "grey.50",
+              borderRadius: 2,
+              border: 1,
+              borderColor: "divider",
+            }}
+          >
             <Typography variant="subtitle2" color="text.secondary" gutterBottom>
               👁️ Xem trước nhắc nhở:
             </Typography>
-            <Typography variant="body2" sx={{ mb: 1 }}>
-              <strong>{formData.title || "[Tiêu đề nhắc nhở]"}</strong>
+            <Typography variant="body1" fontWeight="medium" sx={{ mb: 1 }}>
+              {formData.title || "[Tiêu đề nhắc nhở]"}
             </Typography>
             {formData.description && (
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
@@ -507,19 +666,21 @@ const CreateReminderDialog = ({
             >
               <Chip
                 label={
-                  reminderTypes.find((t) => t.value === formData.type)?.label ||
-                  "Cá nhân"
+                  reminderTypes.find((t) => t.value === formData.reminderType)
+                    ?.label || "Cá nhân"
                 }
                 size="small"
                 variant="outlined"
               />
               {formData.remindDate && formData.remindTime && (
-                <Typography variant="caption" color="text.secondary">
-                  ⏰{" "}
-                  {new Date(
+                <Chip
+                  icon={<Schedule />}
+                  label={new Date(
                     `${formData.remindDate}T${formData.remindTime}`
                   ).toLocaleString("vi-VN")}
-                </Typography>
+                  size="small"
+                  variant="outlined"
+                />
               )}
               {formData.taskId && (
                 <Chip
@@ -529,19 +690,29 @@ const CreateReminderDialog = ({
                   variant="outlined"
                 />
               )}
+              <Chip
+                label={`👤 ${isAdmin ? "Cho chính admin" : "Cho chính bạn"}`}
+                size="small"
+                color="secondary"
+                variant="outlined"
+              />
             </Box>
           </Box>
         </Box>
       </DialogContent>
 
-      <DialogActions>
-        <Button onClick={handleClose}>Hủy</Button>
+      <DialogActions sx={{ p: 3, gap: 1 }}>
+        <Button onClick={handleClose} disabled={loading} variant="outlined">
+          Hủy
+        </Button>
         <Button
           onClick={handleSubmit}
           variant="contained"
-          disabled={!canSubmit()} // 🆕 Sử dụng hàm canSubmit thay vì disabled đơn giản
+          disabled={!canSubmit() || loading}
+          startIcon={loading ? <CircularProgress size={16} /> : <Schedule />}
+          sx={{ minWidth: 120 }}
         >
-          Tạo Nhắc Nhở
+          {loading ? "Đang tạo..." : "Tạo Nhắc Nhở"}
         </Button>
       </DialogActions>
     </Dialog>

@@ -1,4 +1,4 @@
-// src/pages/roles/UserDashboard.js
+// src/pages/roles/UserDashboard.js - ĐÃ THÊM TASKCHAT
 import React, { useState, useEffect, useCallback } from "react";
 import {
   Container,
@@ -10,12 +10,20 @@ import {
   Badge,
   CircularProgress,
   Box,
+  Grid,
+  Dialog,
+  DialogContent,
+  IconButton,
+  Typography,
 } from "@mui/material";
 import {
   Dashboard,
   TaskAlt,
   NotificationsActive,
   AccessTime,
+  Report,
+  Close,
+  Chat,
 } from "@mui/icons-material";
 
 // Import components
@@ -23,24 +31,30 @@ import OverviewTab from "./components/user/OverviewTab";
 import TaskManagement from "./components/user/TaskManagement";
 import ReminderSystem from "./components/user/ReminderSystem";
 import NotificationCenter from "./components/user/NotificationCenter";
-import CreateReminderDialog from "./components/dialogs/CreateReminderDialog";
+import ReportSystem from "./components/user/ReportSystem";
+import CreateReportDialog from "./components/dialogs/CreateReportDialog";
+import TaskChat from "../../components/Task/TaskChat";
 
 // Import services
 import taskService from "../../services/taskService";
 import reminderService from "../../services/reminderService";
 import notificationService from "../../services/notificationService";
+import reportService from "../../services/reportService";
 import { showSnackbar, closeSnackBar } from "../../redux/slices/app";
 import { useDispatch, useSelector } from "react-redux";
 
 export default function UserDashboard() {
   const [activeTab, setActiveTab] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [createReminderDialog, setCreateReminderDialog] = useState(false);
+  const [createReportDialog, setCreateReportDialog] = useState(false);
+  const [chatDialog, setChatDialog] = useState(false); // 🆕 State cho chat dialog
+  const [selectedTask, setSelectedTask] = useState(null); // 🆕 Task được chọn để chat
 
   // State cho dữ liệu
   const [tasks, setTasks] = useState([]);
   const [reminders, setReminders] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [reports, setReports] = useState([]);
   const [dashboardStats, setDashboardStats] = useState({
     totalTasks: 0,
     completedTasks: 0,
@@ -48,6 +62,7 @@ export default function UserDashboard() {
     overdueTasks: 0,
     totalReminders: 0,
     unreadNotifications: 0,
+    pendingReports: 0,
     productivity: 0,
     completionRate: "0%",
   });
@@ -55,13 +70,16 @@ export default function UserDashboard() {
   const dispatch = useDispatch();
   const { snackbar } = useSelector((state) => state.app);
 
-  // 🆕 Lấy user từ auth slice thay vì app slice
+  // Lấy user từ auth slice
   const {
     userInfo: currentUser,
     user_id,
     token,
     isLoggedIn,
   } = useSelector((state) => state.auth);
+
+  // Lấy socket từ Redux (nếu có)
+  const { socket } = useSelector((state) => state.app);
 
   // 🎯 Hàm hiển thị snackbar với useCallback
   const showSnackbarMessage = useCallback(
@@ -70,6 +88,19 @@ export default function UserDashboard() {
     },
     [dispatch]
   );
+
+  // 🆕 Hàm mở chat với task
+  const handleOpenChat = useCallback((task) => {
+    console.log("💬 Opening chat for task:", task);
+    setSelectedTask(task);
+    setChatDialog(true);
+  }, []);
+
+  // 🆕 Hàm đóng chat
+  const handleCloseChat = useCallback(() => {
+    setChatDialog(false);
+    setSelectedTask(null);
+  }, []);
 
   // 🎯 Hàm fallback để tạo dữ liệu mẫu
   const getFallbackData = useCallback((dataType) => {
@@ -111,6 +142,7 @@ export default function UserDashboard() {
             description: "Họp đánh giá tiến độ dự án",
             remindAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
             isSent: false,
+            isCompleted: false,
           },
         ];
       case "notifications":
@@ -122,6 +154,27 @@ export default function UserDashboard() {
             type: "task_assigned",
             isRead: false,
             createdAt: new Date().toISOString(),
+          },
+        ];
+      case "reports":
+        return [
+          {
+            _id: "1",
+            title: "Lỗi đăng nhập không thành công",
+            description: "Không thể đăng nhập vào hệ thống vào buổi sáng",
+            type: "bug",
+            priority: "high",
+            status: "pending",
+            createdAt: new Date().toISOString(),
+          },
+          {
+            _id: "2",
+            title: "Đề xuất cải thiện giao diện",
+            description: "Giao diện chat cần được cải thiện để dễ sử dụng hơn",
+            type: "suggestion",
+            priority: "medium",
+            status: "resolved",
+            createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
           },
         ];
       default:
@@ -139,15 +192,14 @@ export default function UserDashboard() {
       // Load tasks
       let tasksData = [];
       try {
-        const tasksResponse = await taskService.getUserTasks(
-          user_id, // Sử dụng user_id
-          {
-            status: "all",
-            page: 1,
-            limit: 50,
-          }
-        );
+        const tasksResponse = await taskService.getUserTasks(user_id, {
+          status: "all",
+          page: 1,
+          limit: 50,
+          viewType: "assigned",
+        });
         tasksData = tasksResponse.data || getFallbackData("tasks");
+        console.log("📋 Tasks loaded:", tasksData);
       } catch (error) {
         console.error("Error loading tasks, using fallback:", error);
         tasksData = getFallbackData("tasks");
@@ -157,14 +209,15 @@ export default function UserDashboard() {
       let remindersData = [];
       try {
         const remindersResponse = await reminderService.getUserReminders(
-          user_id, // Sử dụng user_id
+          user_id,
           {
             page: 1,
             limit: 20,
-            showSent: false,
+            showSent: true, // 🆕 SỬA: Hiển thị cả reminders đã gửi
           }
         );
         remindersData = remindersResponse.data || getFallbackData("reminders");
+        console.log("🔔 Reminders loaded:", remindersData);
       } catch (error) {
         console.error("Error loading reminders, using fallback:", error);
         remindersData = getFallbackData("reminders");
@@ -174,13 +227,10 @@ export default function UserDashboard() {
       let notificationsData = [];
       try {
         const notificationsResponse =
-          await notificationService.getUserNotifications(
-            user_id, // Sử dụng user_id
-            {
-              page: 1,
-              limit: 20,
-            }
-          );
+          await notificationService.getUserNotifications(user_id, {
+            page: 1,
+            limit: 20,
+          });
         notificationsData =
           notificationsResponse.data || getFallbackData("notifications");
       } catch (error) {
@@ -188,10 +238,25 @@ export default function UserDashboard() {
         notificationsData = getFallbackData("notifications");
       }
 
+      // Load reports
+      let reportsData = [];
+      try {
+        const reportsResponse = await reportService.getUserReports({
+          page: 1,
+          limit: 20,
+          status: "all",
+        });
+        reportsData = reportsResponse.data || getFallbackData("reports");
+      } catch (error) {
+        console.error("Error loading reports, using fallback:", error);
+        reportsData = getFallbackData("reports");
+      }
+
       // Set data
       setTasks(tasksData);
       setReminders(remindersData);
       setNotifications(notificationsData);
+      setReports(reportsData);
 
       // Calculate stats
       const totalTasks = tasksData.length;
@@ -209,9 +274,12 @@ export default function UserDashboard() {
       const unreadNotifications = notificationsData.filter(
         (n) => !n.isRead
       ).length;
+      const pendingReports = reportsData.filter(
+        (r) => r.status === "pending"
+      ).length;
       const completionRate =
         totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
-      const productivity = Math.min(100, completionRate + 25); // Simple productivity calculation
+      const productivity = Math.min(100, completionRate + 25);
 
       setDashboardStats({
         totalTasks,
@@ -220,6 +288,7 @@ export default function UserDashboard() {
         overdueTasks,
         totalReminders,
         unreadNotifications,
+        pendingReports,
         productivity,
         completionRate: `${completionRate}%`,
       });
@@ -234,7 +303,6 @@ export default function UserDashboard() {
   // 🎯 Hàm xử lý cập nhật task status
   const handleUpdateTaskStatus = useCallback(
     async (taskId, newStatus) => {
-      // Sử dụng user_id từ auth
       if (!user_id) {
         showSnackbarMessage("Không tìm thấy thông tin người dùng", "error");
         return;
@@ -253,8 +321,6 @@ export default function UserDashboard() {
         );
 
         showSnackbarMessage("Cập nhật trạng thái thành công", "success");
-
-        // Reload stats
         loadDashboardData();
       } catch (error) {
         console.error("Error updating task status:", error);
@@ -267,14 +333,10 @@ export default function UserDashboard() {
   // 🎯 Hàm xử lý xóa reminder
   const handleDeleteReminder = useCallback(
     async (reminderId) => {
-      // Sử dụng user_id từ auth
       if (!user_id) return;
 
       try {
-        await reminderService.deleteReminder(
-          reminderId,
-          user_id // Sử dụng user_id
-        );
+        await reminderService.deleteReminder(reminderId, user_id);
 
         // Update local state
         setReminders((prevReminders) =>
@@ -294,7 +356,6 @@ export default function UserDashboard() {
   // 🎯 Hàm xử lý tạo reminder mới
   const handleCreateReminder = useCallback(
     async (reminderData) => {
-      // Sử dụng user_id từ auth
       if (!user_id) {
         showSnackbarMessage("Không tìm thấy thông tin người dùng", "error");
         return;
@@ -304,12 +365,11 @@ export default function UserDashboard() {
         setLoading(true);
         const response = await reminderService.createReminder({
           ...reminderData,
-          keycloakId: user_id, // Sử dụng user_id
+          keycloakId: user_id,
         });
 
         if (response.status === "success") {
           showSnackbarMessage("Tạo nhắc nhở thành công!", "success");
-          setCreateReminderDialog(false);
           loadDashboardData();
         } else {
           showSnackbarMessage(
@@ -327,13 +387,105 @@ export default function UserDashboard() {
     [user_id, showSnackbarMessage, loadDashboardData]
   );
 
-  // 🎯 Hàm mở dialog tạo reminder
-  const handleOpenCreateReminder = useCallback(() => {
-    setCreateReminderDialog(true);
+  // 🆕 Hàm xử lý hoàn thành reminder - ĐÃ SỬA LỖI
+  const handleCompleteReminder = useCallback(
+    async (reminderId) => {
+      if (!user_id) return;
+
+      try {
+        console.log("🎯 Completing reminder:", reminderId);
+
+        // 🆕 SỬA: Gọi API cập nhật reminder
+        const response = await reminderService.updateReminder(
+          reminderId,
+          user_id,
+          {
+            isCompleted: true,
+            completedAt: new Date().toISOString(),
+          }
+        );
+
+        if (response.status === "success") {
+          console.log("✅ Reminder completed successfully");
+
+          // 🆕 SỬA: Cập nhật state reminders - chỉ cập nhật reminder được hoàn thành
+          setReminders((prevReminders) =>
+            prevReminders.map((reminder) =>
+              reminder._id === reminderId
+                ? {
+                    ...reminder,
+                    isCompleted: true,
+                    completedAt: new Date().toISOString(),
+                  }
+                : reminder
+            )
+          );
+
+          showSnackbarMessage("Đã đánh dấu nhắc nhở hoàn thành", "success");
+        } else {
+          console.error("❌ API returned error:", response);
+          showSnackbarMessage(
+            response.message || "Lỗi khi hoàn thành nhắc nhở",
+            "error"
+          );
+        }
+      } catch (error) {
+        console.error("❌ Error completing reminder:", error);
+        showSnackbarMessage("Lỗi khi đánh dấu nhắc nhở hoàn thành", "error");
+      }
+    },
+    [user_id, showSnackbarMessage]
+  );
+
+  // 🎯 Hàm xử lý xem chi tiết reminder
+  const handleViewReminder = useCallback((reminder) => {
+    console.log("Xem chi tiết reminder:", reminder);
+    // Dialog chi tiết đã được xử lý trong ReminderSystem component
   }, []);
 
-  const handleCloseCreateReminder = useCallback(() => {
-    setCreateReminderDialog(false);
+  // 🆕 Hàm xử lý tạo report mới
+  const handleCreateReport = useCallback(
+    async (reportData) => {
+      if (!user_id) {
+        showSnackbarMessage("Không tìm thấy thông tin người dùng", "error");
+        return;
+      }
+
+      try {
+        setLoading(true);
+        const response = await reportService.createReport({
+          ...reportData,
+          keycloakId: user_id,
+          email: currentUser?.email,
+        });
+
+        if (response.status === "success") {
+          showSnackbarMessage("Gửi báo cáo thành công!", "success");
+          setCreateReportDialog(false);
+          loadDashboardData();
+        } else {
+          showSnackbarMessage(
+            response.message || "Lỗi khi gửi báo cáo",
+            "error"
+          );
+        }
+      } catch (error) {
+        console.error("Error creating report:", error);
+        showSnackbarMessage("Lỗi khi gửi báo cáo", "error");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [user_id, currentUser, showSnackbarMessage, loadDashboardData]
+  );
+
+  // 🆕 Hàm mở dialog tạo report
+  const handleOpenCreateReport = useCallback(() => {
+    setCreateReportDialog(true);
+  }, []);
+
+  const handleCloseCreateReport = useCallback(() => {
+    setCreateReportDialog(false);
   }, []);
 
   // 🎯 Hàm xử lý đánh dấu thông báo đã đọc
@@ -387,9 +539,7 @@ export default function UserDashboard() {
   // 🎯 Hàm xử lý đánh dấu tất cả thông báo đã đọc
   const handleMarkAllNotificationsAsRead = useCallback(async () => {
     try {
-      await notificationService.markAllNotificationsAsRead(
-        user_id // Sử dụng user_id
-      );
+      await notificationService.markAllNotificationsAsRead(user_id);
 
       // Update local state
       setNotifications((prevNotifications) =>
@@ -407,6 +557,55 @@ export default function UserDashboard() {
     }
   }, [user_id, showSnackbarMessage, loadDashboardData]);
 
+  // 🆕 Hàm xử lý cập nhật report
+  const handleUpdateReport = useCallback(
+    async (reportId, updates) => {
+      try {
+        const response = await reportService.updateUserReport(
+          reportId,
+          updates
+        );
+
+        if (response.status === "success") {
+          showSnackbarMessage("Cập nhật báo cáo thành công", "success");
+          loadDashboardData();
+        } else {
+          showSnackbarMessage(
+            response.message || "Lỗi khi cập nhật báo cáo",
+            "error"
+          );
+        }
+      } catch (error) {
+        console.error("Error updating report:", error);
+        showSnackbarMessage("Lỗi khi cập nhật báo cáo", "error");
+      }
+    },
+    [showSnackbarMessage, loadDashboardData]
+  );
+
+  // 🆕 Hàm xử lý xóa report
+  const handleDeleteReport = useCallback(
+    async (reportId) => {
+      try {
+        const response = await reportService.deleteUserReport(reportId);
+
+        if (response.status === "success") {
+          showSnackbarMessage("Xóa báo cáo thành công", "success");
+          loadDashboardData();
+        } else {
+          showSnackbarMessage(
+            response.message || "Lỗi khi xóa báo cáo",
+            "error"
+          );
+        }
+      } catch (error) {
+        console.error("Error deleting report:", error);
+        showSnackbarMessage("Lỗi khi xóa báo cáo", "error");
+      }
+    },
+    [showSnackbarMessage, loadDashboardData]
+  );
+
   // 🎯 Load data khi tab thay đổi hoặc user_id thay đổi
   useEffect(() => {
     if (user_id) {
@@ -414,9 +613,29 @@ export default function UserDashboard() {
     }
   }, [activeTab, user_id, loadDashboardData]);
 
+  // 🆕 Thêm debug effect để theo dõi state reminders
+  useEffect(() => {
+    console.log("📊 UserDashboard reminders state updated:", {
+      totalReminders: reminders.length,
+      completedReminders: reminders.filter((r) => r.isCompleted).length,
+      activeReminders: reminders.filter((r) => !r.isCompleted).length,
+      reminders: reminders.map((r) => ({
+        id: r._id,
+        title: r.title,
+        isCompleted: r.isCompleted,
+        isSent: r.isSent,
+      })),
+    });
+  }, [reminders]);
+
   // Tính toán số thông báo chưa đọc
   const unreadNotificationsCount = notifications.filter(
     (n) => !n.isRead
+  ).length;
+
+  // 🆕 Tính toán số report pending
+  const pendingReportsCount = reports.filter(
+    (r) => r.status === "pending"
   ).length;
 
   return (
@@ -466,6 +685,15 @@ export default function UserDashboard() {
             label="Thông báo"
             sx={{ fontWeight: activeTab === 3 ? "bold" : "normal" }}
           />
+          <Tab
+            icon={
+              <Badge badgeContent={pendingReportsCount} color="error">
+                <Report />
+              </Badge>
+            }
+            label="Báo cáo"
+            sx={{ fontWeight: activeTab === 4 ? "bold" : "normal" }}
+          />
         </Tabs>
       </Paper>
 
@@ -494,7 +722,9 @@ export default function UserDashboard() {
               tasks={tasks}
               reminders={reminders}
               notifications={notifications}
+              reports={reports}
               onRefresh={loadDashboardData}
+              onOpenChat={handleOpenChat} // 🆕 TRUYỀN PROP CHAT
             />
           </Box>
         )}
@@ -507,6 +737,7 @@ export default function UserDashboard() {
               currentUser={currentUser}
               onRefresh={loadDashboardData}
               onUpdateTaskStatus={handleUpdateTaskStatus}
+              onOpenChat={handleOpenChat} // 🆕 TRUYỀN PROP CHAT
             />
           </Box>
         )}
@@ -516,10 +747,13 @@ export default function UserDashboard() {
             <ReminderSystem
               loading={loading}
               reminders={reminders}
+              tasks={tasks} // 🆕 TRUYỀN TASKS VÀO REMINDER SYSTEM
               currentUser={currentUser}
               onRefresh={loadDashboardData}
               onDeleteReminder={handleDeleteReminder}
-              onCreateReminder={handleOpenCreateReminder} // 🆕 THÊM DÒNG NÀY
+              onCreateReminder={handleCreateReminder}
+              onViewReminder={handleViewReminder}
+              onCompleteReminder={handleCompleteReminder} // 🆕 THÊM PROP HOÀN THÀNH
             />
           </Box>
         )}
@@ -537,16 +771,54 @@ export default function UserDashboard() {
             />
           </Box>
         )}
+
+        {activeTab === 4 && (
+          <Box sx={{ flex: 1, overflow: "auto" }}>
+            <ReportSystem
+              loading={loading}
+              reports={reports}
+              currentUser={currentUser}
+              onRefresh={loadDashboardData}
+              onCreateReport={handleOpenCreateReport}
+              onUpdateReport={handleUpdateReport}
+              onDeleteReport={handleDeleteReport}
+            />
+          </Box>
+        )}
       </Box>
 
-      {/* 🆕 CreateReminderDialog Component */}
-      <CreateReminderDialog
-        open={createReminderDialog}
-        onClose={handleCloseCreateReminder}
+      {/* 🆕 CreateReportDialog Component */}
+      <CreateReportDialog
+        open={createReportDialog}
+        onClose={handleCloseCreateReport}
         currentUser={currentUser}
-        onCreateReminder={handleCreateReminder}
-        tasks={tasks}
+        onCreateReport={handleCreateReport}
       />
+
+      {/* 🆕 TaskChat Dialog */}
+      <Dialog
+        open={chatDialog}
+        onClose={handleCloseChat}
+        maxWidth="lg"
+        fullWidth
+        sx={{
+          "& .MuiDialog-paper": {
+            height: "80vh",
+            maxHeight: "800px",
+          },
+        }}
+      >
+        <DialogContent sx={{ p: 0, height: "100%" }}>
+          {selectedTask && (
+            <TaskChat
+              task={selectedTask}
+              currentUser={currentUser}
+              socket={socket}
+              onClose={handleCloseChat}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Snackbar từ Redux */}
       <Snackbar

@@ -17,7 +17,12 @@ import {
   Alert,
   Badge,
 } from "@mui/material";
-import { Notifications, Delete, MarkEmailRead } from "@mui/icons-material";
+import {
+  Notifications,
+  Delete,
+  MarkEmailRead,
+  Refresh,
+} from "@mui/icons-material";
 
 const NotificationCenter = ({
   loading = false,
@@ -172,7 +177,7 @@ const NotificationCenter = ({
               Đánh dấu tất cả đã đọc
             </Button>
             <Button
-              startIcon={<Delete />}
+              startIcon={<Refresh />}
               onClick={onRefresh}
               variant="outlined"
               size="small"

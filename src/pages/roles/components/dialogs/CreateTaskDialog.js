@@ -1,4 +1,4 @@
-// src/pages/roles/components/dialogs/CreateTaskDialog.js
+// src/pages/roles/components/dialogs/CreateTaskDialog.js - ĐÃ HOÀN THIỆN
 import React, { useState } from "react";
 import {
   Dialog,
@@ -12,31 +12,41 @@ import {
   Typography,
   Grid,
   Alert,
+  Chip,
+  Autocomplete,
 } from "@mui/material";
-import { Add } from "@mui/icons-material";
+import { Add, People } from "@mui/icons-material";
 
-// 🆕 Users list từ database
-const users = [
-  { keycloakId: "e0d7a6e9-98d6-4481-bdd1-dd68283b65c4", name: "An Nguyen" },
-  { keycloakId: "f5dcb70a-4b2e-4f9c-a17f-3015cb6aed42", name: "Hoang Ngan" },
-  { keycloakId: "ba025aa5-6cfb-463c-b245-e94472081d45", name: "Hao Nguyen" },
-  { keycloakId: "0da81ddf-8ba1-4dca-86df-e219df84c699", name: "Thu Nguyen" },
-  { keycloakId: "9a3c43e8-9edd-4efe-977d-bf03168a6c30", name: "Dan Nguyen" },
-  { keycloakId: "faf4e025-74c8-4043-80d9-5bac987b9c01", name: "Theanh Luu" },
-];
+// 🆕 Utility function để lấy display name
+const getDisplayName = (user) => {
+  if (!user) return "Unknown User";
+
+  // Ưu tiên fullName, sau đó đến firstName + lastName, cuối cùng là username
+  if (user.fullName && user.fullName.trim() !== "") {
+    return user.fullName;
+  }
+
+  if (user.firstName && user.lastName) {
+    return `${user.firstName} ${user.lastName}`;
+  }
+
+  return user.username || "Unknown User";
+};
 
 export default function CreateTaskDialog({
   open,
   onClose,
   currentUser,
   onCreateTask,
+  users = [], // 🆕 Nhận danh sách users từ props
 }) {
   const [newTask, setNewTask] = useState({
     title: "",
     description: "",
-    assigneeId: "",
+    assigneeIds: [], // 🆕 THAY ĐỔI: thành mảng
     priority: "medium",
     dueDate: "",
+    estimatedHours: 0,
   });
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
@@ -49,11 +59,15 @@ export default function CreateTaskDialog({
       newErrors.title = "Tiêu đề không được để trống";
     }
 
-    if (!newTask.assigneeId) {
-      newErrors.assigneeId = "Người nhận không được để trống";
+    // 🆕 VALIDATION MỚI: assigneeIds phải là mảng và có ít nhất 1 phần tử
+    if (
+      !Array.isArray(newTask.assigneeIds) ||
+      newTask.assigneeIds.length === 0
+    ) {
+      newErrors.assigneeIds = "Chọn ít nhất 1 người nhận task";
     }
 
-    // 🆕 Validate due date nếu có
+    // Validate due date nếu có
     if (newTask.dueDate) {
       const dueDateTime = new Date(newTask.dueDate);
       const now = new Date();
@@ -69,7 +83,10 @@ export default function CreateTaskDialog({
 
   // 🆕 Hàm kiểm tra có thể submit không
   const canSubmit = () => {
-    const hasRequiredFields = newTask.title.trim() && newTask.assigneeId;
+    const hasRequiredFields =
+      newTask.title.trim() &&
+      Array.isArray(newTask.assigneeIds) &&
+      newTask.assigneeIds.length > 0;
 
     if (!hasRequiredFields) return false;
 
@@ -80,13 +97,13 @@ export default function CreateTaskDialog({
       return dueDateTime > now;
     }
 
-    return true; // Cho phép tạo task không có due date
+    return true;
   };
 
   const handleCreateTask = async () => {
     if (!validateForm()) return;
 
-    // 🆕 Double-check due date validation
+    // Double-check due date validation
     if (newTask.dueDate) {
       const dueDateTime = new Date(newTask.dueDate);
       const now = new Date();
@@ -106,9 +123,10 @@ export default function CreateTaskDialog({
       setNewTask({
         title: "",
         description: "",
-        assigneeId: "",
+        assigneeIds: [],
         priority: "medium",
         dueDate: "",
+        estimatedHours: 0,
       });
       setErrors({});
     } catch (error) {
@@ -119,7 +137,7 @@ export default function CreateTaskDialog({
   };
 
   const handleChange = (field) => (event) => {
-    const value = event.target.value;
+    const value = event.target ? event.target.value : event;
     setNewTask((prev) => ({
       ...prev,
       [field]: value,
@@ -133,13 +151,28 @@ export default function CreateTaskDialog({
       }));
     }
 
-    // 🆕 Validate due date immediately when changed
+    // Validate due date immediately when changed
     if (field === "dueDate") {
       validateDueDate();
     }
   };
 
-  // 🆕 Hàm validate due date
+  // 🆕 Hàm xử lý chọn assignees
+  const handleAssigneesChange = (event, value) => {
+    setNewTask((prev) => ({
+      ...prev,
+      assigneeIds: value.map((user) => user.keycloakId),
+    }));
+
+    if (errors.assigneeIds) {
+      setErrors((prev) => ({
+        ...prev,
+        assigneeIds: "",
+      }));
+    }
+  };
+
+  // Hàm validate due date
   const validateDueDate = () => {
     if (newTask.dueDate) {
       const dueDateTime = new Date(newTask.dueDate);
@@ -163,28 +196,34 @@ export default function CreateTaskDialog({
     setNewTask({
       title: "",
       description: "",
-      assigneeId: "",
+      assigneeIds: [],
       priority: "medium",
       dueDate: "",
+      estimatedHours: 0,
     });
     setErrors({});
     onClose();
   };
 
-  // 🆕 Lấy thời gian mặc định (1 giờ sau)
+  // Lấy thời gian mặc định (1 giờ sau)
   const getDefaultDueDate = () => {
     const nextHour = new Date();
     nextHour.setHours(nextHour.getHours() + 1);
     nextHour.setMinutes(0);
-    return nextHour.toISOString().slice(0, 16); // Format: YYYY-MM-DDTHH:mm
+    return nextHour.toISOString().slice(0, 16);
   };
+
+  // 🆕 Lấy danh sách assignees đã chọn
+  const selectedAssignees = users.filter((user) =>
+    newTask.assigneeIds.includes(user.keycloakId)
+  );
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
       <DialogTitle>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <Add color="primary" />
-          <Typography variant="h6">Tạo Task Mới</Typography>
+          <Typography variant="h6">🎯 Tạo Task Mới</Typography>
         </Box>
       </DialogTitle>
 
@@ -215,23 +254,36 @@ export default function CreateTaskDialog({
             />
           </Grid>
 
-          <Grid item xs={12} md={6}>
-            <TextField
-              fullWidth
-              select
-              label="Người nhận"
-              value={newTask.assigneeId}
-              onChange={handleChange("assigneeId")}
-              error={!!errors.assigneeId}
-              helperText={errors.assigneeId}
-              required
-            >
-              {users.map((user) => (
-                <MenuItem key={user.keycloakId} value={user.keycloakId}>
-                  {user.name}
-                </MenuItem>
-              ))}
-            </TextField>
+          {/* 🆕 Assignees Selection - Multiple */}
+          <Grid item xs={12}>
+            <Typography variant="subtitle2" gutterBottom>
+              👥 Người nhận task
+            </Typography>
+            <Autocomplete
+              multiple
+              options={users}
+              getOptionLabel={(option) => getDisplayName(option)}
+              value={selectedAssignees}
+              onChange={handleAssigneesChange}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Chọn người nhận task"
+                  placeholder="Tìm kiếm người nhận..."
+                  error={!!errors.assigneeIds}
+                  helperText={errors.assigneeIds || "Chọn ít nhất 1 người nhận"}
+                />
+              )}
+              renderTags={(value, getTagProps) =>
+                value.map((option, index) => (
+                  <Chip
+                    label={getDisplayName(option)}
+                    {...getTagProps({ index })}
+                    size="small"
+                  />
+                ))
+              }
+            />
           </Grid>
 
           <Grid item xs={12} md={6}>
@@ -248,6 +300,20 @@ export default function CreateTaskDialog({
             </TextField>
           </Grid>
 
+          <Grid item xs={12} md={6}>
+            <TextField
+              fullWidth
+              type="number"
+              label="Giờ ước tính"
+              value={newTask.estimatedHours}
+              onChange={handleChange("estimatedHours")}
+              InputProps={{
+                inputProps: { min: 0, max: 1000 },
+              }}
+              helperText="Số giờ dự kiến hoàn thành"
+            />
+          </Grid>
+
           <Grid item xs={12}>
             <TextField
               fullWidth
@@ -259,12 +325,12 @@ export default function CreateTaskDialog({
               helperText={errors.dueDate || "Để trống nếu không có hạn cụ thể"}
               InputLabelProps={{ shrink: true }}
               inputProps={{
-                min: new Date().toISOString().slice(0, 16), // Không cho chọn thời gian trong quá khứ
+                min: new Date().toISOString().slice(0, 16),
               }}
             />
           </Grid>
 
-          {/* 🆕 Due Date Validation Alert */}
+          {/* Due Date Validation Alert */}
           {newTask.dueDate &&
             (() => {
               const dueDateTime = new Date(newTask.dueDate);
@@ -285,6 +351,64 @@ export default function CreateTaskDialog({
                 </Grid>
               );
             })()}
+
+          {/* 🆕 Task Preview */}
+          <Grid item xs={12}>
+            <Box sx={{ p: 2, bgcolor: "background.default", borderRadius: 1 }}>
+              <Typography
+                variant="subtitle2"
+                color="text.secondary"
+                gutterBottom
+              >
+                👁️ Xem trước task:
+              </Typography>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                <strong>{newTask.title || "[Tiêu đề task]"}</strong>
+              </Typography>
+              {newTask.description && (
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ mb: 1 }}
+                >
+                  {newTask.description}
+                </Typography>
+              )}
+              <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+                <Chip
+                  label={`Ưu tiên: ${newTask.priority}`}
+                  size="small"
+                  color={
+                    newTask.priority === "high"
+                      ? "error"
+                      : newTask.priority === "medium"
+                      ? "warning"
+                      : "success"
+                  }
+                />
+                {newTask.assigneeIds.length > 0 && (
+                  <Chip
+                    icon={<People />}
+                    label={`${
+                      newTask.assigneeIds.length
+                    } người nhận: ${selectedAssignees
+                      .map((user) => getDisplayName(user))
+                      .join(", ")}`}
+                    size="small"
+                    color="primary"
+                    variant="outlined"
+                  />
+                )}
+                {newTask.estimatedHours > 0 && (
+                  <Chip
+                    label={`${newTask.estimatedHours}h`}
+                    size="small"
+                    variant="outlined"
+                  />
+                )}
+              </Box>
+            </Box>
+          </Grid>
         </Grid>
       </DialogContent>
 
@@ -297,7 +421,9 @@ export default function CreateTaskDialog({
           onClick={handleCreateTask}
           disabled={!canSubmit() || loading}
         >
-          {loading ? "Đang tạo..." : "Tạo Task"}
+          {loading
+            ? "Đang tạo..."
+            : `Tạo Task (${newTask.assigneeIds.length} người)`}
         </Button>
       </DialogActions>
     </Dialog>

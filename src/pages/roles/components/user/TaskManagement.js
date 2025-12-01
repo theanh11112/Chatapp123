@@ -1,4 +1,4 @@
-// src/pages/roles/components/user/TaskManagement.js
+// src/pages/roles/components/user/TaskManagement.js - ĐÃ CẬP NHẬT VỚI CHAT
 import React, { useState } from "react";
 import {
   Box,
@@ -17,6 +17,9 @@ import {
   DialogContent,
   DialogActions,
   Alert,
+  Avatar,
+  AvatarGroup,
+  Tooltip,
 } from "@mui/material";
 import {
   FilterList,
@@ -27,6 +30,8 @@ import {
   Cancel,
   Visibility,
   Refresh,
+  People,
+  Chat, // 🆕 THÊM ICON CHAT
 } from "@mui/icons-material";
 
 const TaskManagement = ({
@@ -36,12 +41,15 @@ const TaskManagement = ({
   onRefresh,
   onUpdateTaskStatus,
   onCreateTask,
+  onViewTask, // 🆕 Thêm prop để xem chi tiết
+  onOpenChat, // 🆕 THÊM PROP CHAT
 }) => {
   const [filter, setFilter] = useState("all");
   const [filterAnchor, setFilterAnchor] = useState(null);
   const [viewDialog, setViewDialog] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
 
+  // 🆕 CẬP NHẬT: Thêm status 'todo' và 'review'
   const getStatusIcon = (status) => {
     switch (status) {
       case "done":
@@ -50,6 +58,10 @@ const TaskManagement = ({
         return <Schedule color="warning" />;
       case "pending":
         return <Pending color="info" />;
+      case "todo":
+        return <Pending color="action" />;
+      case "review":
+        return <CheckCircle color="info" />;
       default:
         return <Cancel color="error" />;
     }
@@ -62,6 +74,10 @@ const TaskManagement = ({
       case "in_progress":
         return "warning";
       case "pending":
+        return "info";
+      case "todo":
+        return "default";
+      case "review":
         return "info";
       default:
         return "error";
@@ -89,6 +105,10 @@ const TaskManagement = ({
         return "Đang thực hiện";
       case "pending":
         return "Chờ xử lý";
+      case "todo":
+        return "Cần làm";
+      case "review":
+        return "Chờ duyệt";
       default:
         return "Đã hủy";
     }
@@ -113,7 +133,10 @@ const TaskManagement = ({
         return 100;
       case "in_progress":
         return task.progress || 50;
+      case "review":
+        return 75;
       case "pending":
+      case "todo":
         return 0;
       default:
         return 0;
@@ -136,7 +159,18 @@ const TaskManagement = ({
 
   const handleViewTask = (task) => {
     setSelectedTask(task);
-    setViewDialog(true);
+    if (onViewTask) {
+      onViewTask(task); // 🆕 Gọi prop nếu có
+    } else {
+      setViewDialog(true); // 🆕 Fallback to internal dialog
+    }
+  };
+
+  // 🆕 HÀM MỞ CHAT VỚI TASK
+  const handleOpenTaskChat = (task) => {
+    if (onOpenChat) {
+      onOpenChat(task);
+    }
   };
 
   const handleUpdateStatus = (taskId, newStatus) => {
@@ -161,6 +195,41 @@ const TaskManagement = ({
     if (filter === "all") return true;
     return task.status === filter;
   });
+
+  // 🆕 Hàm render assignees info
+  const renderAssigneesInfo = (task) => {
+    const assignees = task.assigneesInfo || [];
+    const assigneeCount = task.assigneeIds?.length || assignees.length || 0;
+
+    if (assigneeCount === 0) return null;
+
+    return (
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
+        <People fontSize="small" color="action" />
+        <Typography variant="caption" color="text.secondary">
+          {assigneeCount} người
+        </Typography>
+        <AvatarGroup
+          max={3}
+          sx={{
+            "& .MuiAvatar-root": { width: 20, height: 20, fontSize: "0.6rem" },
+          }}
+        >
+          {assignees.slice(0, 3).map((assignee, idx) => (
+            <Tooltip
+              key={idx}
+              title={`${assignee.firstName} ${assignee.lastName}`}
+            >
+              <Avatar>
+                {assignee.firstName?.[0]}
+                {assignee.lastName?.[0]}
+              </Avatar>
+            </Tooltip>
+          ))}
+        </AvatarGroup>
+      </Box>
+    );
+  };
 
   if (loading) {
     return (
@@ -197,10 +266,12 @@ const TaskManagement = ({
                 Lọc:{" "}
                 {filter === "all"
                   ? "Tất cả"
-                  : filter === "pending"
+                  : filter === "pending" || filter === "todo"
                   ? "Chờ xử lý"
                   : filter === "in_progress"
                   ? "Đang thực hiện"
+                  : filter === "review"
+                  ? "Chờ duyệt"
                   : "Hoàn thành"}
               </Button>
               <Button
@@ -222,11 +293,17 @@ const TaskManagement = ({
             <MenuItem onClick={() => handleFilterSelect("all")}>
               Tất cả công việc
             </MenuItem>
+            <MenuItem onClick={() => handleFilterSelect("todo")}>
+              Cần làm
+            </MenuItem>
             <MenuItem onClick={() => handleFilterSelect("pending")}>
               Chờ xử lý
             </MenuItem>
             <MenuItem onClick={() => handleFilterSelect("in_progress")}>
               Đang thực hiện
+            </MenuItem>
+            <MenuItem onClick={() => handleFilterSelect("review")}>
+              Chờ duyệt
             </MenuItem>
             <MenuItem onClick={() => handleFilterSelect("done")}>
               Đã hoàn thành
@@ -236,7 +313,7 @@ const TaskManagement = ({
           {/* Tasks Grid */}
           <Grid container spacing={3}>
             {filteredTasks.map((task) => (
-              <Grid item xs={12} md={6} key={task._id || task.id}>
+              <Grid item xs={12} md={6} lg={4} key={task._id || task.id}>
                 <Card
                   variant="outlined"
                   sx={{
@@ -257,10 +334,31 @@ const TaskManagement = ({
                         mb: 2,
                       }}
                     >
-                      <Typography variant="h6" fontWeight="medium">
+                      <Typography
+                        variant="h6"
+                        fontWeight="medium"
+                        sx={{ flex: 1, mr: 1 }}
+                      >
                         {task.title}
                       </Typography>
                       <Box sx={{ display: "flex", gap: 0.5 }}>
+                        {/* 🆕 NÚT CHAT */}
+                        <Tooltip title="Chat về task này">
+                          <IconButton
+                            size="small"
+                            onClick={() => handleOpenTaskChat(task)}
+                            sx={{
+                              color: "primary.main",
+                              "&:hover": {
+                                bgcolor: "primary.main",
+                                color: "white",
+                              },
+                            }}
+                          >
+                            <Chat fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+
                         <IconButton
                           size="small"
                           onClick={() => handleViewTask(task)}
@@ -310,7 +408,7 @@ const TaskManagement = ({
                         display: "flex",
                         gap: 1,
                         flexWrap: "wrap",
-                        mb: 2,
+                        mb: 1,
                       }}
                     >
                       <Chip
@@ -328,12 +426,16 @@ const TaskManagement = ({
                       />
                     </Box>
 
+                    {/* 🆕 Hiển thị assignees */}
+                    {renderAssigneesInfo(task)}
+
                     {/* Footer */}
                     <Box
                       sx={{
                         display: "flex",
                         justifyContent: "space-between",
                         alignItems: "center",
+                        mt: 2,
                       }}
                     >
                       <Typography variant="caption" color="text.secondary">
@@ -343,24 +445,49 @@ const TaskManagement = ({
                           : "Không có hạn"}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        Giao bởi: {task.assigner || "System"}
+                        {task.assignerInfo
+                          ? `${task.assignerInfo.firstName} ${task.assignerInfo.lastName}`
+                          : task.assigner || "System"}
                       </Typography>
                     </Box>
 
                     {/* Action Buttons */}
                     <Box sx={{ display: "flex", gap: 1, mt: 2 }}>
-                      {task.status !== "done" && (
+                      {task.status !== "done" && task.status !== "review" && (
                         <Button
                           size="small"
                           variant="outlined"
                           onClick={() =>
                             handleUpdateStatus(
                               task._id || task.id,
-                              task.status === "pending" ? "in_progress" : "done"
+                              task.status === "pending" ||
+                                task.status === "todo"
+                                ? "in_progress"
+                                : task.status === "in_progress"
+                                ? "review"
+                                : "done"
                             )
                           }
+                          fullWidth
                         >
-                          {task.status === "pending" ? "Bắt đầu" : "Hoàn thành"}
+                          {task.status === "pending" || task.status === "todo"
+                            ? "Bắt đầu"
+                            : task.status === "in_progress"
+                            ? "Gửi duyệt"
+                            : "Hoàn thành"}
+                        </Button>
+                      )}
+                      {task.status === "review" && (
+                        <Button
+                          size="small"
+                          variant="contained"
+                          color="success"
+                          onClick={() =>
+                            handleUpdateStatus(task._id || task.id, "done")
+                          }
+                          fullWidth
+                        >
+                          Duyệt hoàn thành
                         </Button>
                       )}
                     </Box>
@@ -378,96 +505,115 @@ const TaskManagement = ({
         </CardContent>
       </Card>
 
-      {/* Task Detail Dialog */}
-      <Dialog
-        open={viewDialog}
-        onClose={handleViewDialogClose}
-        maxWidth="md"
-        fullWidth
-      >
-        <DialogTitle>Chi tiết công việc</DialogTitle>
-        <DialogContent>
-          {selectedTask && (
-            <Box sx={{ mt: 2 }}>
-              <Typography variant="h6" gutterBottom>
-                {selectedTask.title}
-              </Typography>
-              <Typography variant="body1" paragraph>
-                {selectedTask.description}
-              </Typography>
+      {/* 🆕 Fallback Task Detail Dialog - Chỉ hiển thị nếu không có onViewTask prop */}
+      {!onViewTask && (
+        <Dialog
+          open={viewDialog}
+          onClose={handleViewDialogClose}
+          maxWidth="md"
+          fullWidth
+        >
+          <DialogTitle>Chi tiết công việc</DialogTitle>
+          <DialogContent>
+            {selectedTask && (
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="h6" gutterBottom>
+                  {selectedTask.title}
+                </Typography>
+                <Typography variant="body1" paragraph>
+                  {selectedTask.description}
+                </Typography>
 
-              <Grid container spacing={2} sx={{ mt: 1 }}>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">
-                    Trạng thái
-                  </Typography>
-                  <Chip
-                    icon={getStatusIcon(selectedTask.status)}
-                    label={getStatusText(selectedTask.status)}
-                    color={getStatusColor(selectedTask.status)}
-                    sx={{ mt: 0.5 }}
-                  />
+                <Grid container spacing={2} sx={{ mt: 1 }}>
+                  <Grid item xs={6}>
+                    <Typography variant="caption" color="text.secondary">
+                      Trạng thái
+                    </Typography>
+                    <Chip
+                      icon={getStatusIcon(selectedTask.status)}
+                      label={getStatusText(selectedTask.status)}
+                      color={getStatusColor(selectedTask.status)}
+                      sx={{ mt: 0.5 }}
+                    />
+                  </Grid>
+                  <Grid item xs={6}>
+                    <Typography variant="caption" color="text.secondary">
+                      Mức độ ưu tiên
+                    </Typography>
+                    <Chip
+                      label={getPriorityText(selectedTask.priority)}
+                      color={getPriorityColor(selectedTask.priority)}
+                      sx={{ mt: 0.5 }}
+                    />
+                  </Grid>
+                  <Grid item xs={6}>
+                    <Typography variant="caption" color="text.secondary">
+                      Hạn hoàn thành
+                    </Typography>
+                    <Typography variant="body2">
+                      {selectedTask.dueDate
+                        ? new Date(selectedTask.dueDate).toLocaleDateString(
+                            "vi-VN"
+                          )
+                        : "Không có hạn"}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={6}>
+                    <Typography variant="caption" color="text.secondary">
+                      Người giao việc
+                    </Typography>
+                    <Typography variant="body2">
+                      {selectedTask.assigner || "System"}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12}>
+                    <Typography variant="caption" color="text.secondary">
+                      Tiến độ
+                    </Typography>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 2,
+                        mt: 0.5,
+                      }}
+                    >
+                      <LinearProgress
+                        variant="determinate"
+                        value={calculateProgress(selectedTask)}
+                        sx={{ flexGrow: 1, height: 8, borderRadius: 4 }}
+                      />
+                      <Typography variant="body2" fontWeight="bold">
+                        {calculateProgress(selectedTask)}%
+                      </Typography>
+                    </Box>
+                  </Grid>
                 </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">
-                    Mức độ ưu tiên
-                  </Typography>
-                  <Chip
-                    label={getPriorityText(selectedTask.priority)}
-                    color={getPriorityColor(selectedTask.priority)}
-                    sx={{ mt: 0.5 }}
-                  />
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">
-                    Hạn hoàn thành
-                  </Typography>
-                  <Typography variant="body2">
-                    {selectedTask.dueDate
-                      ? new Date(selectedTask.dueDate).toLocaleDateString(
-                          "vi-VN"
-                        )
-                      : "Không có hạn"}
-                  </Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">
-                    Người giao việc
-                  </Typography>
-                  <Typography variant="body2">
-                    {selectedTask.assigner || "System"}
-                  </Typography>
-                </Grid>
-                <Grid item xs={12}>
-                  <Typography variant="caption" color="text.secondary">
-                    Tiến độ
-                  </Typography>
-                  <Box
+
+                {/* 🆕 THÊM NÚT CHAT TRONG DIALOG */}
+                <Box sx={{ mt: 3, display: "flex", justifyContent: "center" }}>
+                  <Button
+                    variant="contained"
+                    startIcon={<Chat />}
+                    onClick={() => handleOpenTaskChat(selectedTask)}
                     sx={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 2,
-                      mt: 0.5,
+                      bgcolor: "primary.main",
+                      "&:hover": {
+                        bgcolor: "primary.dark",
+                      },
                     }}
                   >
-                    <LinearProgress
-                      variant="determinate"
-                      value={calculateProgress(selectedTask)}
-                      sx={{ flexGrow: 1, height: 8, borderRadius: 4 }}
-                    />
-                    <Typography variant="body2" fontWeight="bold">
-                      {calculateProgress(selectedTask)}%
-                    </Typography>
-                  </Box>
-                </Grid>
-              </Grid>
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleViewDialogClose}>Đóng</Button>
-        </DialogActions>
-      </Dialog>
+                    Chat về task này
+                  </Button>
+                </Box>
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleViewDialogClose}>Đóng</Button>
+          </DialogActions>
+        </Dialog>
+      )}
     </div>
   );
 };

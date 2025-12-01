@@ -169,7 +169,7 @@ export default function NotificationsTab({
                 </Button>
               </Box>
             </Box>
-
+            {/* Statistics Cards */}
             {/* Statistics Cards */}
             <Grid container spacing={3} sx={{ mb: 4 }}>
               <Grid item xs={12} sm={6} md={3}>
@@ -183,7 +183,7 @@ export default function NotificationsTab({
                 >
                   <CardContent sx={{ textAlign: "center", p: 3 }}>
                     <Typography variant="h2" fontWeight="bold">
-                      {notificationStats.totalNotifications || 0}
+                      {notificationStats.total || 0}
                     </Typography>
                     <Typography variant="body1" sx={{ opacity: 0.9 }}>
                       Tổng thông báo
@@ -213,7 +213,7 @@ export default function NotificationsTab({
                       }}
                     >
                       <Typography variant="h2" fontWeight="bold">
-                        {unreadNotificationsCount}
+                        {notificationStats.unread || 0}
                       </Typography>
                     </Badge>
                     <Typography variant="body1" sx={{ opacity: 0.9 }}>
@@ -233,10 +233,10 @@ export default function NotificationsTab({
                 >
                   <CardContent sx={{ textAlign: "center", p: 3 }}>
                     <Typography variant="h2" fontWeight="bold">
-                      {notificationStats.todayCount || 0}
+                      {notificationStats.read || 0}
                     </Typography>
                     <Typography variant="body1" sx={{ opacity: 0.9 }}>
-                      Hôm nay
+                      Đã đọc
                     </Typography>
                   </CardContent>
                 </Card>
@@ -252,16 +252,15 @@ export default function NotificationsTab({
                 >
                   <CardContent sx={{ textAlign: "center", p: 3 }}>
                     <Typography variant="h2" fontWeight="bold">
-                      {notificationStats.thisWeekCount || 0}
+                      {notificationStats.byType?.info || 0}
                     </Typography>
                     <Typography variant="body1" sx={{ opacity: 0.9 }}>
-                      Tuần này
+                      Thông tin
                     </Typography>
                   </CardContent>
                 </Card>
               </Grid>
             </Grid>
-
             {/* Notifications List */}
             {notifications.length === 0 ? (
               <Box sx={{ textAlign: "center", py: 8 }}>

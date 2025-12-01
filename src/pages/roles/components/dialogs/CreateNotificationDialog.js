@@ -64,6 +64,8 @@ export default function CreateNotificationDialog({
   };
 
   // 🆕 Hàm kiểm tra có thể submit không
+  // src/pages/roles/components/dialogs/CreateNotificationDialog.js - SỬA VALIDATION
+  // 🆕 Hàm kiểm tra có thể submit không - SỬA LẠI
   const canSubmit = () => {
     const hasRequiredFields =
       newNotification.title.trim() && newNotification.message.trim();
@@ -80,6 +82,28 @@ export default function CreateNotificationDialog({
     }
 
     return true; // Cho phép tạo ngay lập tức nếu không lên lịch
+  };
+
+  // 🆕 Hàm tạo notification data - THÊM
+  const prepareNotificationData = () => {
+    const baseData = {
+      title: newNotification.title.trim(),
+      message: newNotification.message.trim(),
+      type: newNotification.type,
+      priority: newNotification.priority,
+      recipientType: newNotification.recipientType,
+      source: newNotification.source || "System Admin",
+    };
+
+    // 🆕 Xử lý scheduled time nếu có
+    if (newNotification.scheduleDate && newNotification.scheduleTime) {
+      const scheduledDateTime = new Date(
+        `${newNotification.scheduleDate}T${newNotification.scheduleTime}`
+      );
+      baseData.expiresAt = scheduledDateTime.toISOString();
+    }
+
+    return baseData;
   };
 
   const handleCreateNotification = async () => {
@@ -103,7 +127,9 @@ export default function CreateNotificationDialog({
 
     setLoading(true);
     try {
-      await onCreateNotification(newNotification);
+      const notificationData = prepareNotificationData();
+      await onCreateNotification(notificationData);
+
       // Reset form
       setNewNotification({
         title: "",
@@ -119,6 +145,8 @@ export default function CreateNotificationDialog({
       setErrors({});
     } catch (error) {
       console.error("Error creating notification:", error);
+      // 🆕 Hiển thị lỗi cho user
+      setErrors({ submit: "Lỗi khi tạo thông báo. Vui lòng thử lại." });
     } finally {
       setLoading(false);
     }

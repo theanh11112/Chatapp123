@@ -8,6 +8,7 @@ import authReducer from "./slices/auth";
 import conversationReducer from "./slices/conversation";
 import chatboxReducer from "./slices/chatboxSlice";
 import settingsReducer from "./slices/settingsSlice";
+import taskChatReducer from "./slices/taskChat";
 // ----------------------------------------------------------------------
 
 const rootPersistConfig = {
@@ -26,6 +27,7 @@ const rootReducer = combineReducers({
   videoCall: videoCallReducer,
   chatbox: chatboxReducer,
   settings: settingsReducer,
+  taskChat: taskChatReducer,
 });
 
 export { rootPersistConfig, rootReducer };

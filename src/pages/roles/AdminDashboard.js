@@ -1,4 +1,3 @@
-// src/pages/roles/AdminDashboard.js
 import React, { useState, useEffect, useCallback } from "react";
 import {
   Container,
@@ -17,27 +16,32 @@ import {
   Task,
   Notifications,
   AccessTime,
+  Report,
 } from "@mui/icons-material";
 
 // Import components
-import DashboardHeader from "./components/DashboardHeader";
-import OverviewTab from "./components/OverviewTab";
-import UsersTab from "./components/UsersTab";
-import TasksTab from "./components/TasksTab";
-import NotificationsTab from "./components/NotificationsTab";
-import RemindersTab from "./components/RemindersTab";
+import DashboardHeader from "./components/admin/DashboardHeader";
+import OverviewTab from "./components/admin/OverviewTab";
+import UsersTab from "./components/admin/UsersTab";
+import TasksTab from "./components/admin/TasksTab";
+import NotificationsTab from "./components/admin/NotificationsTab";
+import RemindersTab from "./components/admin/RemindersTab";
+import ReportsTab from "./components/admin/ReportsTab";
 import CreateTaskDialog from "./components/dialogs/CreateTaskDialog";
 import CreateNotificationDialog from "./components/dialogs/CreateNotificationDialog";
 import CreateReminderDialog from "./components/dialogs/CreateReminderDialog";
 import ViewTaskDialog from "./components/dialogs/ViewTaskDialog";
 import DeleteTaskDialog from "./components/dialogs/DeleteTaskDialog";
 import ViewReminderDialog from "./components/dialogs/ViewReminderDialog";
+import ViewReportDialog from "./components/dialogs/ViewReportDialog";
+import EditTaskDialog from "./components/dialogs/EditTaskDialog"; // 🆕 IMPORT EDIT DIALOG
 
 // Import services
 import taskService from "../../services/taskService";
 import reminderService from "../../services/reminderService";
 import analyticsService from "../../services/analyticsService";
 import notificationService from "../../services/notificationService";
+import reportService from "../../services/reportService";
 import { showSnackbar, closeSnackBar } from "../../redux/slices/app";
 import { useDispatch, useSelector } from "react-redux";
 
@@ -47,12 +51,16 @@ export default function AdminDashboard() {
   const [createReminderDialog, setCreateReminderDialog] = useState(false);
   const [viewTaskDialog, setViewTaskDialog] = useState(false);
   const [viewReminderDialog, setViewReminderDialog] = useState(false);
+  const [viewReportDialog, setViewReportDialog] = useState(false);
   const [deleteTaskDialog, setDeleteTaskDialog] = useState(false);
   const [createNotificationDialog, setCreateNotificationDialog] =
     useState(false);
+  const [editTaskDialog, setEditTaskDialog] = useState(false); // 🆕 STATE EDIT TASK DIALOG
   const [taskToDelete, setTaskToDelete] = useState(null);
   const [selectedTask, setSelectedTask] = useState(null);
   const [selectedReminder, setSelectedReminder] = useState(null);
+  const [selectedReport, setSelectedReport] = useState(null);
+  const [taskToEdit, setTaskToEdit] = useState(null); // 🆕 STATE TASK CẦN EDIT
 
   // State chung
   const [systemStats, setSystemStats] = useState({
@@ -69,21 +77,20 @@ export default function AdminDashboard() {
   const [usersList, setUsersList] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [reminders, setReminders] = useState([]);
+  const [reports, setReports] = useState([]);
+  const [reportStats, setReportStats] = useState({});
   const [notificationStats, setNotificationStats] = useState({});
   const [loading, setLoading] = useState(false);
 
   const dispatch = useDispatch();
   const { snackbar } = useSelector((state) => state.app);
 
-  // 🆕 Lấy user từ auth slice thay vì app slice
+  // 🆕 Lấy user từ auth slice
   const {
     userInfo: currentUser,
     user_id,
-    token,
     isLoggedIn,
   } = useSelector((state) => state.auth);
-
-  console.log("Current User from auth:", currentUser);
 
   // 🆕 Hàm hiển thị snackbar với useCallback
   const showSnackbarMessage = useCallback(
@@ -95,31 +102,67 @@ export default function AdminDashboard() {
 
   // 🆕 Hàm fallback để tạo dữ liệu mẫu
   const getFallbackData = useCallback((dataType) => {
-    console.log(`Using fallback data for: ${dataType}`);
+    console.log(`🔄 Using fallback data for: ${dataType}`);
+
+    const currentDate = new Date();
+    const oneWeekAgo = new Date(
+      currentDate.getTime() - 7 * 24 * 60 * 60 * 1000
+    );
+
+    // Helper để tạo dates cho charts
+    const generateDateRange = (days) => {
+      const dates = [];
+      for (let i = days - 1; i >= 0; i--) {
+        const date = new Date();
+        date.setDate(date.getDate() - i);
+        dates.push(date.toISOString().split("T")[0]);
+      }
+      return dates;
+    };
 
     switch (dataType) {
       case "systemStats":
         return {
-          totalUsers: 150,
+          totalUsers: 156,
           onlineUsers: 23,
-          totalTasks: 456,
-          completedTasks: 289,
-          systemLoad: 45,
-          responseTime: 120,
+          totalTasks: 489,
+          completedTasks: 312,
+          systemLoad: 65,
+          responseTime: 128,
+          activeSessions: 45,
+          storageUsage: 76,
+          updatedAt: new Date().toISOString(),
         };
+
       case "userActivity":
-        return [
-          { date: "2024-01-01", activeUsers: 45 },
-          { date: "2024-01-02", activeUsers: 52 },
-          { date: "2024-01-03", activeUsers: 38 },
-        ];
+        const dates = generateDateRange(7);
+        return dates.map((date, index) => ({
+          date,
+          activeUsers: Math.floor(Math.random() * 50) + 20,
+          newUsers: Math.floor(Math.random() * 10) + 1,
+          returningUsers: Math.floor(Math.random() * 40) + 15,
+        }));
+
       case "taskStatus":
         return [
-          { status: "pending", count: 45 },
-          { status: "in_progress", count: 89 },
-          { status: "done", count: 289 },
-          { status: "cancelled", count: 33 },
+          { status: "todo", count: 67, color: "#ff6b6b", label: "Cần làm" },
+          {
+            status: "in_progress",
+            count: 89,
+            color: "#4ecdc4",
+            label: "Đang làm",
+          },
+          { status: "review", count: 23, color: "#45b7d1", label: "Chờ duyệt" },
+          { status: "done", count: 312, color: "#96ceb4", label: "Hoàn thành" },
         ];
+
+      case "taskDistribution":
+        return [
+          { name: "Cá nhân", value: 245, color: "#8884d8" },
+          { name: "Nhóm", value: 144, color: "#82ca9d" },
+          { name: "Dự án", value: 98, color: "#ffc658" },
+        ];
+
       case "usersList":
         return [
           {
@@ -133,6 +176,8 @@ export default function AdminDashboard() {
             isActive: true,
             lastSeen: new Date().toISOString(),
             createdAt: new Date().toISOString(),
+            avatar: "",
+            department: "Engineering",
           },
           {
             _id: "2",
@@ -145,38 +190,393 @@ export default function AdminDashboard() {
             isActive: true,
             lastSeen: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
             createdAt: new Date().toISOString(),
+            avatar: "",
+            department: "Marketing",
+          },
+          {
+            _id: "3",
+            keycloakId: "user3",
+            firstName: "Lê Văn",
+            lastName: "C",
+            email: "c@example.com",
+            username: "userc",
+            roles: ["admin"],
+            isActive: true,
+            lastSeen: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+            createdAt: new Date().toISOString(),
+            avatar: "",
+            department: "Management",
+          },
+          {
+            _id: "4",
+            keycloakId: "user4",
+            firstName: "Phạm Thị",
+            lastName: "D",
+            email: "d@example.com",
+            username: "userd",
+            roles: ["user"],
+            isActive: false,
+            lastSeen: new Date(
+              Date.now() - 7 * 24 * 60 * 60 * 1000
+            ).toISOString(),
+            createdAt: new Date().toISOString(),
+            avatar: "",
+            department: "Sales",
           },
         ];
+
+      case "reports":
+        return [
+          {
+            _id: "1",
+            title: "Lỗi đăng nhập hệ thống",
+            description:
+              "Không thể đăng nhập vào hệ thống sau khi update phiên bản mới",
+            type: "bug",
+            priority: "high",
+            status: "pending",
+            reportedBy: "user1",
+            reportedByEmail: "user1@example.com",
+            category: "technical",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          {
+            _id: "2",
+            title: "Giao diện không responsive trên mobile",
+            description: "Giao diện bị vỡ khi xem trên điện thoại di động",
+            type: "ui_issue",
+            priority: "medium",
+            status: "in_progress",
+            reportedBy: "user2",
+            reportedByEmail: "user2@example.com",
+            category: "design",
+            createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          {
+            _id: "3",
+            title: "Tính năng export báo cáo bị lỗi",
+            description: "Không thể export báo cáo sang file Excel",
+            type: "feature_request",
+            priority: "low",
+            status: "resolved",
+            reportedBy: "user3",
+            reportedByEmail: "user3@example.com",
+            category: "functionality",
+            createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ];
+
+      case "reportStats":
+        return {
+          total: 156,
+          pending: 45,
+          in_progress: 23,
+          resolved: 67,
+          closed: 21,
+          byPriority: {
+            low: 56,
+            medium: 67,
+            high: 28,
+            critical: 5,
+          },
+          byType: {
+            bug: 89,
+            feature_request: 45,
+            ui_issue: 22,
+          },
+        };
+
+      case "notifications":
+        return [
+          {
+            _id: "1",
+            title: "Hệ thống bảo trì",
+            message: "Hệ thống sẽ bảo trì từ 2:00 - 4:00 ngày mai",
+            type: "info",
+            priority: "medium",
+            isRead: false,
+            recipientType: "all",
+            source: "System Admin",
+            createdAt: new Date().toISOString(),
+          },
+          {
+            _id: "2",
+            title: "Task mới được giao",
+            message: "Bạn có task mới 'Cập nhật tài liệu dự án'",
+            type: "success",
+            priority: "high",
+            isRead: true,
+            recipientType: "user",
+            source: "Task Management",
+            createdAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+          },
+          {
+            _id: "3",
+            title: "Cảnh báo bảo mật",
+            message: "Phát hiện hoạt động đăng nhập bất thường",
+            type: "warning",
+            priority: "critical",
+            isRead: false,
+            recipientType: "admin",
+            source: "Security System",
+            createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+          },
+        ];
+
+      case "notificationStats":
+        return {
+          total: 156,
+          unread: 23,
+          read: 133,
+          todayCount: 12,
+          thisWeekCount: 45,
+          byType: {
+            info: 67,
+            success: 45,
+            warning: 23,
+            error: 21,
+          },
+          byPriority: {
+            low: 89,
+            medium: 45,
+            high: 18,
+            critical: 4,
+          },
+        };
+
+      case "reminders":
+        return [
+          {
+            _id: "1",
+            title: "Họp đánh giá tuần",
+            description: "Họp đánh giá công việc tuần với team",
+            dueDate: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+            priority: "high",
+            isCompleted: false,
+            assignedTo: ["user1", "user2"],
+            createdBy: "admin1",
+            createdAt: new Date().toISOString(),
+          },
+          {
+            _id: "2",
+            title: "Gửi báo cáo tháng",
+            description: "Hoàn thành và gửi báo cáo tháng cho quản lý",
+            dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+            priority: "medium",
+            isCompleted: false,
+            assignedTo: ["user3"],
+            createdBy: "admin1",
+            createdAt: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
+          },
+          {
+            _id: "3",
+            title: "Training onboarding",
+            description: "Training cho nhân viên mới",
+            dueDate: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+            priority: "low",
+            isCompleted: true,
+            assignedTo: ["user4"],
+            createdBy: "admin2",
+            createdAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+          },
+        ];
+
+      case "performanceMetrics":
+        return {
+          cpuUsage: 45,
+          memoryUsage: 67,
+          diskUsage: 34,
+          networkLatency: 23,
+          uptime: 99.8,
+          errorRate: 0.2,
+          responseTime: 156,
+          requestsPerMinute: 234,
+        };
+
+      case "recentActivities":
+        return [
+          {
+            _id: "1",
+            user: "Nguyễn Văn A",
+            action: "created_task",
+            target: "Task: Cập nhật tài liệu",
+            timestamp: new Date().toISOString(),
+            icon: "📝",
+          },
+          {
+            _id: "2",
+            user: "Trần Thị B",
+            action: "completed_task",
+            target: "Task: Fix lỗi đăng nhập",
+            timestamp: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+            icon: "✅",
+          },
+          {
+            _id: "3",
+            user: "Lê Văn C",
+            action: "uploaded_file",
+            target: "File: Báo cáo tháng.pdf",
+            timestamp: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+            icon: "📎",
+          },
+          {
+            _id: "4",
+            user: "System",
+            action: "system_update",
+            target: "Phiên bản 2.1.0",
+            timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+            icon: "🔄",
+          },
+        ];
+
+      case "dashboardOverview":
+        return {
+          totalUsers: 156,
+          activeUsers: 23,
+          totalTasks: 489,
+          completedTasks: 312,
+          pendingReports: 45,
+          systemHealth: 95,
+          storageUsage: 76,
+          uptime: "99.8%",
+        };
+
       default:
+        console.warn(`❌ No fallback data defined for: ${dataType}`);
         return null;
     }
   }, []);
-
   // 🆕 Hàm load reminders với useCallback
+  // 🆕 Hàm load reminders với useCallback
+  // 🆕 CẬP NHẬT HÀM LOAD REMINDERS
   const loadReminders = useCallback(async () => {
-    // Sử dụng user_id từ auth thay vì keycloakId
     if (!user_id) return;
 
     try {
+      console.log("🔄 Loading reminders for user:", user_id);
       const response = await reminderService.getUserReminders(user_id, {
         page: 1,
         limit: 20,
         showSent: true,
       });
-      setReminders(response.data || []);
+
+      // 🆕 XỬ LÝ MAPPING isSent → isCompleted ĐỂ ĐẢM BẢO TƯƠNG THÍCH
+      const mappedReminders =
+        response.data?.map((reminder) => ({
+          ...reminder,
+          isCompleted:
+            reminder.isCompleted !== undefined
+              ? reminder.isCompleted
+              : reminder.isSent,
+          // 🆕 Đảm bảo cả hai field đều tồn tại
+          isSent:
+            reminder.isSent !== undefined
+              ? reminder.isSent
+              : reminder.isCompleted,
+        })) || [];
+
+      console.log("✅ Reminders loaded after mapping:", mappedReminders);
+      setReminders(mappedReminders);
     } catch (error) {
-      console.error("Error loading reminders:", error);
-      setReminders([]);
+      console.error("❌ Error loading reminders:", error);
+      // Thử dùng fallback data nếu có lỗi
+      const fallbackReminders = getFallbackData("reminders");
+      setReminders(fallbackReminders || []);
     }
-  }, [user_id]);
+  }, [user_id, getFallbackData]);
+
+  // 🆕 Hàm load reports với useCallback
+  const loadReports = useCallback(async () => {
+    try {
+      const [reportsResponse, statsResponse] = await Promise.all([
+        reportService.getAllReports({
+          page: 1,
+          limit: 20,
+          status: "all",
+        }),
+        reportService.getReportStats(),
+      ]);
+
+      setReports(reportsResponse.data || []);
+      setReportStats(statsResponse.data || {});
+    } catch (error) {
+      console.error("Error loading reports, using fallback:", error);
+      setReports(getFallbackData("reports"));
+      setReportStats({});
+    }
+  }, [getFallbackData]);
+
+  // 🆕 HÀM LOAD TASKS CỦA USER (ĐƠN GIẢN HƠN)
+  const loadUserTasks = useCallback(
+    async (filters = {}) => {
+      if (!user_id) return;
+
+      try {
+        setLoading(true);
+        const response = await taskService.getUserTasks(user_id, {
+          status: "all",
+          page: 1,
+          limit: 50,
+          viewType: "created",
+          ...filters,
+        });
+
+        if (response.status === "success") {
+          setRecentTasks(response.data || []);
+        } else {
+          setRecentTasks([]);
+          console.warn("⚠️ Error loading user tasks:", response.message);
+        }
+      } catch (error) {
+        console.error("❌ Error loading user tasks:", error);
+        setRecentTasks([]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [user_id]
+  );
 
   // 🆕 Hàm load dashboard data với useCallback
   const loadDashboardData = useCallback(async () => {
-    // Sử dụng user_id từ auth thay vì keycloakId
     if (!user_id) return;
 
     setLoading(true);
     try {
+      // 🆕 LUÔN LOAD USERS LIST DÙ Ở TAB NÀO - ĐỂ CREATE TASK DIALOG CÓ THỂ CHỌN USER
+      try {
+        const usersResponse = await analyticsService.getAllUsers();
+        if (usersResponse && usersResponse.status === "success") {
+          setUsersList(usersResponse.data || []);
+          console.log(
+            "✅ Loaded users list:",
+            usersResponse.data.length,
+            "users"
+          );
+        } else {
+          const fallbackUsers = getFallbackData("usersList");
+          setUsersList(fallbackUsers);
+          console.log(
+            "⚠️ Using fallback users:",
+            fallbackUsers.length,
+            "users"
+          );
+        }
+      } catch (error) {
+        console.error("Error loading users, using fallback:", error);
+        const fallbackUsers = getFallbackData("usersList");
+        setUsersList(fallbackUsers);
+        console.log(
+          "❌ Error, using fallback users:",
+          fallbackUsers.length,
+          "users"
+        );
+      }
+
+      // Load data theo tab
       if (activeTab === 0) {
         // Load overview data với fallback
         try {
@@ -213,39 +613,15 @@ export default function AdminDashboard() {
           setNotificationStats({});
         }
       } else if (activeTab === 1) {
-        // 🆕 SỬA: Load users data với getAllUsers mới
-        try {
-          const usersResponse = await analyticsService.getAllUsers();
-          if (usersResponse && usersResponse.status === "success") {
-            console.log(
-              "✅ Users loaded successfully:",
-              usersResponse.data.length
-            );
-            setUsersList(usersResponse.data || []);
-          } else {
-            console.warn("⚠️ Using fallback users data");
-            setUsersList(getFallbackData("usersList"));
-          }
-        } catch (error) {
-          console.error("Error loading users, using fallback:", error);
-          setUsersList(getFallbackData("usersList"));
-        }
+        // Tab Users - chỉ cần refresh lại nếu cần
+        console.log("🔄 Users tab - users list already loaded");
       } else if (activeTab === 2) {
-        // Load tasks data
-        try {
-          const tasksResponse = await taskService.getUserTasks(
-            user_id, // Sử dụng user_id
-            {
-              status: "all",
-              page: 1,
-              limit: 10,
-            }
-          );
-          setRecentTasks(tasksResponse.data || []);
-        } catch (error) {
-          console.error("Error loading tasks:", error);
-          setRecentTasks([]);
-        }
+        // 🆕 LOAD TASKS CỦA USER THAY VÌ TẤT CẢ TASKS
+        await loadUserTasks({
+          status: "all",
+          sortBy: "createdAt",
+          sortOrder: "desc",
+        });
       } else if (activeTab === 3) {
         // Load reminders data
         await loadReminders();
@@ -271,6 +647,9 @@ export default function AdminDashboard() {
           setNotifications([]);
           setNotificationStats({});
         }
+      } else if (activeTab === 5) {
+        // Load reports data
+        await loadReports();
       }
     } catch (error) {
       console.error("Error loading dashboard data:", error);
@@ -278,20 +657,26 @@ export default function AdminDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, user_id, showSnackbarMessage, getFallbackData, loadReminders]);
+  }, [
+    activeTab,
+    user_id,
+    showSnackbarMessage,
+    getFallbackData,
+    loadReminders,
+    loadReports,
+    loadUserTasks,
+  ]);
 
   // 🆕 Hàm xử lý thay đổi role với useCallback
   const handleRoleChange = useCallback(
     async (userId, newRole) => {
       try {
-        // TÌM USER TRONG usersList ĐỂ LẤY keycloakId
         const user = usersList.find((u) => u._id === userId);
         if (!user) {
           showSnackbarMessage("Không tìm thấy thông tin user", "error");
           return;
         }
 
-        // Kiểm tra xem hàm có tồn tại không
         if (
           analyticsService.updateUserRole &&
           typeof analyticsService.updateUserRole === "function"
@@ -330,14 +715,12 @@ export default function AdminDashboard() {
   const handleRemoveRole = useCallback(
     async (userId, roleToRemove) => {
       try {
-        // TÌM USER TRONG usersList ĐỂ LẤY keycloakId
         const user = usersList.find((u) => u._id === userId);
         if (!user) {
           showSnackbarMessage("Không tìm thấy thông tin user", "error");
           return;
         }
 
-        // Kiểm tra xem hàm có tồn tại không
         if (
           analyticsService.removeUserRole &&
           typeof analyticsService.removeUserRole === "function"
@@ -371,20 +754,15 @@ export default function AdminDashboard() {
 
   // 🆕 Hàm xử lý xóa task với useCallback
   const handleDeleteTask = useCallback(async () => {
-    // Sử dụng user_id từ auth
     if (!user_id || !taskToDelete) return;
 
     try {
-      const response = await taskService.deleteTask(
-        taskToDelete._id,
-        user_id // Sử dụng user_id
-      );
-
+      const response = await taskService.deleteTask(taskToDelete._id, user_id);
       if (response.status === "success") {
         showSnackbarMessage("Xóa task thành công!", "success");
         setDeleteTaskDialog(false);
         setTaskToDelete(null);
-        loadDashboardData();
+        loadUserTasks(); // 🆕 RELOAD TASKS CỦA USER
       } else {
         showSnackbarMessage(response.message || "Lỗi khi xóa task", "error");
       }
@@ -392,7 +770,7 @@ export default function AdminDashboard() {
       console.error("Error deleting task:", error);
       showSnackbarMessage("Lỗi khi xóa task", "error");
     }
-  }, [user_id, taskToDelete, showSnackbarMessage, loadDashboardData]);
+  }, [user_id, taskToDelete, showSnackbarMessage, loadUserTasks]);
 
   // 🆕 Hàm mở dialog xác nhận xóa với useCallback
   const handleOpenDeleteDialog = useCallback((task) => {
@@ -403,14 +781,140 @@ export default function AdminDashboard() {
   // 🆕 Hàm xem chi tiết task với useCallback
   const handleViewTask = useCallback(
     async (task) => {
-      // Sử dụng user_id từ auth
       if (!user_id) {
         showSnackbarMessage("Vui lòng đăng nhập", "error");
         return;
       }
-
       setSelectedTask(task);
       setViewTaskDialog(true);
+    },
+    [user_id, showSnackbarMessage]
+  );
+
+  // 🆕 Hàm chỉnh sửa task với useCallback
+  const handleEditTask = useCallback((task) => {
+    setTaskToEdit(task);
+    setEditTaskDialog(true);
+  }, []);
+
+  // 🆕 Hàm cập nhật task với useCallback
+  // 🆕 Hàm cập nhật task với useCallback - ĐÃ SỬA
+  const handleUpdateTask = useCallback(
+    async (taskId, updatedData) => {
+      if (!user_id) return;
+
+      try {
+        setLoading(true);
+        const response = await taskService.updateTask(
+          taskId,
+          user_id,
+          updatedData
+        );
+
+        if (response.status === "success") {
+          showSnackbarMessage("Cập nhật task thành công!", "success");
+          setEditTaskDialog(false);
+          setTaskToEdit(null);
+
+          // 🆕 QUAN TRỌNG: Reload cả tasks list và dashboard data
+          await loadUserTasks(); // Reload tasks của user
+          await loadDashboardData(); // Reload toàn bộ dashboard để cập nhật thống kê
+
+          // 🆕 Đóng cả view task dialog nếu đang mở
+          setViewTaskDialog(false);
+
+          // Tạo thông báo khi task được cập nhật
+          try {
+            await notificationService.createAutoSystemNotification(
+              "task_updated",
+              {
+                taskId: taskId,
+                taskTitle: updatedData.title,
+                updaterName:
+                  currentUser?.firstName + " " + currentUser?.lastName,
+                assigneeIds: updatedData.assigneeIds,
+              }
+            );
+          } catch (notifError) {
+            console.warn("Could not create notification:", notifError);
+          }
+        } else {
+          showSnackbarMessage(
+            response.message || "Lỗi khi cập nhật task",
+            "error"
+          );
+        }
+      } catch (error) {
+        console.error("Error updating task:", error);
+        showSnackbarMessage("Lỗi khi cập nhật task", "error");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [
+      user_id,
+      showSnackbarMessage,
+      loadUserTasks,
+      loadDashboardData,
+      currentUser,
+    ]
+  );
+
+  // 🆕 THÊM HÀM XỬ LÝ HOÀN THÀNH REMINDER
+  const handleCompleteReminder = useCallback(
+    async (reminderId) => {
+      if (!user_id) return;
+
+      try {
+        console.log("🎯 Marking reminder as completed:", reminderId);
+
+        // Tạm thời cập nhật local state trước
+        setReminders((prevReminders) =>
+          prevReminders.map((reminder) =>
+            reminder._id === reminderId
+              ? {
+                  ...reminder,
+                  isCompleted: true,
+                  completedAt: new Date().toISOString(),
+                  isSent: true, // 🆕 Đảm bảo tương thích nếu backend dùng isSent
+                }
+              : reminder
+          )
+        );
+
+        showSnackbarMessage("Đã đánh dấu nhắc nhở là hoàn thành!", "success");
+
+        // 🆕 Gọi API để cập nhật trên server (nếu có)
+        try {
+          // Kiểm tra xem service có hàm update không
+          if (reminderService.updateReminder) {
+            const response = await reminderService.updateReminder(
+              reminderId,
+              user_id,
+              {
+                isCompleted: true,
+                completedAt: new Date().toISOString(),
+              }
+            );
+            console.log("✅ Server updated:", response);
+          } else if (reminderService.markAsCompleted) {
+            const response = await reminderService.markAsCompleted(
+              reminderId,
+              user_id
+            );
+            console.log("✅ Server updated:", response);
+          }
+        } catch (apiError) {
+          console.warn(
+            "⚠️ Could not update server, but local state is updated:",
+            apiError
+          );
+          // Vẫn giữ local state đã cập nhật
+        }
+      } catch (error) {
+        console.error("Error completing reminder:", error);
+        showSnackbarMessage("Lỗi khi cập nhật nhắc nhở", "error");
+      }
     },
     [user_id, showSnackbarMessage]
   );
@@ -418,13 +922,12 @@ export default function AdminDashboard() {
   // 🆕 Hàm xử lý xóa reminder với useCallback
   const handleDeleteReminder = useCallback(
     async (reminderId) => {
-      // Sử dụng user_id từ auth
       if (!user_id) return;
 
       try {
         const response = await reminderService.deleteReminder(
           reminderId,
-          user_id // Sử dụng user_id
+          user_id
         );
         if (response.status === "success") {
           showSnackbarMessage("Xóa reminder thành công!", "success");
@@ -449,6 +952,64 @@ export default function AdminDashboard() {
     setViewReminderDialog(true);
   }, []);
 
+  // 🆕 Hàm xem chi tiết report với useCallback
+  const handleViewReport = useCallback((report) => {
+    setSelectedReport(report);
+    setViewReportDialog(true);
+  }, []);
+
+  // 🆕 Hàm xử lý cập nhật trạng thái report với useCallback
+  const handleUpdateReportStatus = useCallback(
+    async (reportId, status, resolutionNote = "") => {
+      try {
+        const response = await reportService.updateReportStatus(
+          reportId,
+          status,
+          resolutionNote
+        );
+        if (response.status === "success") {
+          showSnackbarMessage(
+            `Đã cập nhật trạng thái báo cáo thành ${status}`,
+            "success"
+          );
+          loadDashboardData();
+          setViewReportDialog(false);
+        } else {
+          showSnackbarMessage(
+            response.message || "Lỗi khi cập nhật trạng thái",
+            "error"
+          );
+        }
+      } catch (error) {
+        console.error("Error updating report status:", error);
+        showSnackbarMessage("Lỗi khi cập nhật trạng thái báo cáo", "error");
+      }
+    },
+    [showSnackbarMessage, loadDashboardData]
+  );
+
+  // 🆕 Hàm xử lý assign report với useCallback
+  const handleAssignReport = useCallback(
+    async (reportId, assignedTo) => {
+      try {
+        const response = await reportService.assignReport(reportId, assignedTo);
+        if (response.status === "success") {
+          showSnackbarMessage(`Đã assign báo cáo cho ${assignedTo}`, "success");
+          loadDashboardData();
+        } else {
+          showSnackbarMessage(
+            response.message || "Lỗi khi assign báo cáo",
+            "error"
+          );
+        }
+      } catch (error) {
+        console.error("Error assigning report:", error);
+        showSnackbarMessage("Lỗi khi assign báo cáo", "error");
+      }
+    },
+    [showSnackbarMessage, loadDashboardData]
+  );
+
   // Load data khi tab thay đổi
   useEffect(() => {
     if (user_id) {
@@ -459,6 +1020,11 @@ export default function AdminDashboard() {
   // Tính toán số thông báo chưa đọc
   const unreadNotificationsCount = notifications.filter(
     (notif) => !notif.isRead
+  ).length;
+
+  // 🆕 Tính toán số report pending
+  const pendingReportsCount = reports.filter(
+    (report) => report.status === "pending"
   ).length;
 
   return (
@@ -476,20 +1042,20 @@ export default function AdminDashboard() {
         onCreateTask={() => setCreateTaskDialog(true)}
         onCreateNotification={() => setCreateNotificationDialog(true)}
         onCreateReminder={() => setCreateReminderDialog(true)}
-        currentUser={currentUser} // Vẫn truyền currentUser cho component con
+        currentUser={currentUser}
       />
-
       {!isLoggedIn && (
         <Alert severity="warning" sx={{ mb: 2 }}>
           Vui lòng đăng nhập để sử dụng tính năng quản lý task
         </Alert>
       )}
-
       {/* Tabs Navigation */}
       <Paper sx={{ mb: 2 }}>
         <Tabs
           value={activeTab}
           onChange={(e, newValue) => setActiveTab(newValue)}
+          variant="scrollable"
+          scrollButtons="auto"
         >
           <Tab icon={<Analytics />} label="Tổng quan" />
           <Tab icon={<People />} label="Người dùng" />
@@ -503,16 +1069,22 @@ export default function AdminDashboard() {
             }
             label="Thông báo"
           />
+          <Tab
+            icon={
+              <Badge badgeContent={pendingReportsCount} color="error">
+                <Report />
+              </Badge>
+            }
+            label="Báo cáo"
+          />
         </Tabs>
       </Paper>
-
       {/* Loading State */}
       {loading && (
         <Box sx={{ display: "flex", justifyContent: "center", my: 4 }}>
           <CircularProgress />
         </Box>
       )}
-
       {/* Nội dung các tab với scroll */}
       <Box
         sx={{
@@ -533,7 +1105,6 @@ export default function AdminDashboard() {
             />
           </Box>
         )}
-
         {activeTab === 1 && (
           <Box sx={{ flex: 1, overflow: "auto" }}>
             <UsersTab
@@ -543,7 +1114,6 @@ export default function AdminDashboard() {
               onRefresh={loadDashboardData}
               onUserStatusChange={async (userId, newStatus) => {
                 try {
-                  // TÌM USER TRONG usersList ĐỂ LẤY keycloakId
                   const user = usersList.find((u) => u._id === userId);
                   if (!user) {
                     showSnackbarMessage(
@@ -553,7 +1123,6 @@ export default function AdminDashboard() {
                     return;
                   }
 
-                  // Kiểm tra hàm có tồn tại không
                   if (
                     analyticsService.updateUserStatus &&
                     typeof analyticsService.updateUserStatus === "function"
@@ -593,26 +1162,24 @@ export default function AdminDashboard() {
             />
           </Box>
         )}
-
         {activeTab === 2 && (
           <Box sx={{ flex: 1, overflow: "auto" }}>
             <TasksTab
               loading={loading}
-              recentTasks={recentTasks}
+              recentTasks={recentTasks} // 🆕 CHỈ HIỂN THỊ TASKS CỦA USER
               currentUser={currentUser}
-              onRefresh={loadDashboardData}
+              onRefresh={() => loadUserTasks()} // 🆕 RELOAD TASKS CỦA USER
               onViewTask={handleViewTask}
+              onEditTask={handleEditTask} // 🆕 THÊM PROP EDIT TASK
               onUpdateTaskStatus={async (taskId, newStatus) => {
-                // Sử dụng user_id từ auth
                 if (!user_id) return;
 
                 try {
                   const response = await taskService.updateTask(
                     taskId,
-                    user_id, // Sử dụng user_id
+                    user_id,
                     { status: newStatus }
                   );
-
                   if (response.status === "success") {
                     showSnackbarMessage(
                       "Cập nhật trạng thái thành công!",
@@ -638,7 +1205,7 @@ export default function AdminDashboard() {
                       }
                     }
 
-                    loadDashboardData();
+                    loadUserTasks(); // 🆕 RELOAD TASKS CỦA USER
                     setViewTaskDialog(false);
                   } else {
                     showSnackbarMessage(
@@ -656,7 +1223,6 @@ export default function AdminDashboard() {
             />
           </Box>
         )}
-
         {activeTab === 3 && (
           <Box sx={{ flex: 1, overflow: "auto" }}>
             <RemindersTab
@@ -666,32 +1232,62 @@ export default function AdminDashboard() {
               onRefresh={loadDashboardData}
               onViewReminder={handleViewReminder}
               onDeleteReminder={handleDeleteReminder}
+              onCompleteReminder={handleCompleteReminder}
               onCreateReminder={() => setCreateReminderDialog(true)}
             />
           </Box>
         )}
-
         {activeTab === 4 && (
           <Box sx={{ flex: 1, overflow: "auto" }}>
             <NotificationsTab
               loading={loading}
               notifications={notifications}
-              notificationStats={notificationStats}
+              notificationStats={
+                notificationStats.data || notificationStats || {}
+              } // 🆕 SỬA LẠI Ở ĐÂY
               unreadNotificationsCount={unreadNotificationsCount}
               onRefresh={loadDashboardData}
               onMarkAsRead={async (notificationId) => {
                 try {
+                  console.log(
+                    "🔄 AdminDashboard: Marking notification as read:",
+                    notificationId
+                  );
+
                   const response =
                     await notificationService.markNotificationAsRead(
                       notificationId
                     );
+
                   if (response.status === "success") {
                     showSnackbarMessage("Đã đánh dấu thông báo", "success");
+
+                    // 🆕 Cập nhật local state ngay lập tức
+                    setNotifications((prev) =>
+                      prev.map((notif) =>
+                        notif._id === notificationId
+                          ? { ...notif, isRead: true }
+                          : notif
+                      )
+                    );
+
                     loadDashboardData();
+                  } else {
+                    showSnackbarMessage(
+                      response.message || "Lỗi khi đánh dấu thông báo",
+                      "error"
+                    );
                   }
                 } catch (error) {
-                  console.error("Error marking notification as read:", error);
-                  showSnackbarMessage("Lỗi khi đánh dấu thông báo", "error");
+                  console.error(
+                    "❌ AdminDashboard Error marking notification as read:",
+                    error
+                  );
+                  showSnackbarMessage(
+                    error.response?.data?.message ||
+                      "Lỗi khi đánh dấu thông báo",
+                    "error"
+                  );
                 }
               }}
               onDeleteNotification={async (notificationId) => {
@@ -702,6 +1298,11 @@ export default function AdminDashboard() {
                   if (response.status === "success") {
                     showSnackbarMessage("Đã xóa thông báo", "success");
                     loadDashboardData();
+                  } else {
+                    showSnackbarMessage(
+                      response.message || "Lỗi khi xóa thông báo",
+                      "error"
+                    );
                   }
                 } catch (error) {
                   console.error("Error deleting notification:", error);
@@ -710,43 +1311,111 @@ export default function AdminDashboard() {
               }}
               onMarkAllAsRead={async () => {
                 try {
+                  console.log(
+                    "🔄 AdminDashboard: Marking ALL notifications as read",
+                    {
+                      user_id,
+                      userRoles: currentUser?.role,
+                      unreadCount: unreadNotificationsCount,
+                    }
+                  );
+
+                  if (unreadNotificationsCount === 0) {
+                    showSnackbarMessage(
+                      "Không có thông báo nào chưa đọc",
+                      "info"
+                    );
+                    return;
+                  }
+
                   const response =
                     await notificationService.markAllNotificationsAsRead(
-                      user_id, // Sử dụng user_id
-                      currentUser?.roles
+                      user_id,
+                      currentUser?.role || []
                     );
+
                   if (response.status === "success") {
                     showSnackbarMessage(
-                      "Đã đánh dấu tất cả thông báo đã đọc",
+                      `Đã đánh dấu ${
+                        response.modifiedCount || unreadNotificationsCount
+                      } thông báo đã đọc`,
                       "success"
                     );
-                    loadDashboardData();
+
+                    // 🆕 QUAN TRỌNG: Cập nhật local state ngay lập tức
+                    setNotifications((prevNotifications) =>
+                      prevNotifications.map((notification) => ({
+                        ...notification,
+                        isRead: true,
+                      }))
+                    );
+
+                    // 🆕 Cập nhật thống kê ngay lập tức
+                    setNotificationStats((prevStats) => ({
+                      ...prevStats,
+                      unread: 0,
+                      read:
+                        (prevStats.read || 0) +
+                        (response.modifiedCount || unreadNotificationsCount),
+                    }));
+
+                    console.log(
+                      "✅ Local state updated after mark all as read"
+                    );
+                  } else {
+                    showSnackbarMessage(
+                      response.message || "Lỗi khi đánh dấu thông báo",
+                      "error"
+                    );
                   }
                 } catch (error) {
                   console.error(
-                    "Error marking all notifications as read:",
+                    "❌ Error marking all notifications as read:",
                     error
                   );
-                  showSnackbarMessage("Lỗi khi đánh dấu thông báo", "error");
+                  showSnackbarMessage(
+                    error.response?.data?.message ||
+                      "Lỗi khi đánh dấu thông báo",
+                    "error"
+                  );
                 }
               }}
               onCreateNotification={() => setCreateNotificationDialog(true)}
             />
           </Box>
         )}
+        {activeTab === 5 && (
+          <Box sx={{ flex: 1, overflow: "auto" }}>
+            <ReportsTab
+              loading={loading}
+              reports={reports}
+              reportStats={reportStats}
+              currentUser={currentUser}
+              onRefresh={loadDashboardData}
+              onViewReport={handleViewReport}
+              onUpdateReportStatus={handleUpdateReportStatus}
+              onAssignReport={handleAssignReport}
+            />
+          </Box>
+        )}
       </Box>
-
       {/* Dialogs */}
       <CreateReminderDialog
         open={createReminderDialog}
         onClose={() => setCreateReminderDialog(false)}
         currentUser={currentUser}
+        tasks={recentTasks} // 🆕 TRUYỀN TASKS CỦA ADMIN
+        isAdmin={true} // 🆕 THÊM PROP NÀY
         onCreateReminder={async (reminderData) => {
           try {
             setLoading(true);
+
+            // 🆕 LOẠI BỎ recipientIds - backend sẽ tự xử lý
+            const { recipientIds, ...cleanReminderData } = reminderData;
+
             const response = await reminderService.createReminder({
-              ...reminderData,
-              keycloakId: user_id, // Sử dụng user_id
+              ...cleanReminderData,
+              keycloakId: user_id,
             });
 
             if (response.status === "success") {
@@ -767,43 +1436,66 @@ export default function AdminDashboard() {
           }
         }}
       />
-
       <ViewReminderDialog
         open={viewReminderDialog}
         onClose={() => setViewReminderDialog(false)}
         reminder={selectedReminder}
         currentUser={currentUser}
+        onDeleteReminder={handleDeleteReminder}
       />
-
       <CreateTaskDialog
         open={createTaskDialog}
         onClose={() => setCreateTaskDialog(false)}
         currentUser={currentUser}
+        users={usersList}
         onCreateTask={async (taskData) => {
           try {
             setLoading(true);
+            console.log("🎯 Creating task with data:", taskData);
+
             const response = await taskService.createTask({
               ...taskData,
-              assignerId: user_id, // Sử dụng user_id
+              assignerId: user_id,
             });
 
             if (response.status === "success") {
               showSnackbarMessage("Tạo task thành công!", "success");
               setCreateTaskDialog(false);
 
-              // Tạo thông báo tự động cho task mới
-              await notificationService.createAutoSystemNotification(
-                "task_created",
-                {
-                  taskId: response.data._id,
-                  taskTitle: taskData.title,
-                  creatorName:
-                    currentUser?.firstName + " " + currentUser?.lastName,
-                  assigneeId: taskData.assigneeId,
-                }
-              );
+              // 🆕 Tạo thông báo tự động cho task mới - XỬ LÝ LỖI TỐT HƠN
+              try {
+                console.log("📢 Creating auto notification for new task");
 
-              loadDashboardData();
+                const notificationResult =
+                  await notificationService.createAutoSystemNotification(
+                    "task_created",
+                    {
+                      taskId: response.data._id,
+                      taskTitle: taskData.title,
+                      creatorName:
+                        currentUser?.firstName + " " + currentUser?.lastName,
+                      assigneeIds: taskData.assigneeIds,
+                    }
+                  );
+
+                if (notificationResult.status === "success") {
+                  console.log("✅ Auto notification created successfully");
+                } else {
+                  console.warn(
+                    "⚠️ Auto notification creation failed:",
+                    notificationResult.message
+                  );
+                  // Không hiển thị lỗi cho user vì đây là tính năng phụ
+                }
+              } catch (notifError) {
+                console.warn(
+                  "⚠️ Could not create auto notification:",
+                  notifError
+                );
+                // Không ảnh hưởng đến flow chính
+              }
+
+              loadUserTasks(); // 🆕 RELOAD TASKS CỦA USER
             } else {
               showSnackbarMessage(
                 response.message || "Lỗi khi tạo task",
@@ -811,14 +1503,25 @@ export default function AdminDashboard() {
               );
             }
           } catch (error) {
-            console.error("Error creating task:", error);
+            console.error("❌ Error creating task:", error);
             showSnackbarMessage("Lỗi khi tạo task", "error");
           } finally {
             setLoading(false);
           }
         }}
       />
-
+      {/* 🆕 EDIT TASK DIALOG */}
+      <EditTaskDialog
+        open={editTaskDialog}
+        onClose={() => {
+          setEditTaskDialog(false);
+          setTaskToEdit(null);
+        }}
+        task={taskToEdit}
+        currentUser={currentUser}
+        users={usersList}
+        onUpdateTask={handleUpdateTask}
+      />
       <CreateNotificationDialog
         open={createNotificationDialog}
         onClose={() => setCreateNotificationDialog(false)}
@@ -827,7 +1530,6 @@ export default function AdminDashboard() {
             const response = await notificationService.createSystemNotification(
               notificationData
             );
-
             if (response.status === "success") {
               showSnackbarMessage("Tạo thông báo thành công!", "success");
               setCreateNotificationDialog(false);
@@ -844,26 +1546,21 @@ export default function AdminDashboard() {
           }
         }}
       />
-
       <ViewTaskDialog
         open={viewTaskDialog}
         onClose={() => setViewTaskDialog(false)}
         task={selectedTask}
         currentUser={currentUser}
         onUpdateTaskStatus={async (taskId, newStatus) => {
-          // Sử dụng user_id từ auth
           if (!user_id) return;
 
           try {
-            const response = await taskService.updateTask(
-              taskId,
-              user_id, // Sử dụng user_id
-              { status: newStatus }
-            );
-
+            const response = await taskService.updateTask(taskId, user_id, {
+              status: newStatus,
+            });
             if (response.status === "success") {
               showSnackbarMessage("Cập nhật trạng thái thành công!", "success");
-              loadDashboardData();
+              loadUserTasks(); // 🆕 RELOAD TASKS CỦA USER
               setViewTaskDialog(false);
             } else {
               showSnackbarMessage(
@@ -876,15 +1573,22 @@ export default function AdminDashboard() {
             showSnackbarMessage("Lỗi khi cập nhật trạng thái", "error");
           }
         }}
+        onEditTask={handleEditTask} // 🆕 THÊM PROP EDIT TASK
       />
-
       <DeleteTaskDialog
         open={deleteTaskDialog}
         onClose={() => setDeleteTaskDialog(false)}
         task={taskToDelete}
         onConfirm={handleDeleteTask}
       />
-
+      <ViewReportDialog
+        open={viewReportDialog}
+        onClose={() => setViewReportDialog(false)}
+        report={selectedReport}
+        currentUser={currentUser}
+        onUpdateReportStatus={handleUpdateReportStatus}
+        onAssignReport={handleAssignReport}
+      />
       {/* Snackbar từ Redux */}
       <Snackbar
         open={snackbar.open}
