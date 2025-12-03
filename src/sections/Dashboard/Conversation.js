@@ -1,4 +1,6 @@
-import React, { memo, useCallback, useRef } from "react";
+// src/sections/dashboard/Conversation/index.js
+// HOÀN CHỈNH VỚI E2EE INTEGRATION
+import React, { memo, useCallback, useRef, useState, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   Stack,
@@ -10,19 +12,32 @@ import {
   Divider,
   Snackbar,
   Alert,
+  Tooltip,
+  Chip,
+  CircularProgress,
 } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
-import { DotsThreeVertical, DownloadSimple, Image } from "phosphor-react";
+import {
+  DotsThreeVertical,
+  DownloadSimple,
+  Image,
+  Lock,
+  LockOpen,
+  Key,
+  WarningCircle,
+} from "phosphor-react";
 import { Message_options } from "../../data";
 import Embed from "react-embed";
 import { ReplyInfo } from "../../components/Chat/ReplyComponents";
-import { deleteMessageThunk } from "../../redux/slices/conversation";
-import { socket } from "../../socket";
+import {
+  deleteMessageThunk,
+  pinMessage,
+  unpinMessage,
+} from "../../redux/slices/conversation";
+import { getSocket } from "../../socket";
 import { showSnackbar } from "../../redux/slices/app";
-
-// 🆕 THÊM: Hook để quản lý pin/unpin messages
-// Trong usePinMessage hook - SỬA LẠI
-// 🆕 SỬA: Hook usePinMessage hoàn chỉnh
+import { useE2EE } from "../../contexts/E2EEContext";
+// 🆕 Custom hook để quản lý pin/unpin messages
 const usePinMessage = () => {
   const dispatch = useDispatch();
   const { chat_type, room_id } = useSelector((state) => state.app);
@@ -37,14 +52,14 @@ const usePinMessage = () => {
 
   const pinMessage = useCallback(
     (messageId) => {
-      if (window.socket) {
+      const socket = getSocket();
+      if (socket) {
         console.log("📌 Attempting to pin message:", {
           messageId,
           room_id,
           chat_type,
         });
 
-        // 🆕 SỬA: Dùng đúng socket event names
         const socketEvent =
           chat_type === "group" ? "pin_group_message" : "pin_direct_message";
 
@@ -53,7 +68,7 @@ const usePinMessage = () => {
             ? { messageId, roomId: room_id }
             : { messageId };
 
-        window.socket.emit(socketEvent, socketData, (response) => {
+        socket.emit(socketEvent, socketData, (response) => {
           console.log("📌 Pin message response:", response);
           if (response.status === "success") {
             dispatch(
@@ -86,7 +101,8 @@ const usePinMessage = () => {
 
   const unpinMessage = useCallback(
     (messageId) => {
-      if (window.socket) {
+      const socket = getSocket();
+      if (socket) {
         console.log("📌 Attempting to unpin message:", {
           messageId,
           room_id,
@@ -103,7 +119,7 @@ const usePinMessage = () => {
             ? { messageId, roomId: room_id }
             : { messageId };
 
-        window.socket.emit(socketEvent, socketData, (response) => {
+        socket.emit(socketEvent, socketData, (response) => {
           console.log("📌 Unpin message response:", response);
           if (response.status === "success") {
             dispatch(
@@ -134,7 +150,6 @@ const usePinMessage = () => {
     [chat_type, room_id, dispatch]
   );
 
-  // 🆕 THÊM: Hàm kiểm tra tin nhắn đã được ghim
   const isMessagePinned = useCallback(
     (messageId) => {
       return pinnedMessages.some((msg) => msg.id === messageId);
@@ -145,12 +160,12 @@ const usePinMessage = () => {
   return {
     pinMessage,
     unpinMessage,
-    isMessagePinned, // 🆕 THÊM hàm này
+    isMessagePinned,
     pinnedMessages,
   };
 };
 
-// 🆕 THÊM: Hook để quản lý snackbar
+// 🆕 Hook để quản lý snackbar
 const useMessageSnackbar = () => {
   const [snackbar, setSnackbar] = React.useState({
     open: false,
@@ -169,10 +184,173 @@ const useMessageSnackbar = () => {
   return { snackbar, showSnackbar, hideSnackbar };
 };
 
+// 🆕 Component để hiển thị encrypted message content
+const EncryptedContent = memo(({ el, isOwnMessage }) => {
+  const theme = useTheme();
+  const { decryptMessage, getFriendKey } = useE2EE();
+  const [decryptedContent, setDecryptedContent] = useState(null);
+  const [isDecrypting, setIsDecrypting] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const decryptMessageContent = async () => {
+      if (!el.isEncrypted || !el.ciphertext || !el.iv) return;
+
+      try {
+        setIsDecrypting(true);
+        setError(null);
+
+        const senderId = el.sender?.keycloakId;
+        const friendKey = getFriendKey(senderId);
+
+        if (!friendKey) {
+          throw new Error("No encryption key available for this user");
+        }
+
+        const decrypted = await decryptMessage(
+          { ciphertext: el.ciphertext, iv: el.iv },
+          friendKey.publicKey
+        );
+
+        setDecryptedContent(decrypted);
+      } catch (err) {
+        console.error("❌ Error decrypting message:", err);
+        setError(err.message);
+      } finally {
+        setIsDecrypting(false);
+      }
+    };
+
+    decryptMessageContent();
+  }, [
+    el.isEncrypted,
+    el.ciphertext,
+    el.iv,
+    el.sender,
+    getFriendKey,
+    decryptMessage,
+  ]);
+
+  if (el.encryptionStatus === "encrypting") {
+    return (
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          py: 0.5,
+        }}
+      >
+        <CircularProgress size={12} />
+        <Typography
+          variant="caption"
+          sx={{
+            fontStyle: "italic",
+            color: isOwnMessage
+              ? "rgba(255,255,255,0.7)"
+              : theme.palette.text.secondary,
+          }}
+        >
+          Encrypting...
+        </Typography>
+      </Box>
+    );
+  }
+
+  if (isDecrypting) {
+    return (
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          py: 0.5,
+        }}
+      >
+        <CircularProgress size={12} />
+        <Typography
+          variant="caption"
+          sx={{
+            fontStyle: "italic",
+            color: isOwnMessage
+              ? "rgba(255,255,255,0.7)"
+              : theme.palette.text.secondary,
+          }}
+        >
+          Decrypting...
+        </Typography>
+      </Box>
+    );
+  }
+
+  if (error) {
+    return (
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          py: 0.5,
+        }}
+      >
+        <WarningCircle size={14} color={theme.palette.error.main} />
+        <Typography
+          variant="caption"
+          sx={{
+            color: theme.palette.error.main,
+            fontStyle: "italic",
+          }}
+        >
+          Decryption failed
+        </Typography>
+      </Box>
+    );
+  }
+
+  if (decryptedContent) {
+    return (
+      <Typography
+        variant="body2"
+        sx={{
+          wordBreak: "break-word",
+          color: isOwnMessage ? "#fff" : theme.palette.text.primary,
+        }}
+      >
+        {decryptedContent}
+      </Typography>
+    );
+  }
+
+  // Default encrypted placeholder
+  return (
+    <Box
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        gap: 1,
+        py: 0.5,
+      }}
+    >
+      <Lock size={14} color={theme.palette.warning.main} />
+      <Typography
+        variant="body2"
+        sx={{
+          fontStyle: "italic",
+          color: isOwnMessage
+            ? "rgba(255,255,255,0.7)"
+            : theme.palette.text.secondary,
+        }}
+      >
+        🔒 Encrypted message
+      </Typography>
+    </Box>
+  );
+});
+
 // =======================
-//  MESSAGE OPTION MENU - HOÀN CHỈNH VỚI PIN/UNPIN
+//  MESSAGE OPTION MENU - HOÀN CHỈNH VỚI PIN/UNPIN VÀ E2EE
 // =======================
-const MessageOption = memo(({ onAction, messageId }) => {
+const MessageOption = memo(({ onAction, messageId, isEncrypted = false }) => {
   const [anchorEl, setAnchorEl] = React.useState(null);
   const open = Boolean(anchorEl);
   const buttonRef = useRef(null);
@@ -214,51 +392,60 @@ const MessageOption = memo(({ onAction, messageId }) => {
     [handleClose]
   );
 
-  // 🆕 CẬP NHẬT: Message options với pin/unpin dynamic
+  // 🆕 CẬP NHẬT: Message options với pin/unpin dynamic và E2EE options
   const getMessageOptions = useCallback(() => {
     const baseOptions = Message_options.filter(
       (opt) => opt.action !== "pin" && opt.action !== "unpin"
     );
 
+    const options = [...baseOptions];
+
     if (isPinned) {
-      return [
-        ...baseOptions,
-        {
-          id: "unpin",
-          title: "Unpin Message",
-          action: "unpin",
-        },
-      ];
+      options.push({
+        id: "unpin",
+        title: "Unpin Message",
+        action: "unpin",
+      });
     } else {
-      return [
-        ...baseOptions,
-        {
-          id: "pin",
-          title: "Pin Message",
-          action: "pin",
-        },
-      ];
+      options.push({
+        id: "pin",
+        title: "Pin Message",
+        action: "pin",
+      });
     }
-  }, [isPinned]);
+
+    // 🆕 Thêm option để hiển thị encryption info
+    if (isEncrypted) {
+      options.push({
+        id: "encryption_info",
+        title: "Encryption Details",
+        action: "encryption_info",
+      });
+    }
+
+    return options;
+  }, [isPinned, isEncrypted]);
 
   const messageOptions = getMessageOptions();
 
   return (
     <>
-      <IconButton
-        ref={buttonRef}
-        size="small"
-        onClick={handleClick}
-        sx={{
-          opacity: 0,
-          transition: "opacity 0.2s ease",
-          "&:hover, &:focus": {
-            opacity: 1,
-          },
-        }}
-      >
-        <DotsThreeVertical size={20} />
-      </IconButton>
+      <Tooltip title="Message options">
+        <IconButton
+          ref={buttonRef}
+          size="small"
+          onClick={handleClick}
+          sx={{
+            opacity: 0,
+            transition: "opacity 0.2s ease",
+            "&:hover, &:focus": {
+              opacity: 1,
+            },
+          }}
+        >
+          <DotsThreeVertical size={20} />
+        </IconButton>
+      </Tooltip>
       <Menu
         anchorEl={anchorEl}
         open={open}
@@ -301,6 +488,14 @@ const MessageOption = memo(({ onAction, messageId }) => {
                         color: "warning.contrastText",
                       },
                     }
+                  : el.action === "encryption_info"
+                  ? {
+                      color: "info.main",
+                      "&:hover": {
+                        backgroundColor: "info.light",
+                        color: "info.contrastText",
+                      },
+                    }
                   : {}
               }
             >
@@ -314,7 +509,7 @@ const MessageOption = memo(({ onAction, messageId }) => {
 });
 
 // =======================
-//  MESSAGE CONTAINER - HOÀN CHỈNH VỚI roomId
+//  MESSAGE CONTAINER - HOÀN CHỈNH VỚI E2EE SUPPORT
 // =======================
 const MessageContainer = memo(
   ({
@@ -327,6 +522,7 @@ const MessageContainer = memo(
     roomId = null,
   }) => {
     const [showMenu, setShowMenu] = React.useState(false);
+    const theme = useTheme();
 
     const handleMouseEnter = useCallback(() => {
       setShowMenu(true);
@@ -339,18 +535,28 @@ const MessageContainer = memo(
     const handleMenuAction = useCallback(
       (action) => {
         if (action === "delete" && onDelete) {
-          // 🆕 TRUYỀN roomId CHO onDelete
           onDelete(el, isGroup, roomId);
+        } else if (action === "encryption_info") {
+          // 🆕 Handle encryption info click
+          if (window.showNotification) {
+            window.showNotification({
+              severity: "info",
+              message: `Encrypted message\nKey ID: ${el.keyId || "Unknown"}`,
+            });
+          }
         } else if (onMenuAction) {
           onMenuAction(action, el);
         }
       },
-      [el, onMenuAction, onDelete, isGroup, roomId] // 🆕 THÊM roomId
+      [el, onMenuAction, onDelete, isGroup, roomId]
     );
 
     const handleContainerClick = useCallback((e) => {
       e.stopPropagation();
     }, []);
+
+    // 🆕 Kiểm tra nếu message là encrypted
+    const isEncrypted = el.isEncrypted || false;
 
     return (
       <Stack
@@ -365,8 +571,43 @@ const MessageContainer = memo(
           "&:hover .message-actions": {
             opacity: 1,
           },
+          position: "relative",
         }}
       >
+        {/* 🆕 Encryption badge */}
+        {isEncrypted && (
+          <Tooltip
+            title={
+              el.encryptionStatus === "encrypting"
+                ? "Encrypting..."
+                : "End-to-End Encrypted"
+            }
+            arrow
+          >
+            <Box
+              sx={{
+                position: "absolute",
+                top: -6,
+                [el.incoming ? "left" : "right"]: 40,
+                backgroundColor: theme.palette.warning.main,
+                borderRadius: "50%",
+                width: 20,
+                height: 20,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: theme.palette.warning.contrastText,
+                fontSize: "0.7rem",
+                fontWeight: "bold",
+                border: `2px solid ${theme.palette.background.paper}`,
+                zIndex: 1,
+              }}
+            >
+              {el.encryptionStatus === "encrypting" ? "⏳" : "🔒"}
+            </Box>
+          </Tooltip>
+        )}
+
         {menu && el.outgoing && (
           <Box
             className="message-actions"
@@ -379,6 +620,7 @@ const MessageContainer = memo(
             <MessageOption
               onAction={handleMenuAction}
               messageId={el.id || el._id}
+              isEncrypted={isEncrypted}
             />
           </Box>
         )}
@@ -397,6 +639,7 @@ const MessageContainer = memo(
             <MessageOption
               onAction={handleMenuAction}
               messageId={el.id || el._id}
+              isEncrypted={isEncrypted}
             />
           </Box>
         )}
@@ -406,7 +649,7 @@ const MessageContainer = memo(
 );
 
 // =======================
-//  TEXT MESSAGE - HOÀN CHỈNH VỚI DELETE, PIN VÀ roomId
+//  TEXT MESSAGE - HOÀN CHỈNH VỚI E2EE SUPPORT
 // =======================
 const TextMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
@@ -414,6 +657,10 @@ const TextMsg = memo(
     const { snackbar, showSnackbar, hideSnackbar } = useMessageSnackbar();
     const dispatch = useDispatch();
     const { pinMessage, unpinMessage } = usePinMessage();
+
+    // 🆕 Kiểm tra xem message có encrypted không
+    const isEncrypted = el.isEncrypted || false;
+    const isOwnMessage = el.outgoing;
 
     const handleMenuAction = useCallback(
       (action, messageEl) => {
@@ -427,6 +674,7 @@ const TextMsg = memo(
                 content: messageEl.message || messageEl.content,
                 sender: messageEl.sender,
                 type: messageEl.subtype || "text",
+                isEncrypted: messageEl.isEncrypted,
               });
             }
             break;
@@ -446,21 +694,21 @@ const TextMsg = memo(
       [pinMessage, unpinMessage, showSnackbar]
     );
 
-    // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP
     const handleDelete = useCallback(
       (messageEl, messageIsGroup = false, messageRoomId = null) => {
         console.log("🗑️ Deleting message:", {
           messageId: messageEl.id || messageEl._id,
           isGroup: messageIsGroup,
-          roomId: messageRoomId, // 🆕 SỬ DỤNG roomId TRUYỀN VÀO
+          roomId: messageRoomId,
+          isEncrypted: messageEl.isEncrypted,
         });
 
-        // Gọi thunk để xóa tin nhắn - TRUYỀN roomId CHO GROUP
+        const socket = getSocket();
         dispatch(
           deleteMessageThunk(
             messageEl.id || messageEl._id,
             messageIsGroup,
-            messageRoomId, // 🆕 TRUYỀN roomId
+            messageRoomId,
             socket
           )
         );
@@ -476,6 +724,24 @@ const TextMsg = memo(
       }
     }, [el.replyTo]);
 
+    // 🆕 Get message content based on encryption status
+    const getMessageContent = () => {
+      if (isEncrypted) {
+        return <EncryptedContent el={el} isOwnMessage={isOwnMessage} />;
+      }
+
+      // Regular message
+      return (
+        <Typography
+          variant="body2"
+          color={isOwnMessage ? "#fff" : theme.palette.text.primary}
+          sx={{ wordBreak: "break-word" }}
+        >
+          {el.message || el.content}
+        </Typography>
+      );
+    };
+
     return (
       <>
         <MessageContainer
@@ -484,40 +750,44 @@ const TextMsg = memo(
           onMenuAction={handleMenuAction}
           onDelete={handleDelete}
           isGroup={isGroup}
-          roomId={roomId} // 🆕 TRUYỀN roomId CHO CONTAINER
+          roomId={roomId}
         >
           <Box
             px={1.5}
             py={1.5}
             sx={{
-              backgroundColor: el.incoming
-                ? alpha(theme.palette.background.default, 1)
-                : theme.palette.primary.main,
+              backgroundColor: isOwnMessage
+                ? theme.palette.primary.main
+                : alpha(theme.palette.background.default, 1),
               borderRadius: 1.5,
               width: "max-content",
               maxWidth: "400px",
+              border: isEncrypted
+                ? `1px solid ${
+                    isOwnMessage
+                      ? theme.palette.warning.light
+                      : theme.palette.warning.main
+                  }`
+                : "none",
+              position: "relative",
             }}
           >
             {el.replyTo && (
               <ReplyInfo replyTo={el.replyTo} onClick={handleReplyClick} />
             )}
 
-            <Typography
-              variant="body2"
-              color={el.incoming ? theme.palette.text : "#fff"}
-              sx={{ wordBreak: "break-word" }}
-            >
-              {el.message || el.content}
-            </Typography>
+            {/* Message content */}
+            {getMessageContent()}
 
+            {/* Message time */}
             <Typography
               variant="caption"
               sx={{
                 display: "block",
-                textAlign: el.incoming ? "left" : "right",
-                color: el.incoming
-                  ? theme.palette.text.secondary
-                  : "rgba(255,255,255,0.7)",
+                textAlign: isOwnMessage ? "right" : "left",
+                color: isOwnMessage
+                  ? "rgba(255,255,255,0.7)"
+                  : theme.palette.text.secondary,
                 marginTop: 0.5,
                 fontSize: "0.7rem",
               }}
@@ -543,7 +813,7 @@ const TextMsg = memo(
 );
 
 // =======================
-//  MEDIA MESSAGE - HOÀN CHỈNH VỚI DELETE, PIN VÀ roomId
+//  MEDIA MESSAGE - HOÀN CHỈNH VỚI E2EE SUPPORT
 // =======================
 const MediaMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
@@ -551,6 +821,9 @@ const MediaMsg = memo(
     const { snackbar, showSnackbar, hideSnackbar } = useMessageSnackbar();
     const dispatch = useDispatch();
     const { pinMessage, unpinMessage } = usePinMessage();
+
+    const isEncrypted = el.isEncrypted || false;
+    const isOwnMessage = el.outgoing;
 
     const handleMenuAction = useCallback(
       (action, messageEl) => {
@@ -564,6 +837,7 @@ const MediaMsg = memo(
                 content: messageEl.message || "📷 Media",
                 sender: messageEl.sender,
                 type: "img",
+                isEncrypted: messageEl.isEncrypted,
               });
             }
             break;
@@ -586,20 +860,21 @@ const MediaMsg = memo(
       [pinMessage, unpinMessage, showSnackbar]
     );
 
-    // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP
     const handleDelete = useCallback(
       (messageEl, messageIsGroup = false, messageRoomId = null) => {
         console.log("🗑️ Deleting media message:", {
           messageId: messageEl.id || messageEl._id,
           isGroup: messageIsGroup,
           roomId: messageRoomId,
+          isEncrypted: messageEl.isEncrypted,
         });
 
+        const socket = getSocket();
         dispatch(
           deleteMessageThunk(
             messageEl.id || messageEl._id,
             messageIsGroup,
-            messageRoomId, // 🆕 TRUYỀN roomId
+            messageRoomId,
             socket
           )
         );
@@ -622,17 +897,24 @@ const MediaMsg = memo(
           onMenuAction={handleMenuAction}
           onDelete={handleDelete}
           isGroup={isGroup}
-          roomId={roomId} // 🆕 TRUYỀN roomId CHO CONTAINER
+          roomId={roomId}
         >
           <Box
             px={1.5}
             py={1.5}
             sx={{
-              backgroundColor: el.incoming
-                ? alpha(theme.palette.background.default, 1)
-                : theme.palette.primary.main,
+              backgroundColor: isOwnMessage
+                ? theme.palette.primary.main
+                : alpha(theme.palette.background.default, 1),
               borderRadius: 1.5,
               width: "max-content",
+              border: isEncrypted
+                ? `1px solid ${
+                    isOwnMessage
+                      ? theme.palette.warning.light
+                      : theme.palette.warning.main
+                  }`
+                : "none",
             }}
           >
             {el.replyTo && (
@@ -640,20 +922,57 @@ const MediaMsg = memo(
             )}
 
             <Stack spacing={1}>
-              <img
-                src={el.img}
-                alt={el.message}
-                style={{
-                  maxHeight: 210,
-                  borderRadius: "10px",
-                  maxWidth: "300px",
-                }}
-                loading="lazy"
-              />
+              {isEncrypted ? (
+                <Box
+                  sx={{
+                    width: 300,
+                    height: 210,
+                    backgroundColor: isOwnMessage
+                      ? "rgba(255,255,255,0.1)"
+                      : "rgba(0,0,0,0.05)",
+                    borderRadius: "10px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    border: `2px dashed ${
+                      isOwnMessage
+                        ? theme.palette.warning.light
+                        : theme.palette.warning.main
+                    }`,
+                  }}
+                >
+                  <Lock size={48} color={theme.palette.warning.main} />
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      mt: 1,
+                      color: isOwnMessage
+                        ? "rgba(255,255,255,0.7)"
+                        : theme.palette.text.secondary,
+                      fontStyle: "italic",
+                    }}
+                  >
+                    Encrypted image
+                  </Typography>
+                </Box>
+              ) : (
+                <img
+                  src={el.img}
+                  alt={el.message}
+                  style={{
+                    maxHeight: 210,
+                    borderRadius: "10px",
+                    maxWidth: "300px",
+                  }}
+                  loading="lazy"
+                />
+              )}
+
               {el.message && (
                 <Typography
                   variant="body2"
-                  color={el.incoming ? theme.palette.text : "#fff"}
+                  color={isOwnMessage ? "#fff" : theme.palette.text.primary}
                 >
                   {el.message}
                 </Typography>
@@ -663,10 +982,10 @@ const MediaMsg = memo(
                 variant="caption"
                 sx={{
                   display: "block",
-                  textAlign: el.incoming ? "left" : "right",
-                  color: el.incoming
-                    ? theme.palette.text.secondary
-                    : "rgba(255,255,255,0.7)",
+                  textAlign: isOwnMessage ? "right" : "left",
+                  color: isOwnMessage
+                    ? "rgba(255,255,255,0.7)"
+                    : theme.palette.text.secondary,
                   fontSize: "0.7rem",
                 }}
               >
@@ -692,7 +1011,7 @@ const MediaMsg = memo(
 );
 
 // =======================
-//  DOCUMENT MESSAGE - HOÀN CHỈNH VỚI DELETE, PIN VÀ roomId
+//  DOCUMENT MESSAGE - HOÀN CHỈNH VỚI E2EE SUPPORT
 // =======================
 const DocMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
@@ -700,6 +1019,9 @@ const DocMsg = memo(
     const { snackbar, showSnackbar, hideSnackbar } = useMessageSnackbar();
     const dispatch = useDispatch();
     const { pinMessage, unpinMessage } = usePinMessage();
+
+    const isEncrypted = el.isEncrypted || false;
+    const isOwnMessage = el.outgoing;
 
     const handleMenuAction = useCallback(
       (action, messageEl) => {
@@ -713,6 +1035,7 @@ const DocMsg = memo(
                 content: messageEl.message || "📄 Document",
                 sender: messageEl.sender,
                 type: "doc",
+                isEncrypted: messageEl.isEncrypted,
               });
             }
             break;
@@ -735,20 +1058,21 @@ const DocMsg = memo(
       [pinMessage, unpinMessage, showSnackbar]
     );
 
-    // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP
     const handleDelete = useCallback(
       (messageEl, messageIsGroup = false, messageRoomId = null) => {
         console.log("🗑️ Deleting document message:", {
           messageId: messageEl.id || messageEl._id,
           isGroup: messageIsGroup,
           roomId: messageRoomId,
+          isEncrypted: messageEl.isEncrypted,
         });
 
+        const socket = getSocket();
         dispatch(
           deleteMessageThunk(
             messageEl.id || messageEl._id,
             messageIsGroup,
-            messageRoomId, // 🆕 TRUYỀN roomId
+            messageRoomId,
             socket
           )
         );
@@ -771,17 +1095,24 @@ const DocMsg = memo(
           onMenuAction={handleMenuAction}
           onDelete={handleDelete}
           isGroup={isGroup}
-          roomId={roomId} // 🆕 TRUYỀN roomId CHO CONTAINER
+          roomId={roomId}
         >
           <Box
             px={1.5}
             py={1.5}
             sx={{
-              backgroundColor: el.incoming
-                ? alpha(theme.palette.background.default, 1)
-                : theme.palette.primary.main,
+              backgroundColor: isOwnMessage
+                ? theme.palette.primary.main
+                : alpha(theme.palette.background.default, 1),
               borderRadius: 1.5,
               width: "max-content",
+              border: isEncrypted
+                ? `1px solid ${
+                    isOwnMessage
+                      ? theme.palette.warning.light
+                      : theme.palette.warning.main
+                  }`
+                : "none",
             }}
           >
             {el.replyTo && (
@@ -795,20 +1126,39 @@ const DocMsg = memo(
                 spacing={3}
                 alignItems="center"
                 sx={{
-                  backgroundColor: theme.palette.background.paper,
+                  backgroundColor: isOwnMessage
+                    ? "rgba(255,255,255,0.1)"
+                    : theme.palette.background.paper,
                   borderRadius: 1,
+                  border: isEncrypted
+                    ? `1px dashed ${theme.palette.warning.main}`
+                    : "none",
                 }}
               >
-                <Image size={48} />
-                <Typography variant="caption">Abstract.png</Typography>
+                {isEncrypted ? (
+                  <Lock size={48} color={theme.palette.warning.main} />
+                ) : (
+                  <Image size={48} />
+                )}
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: isOwnMessage
+                      ? "rgba(255,255,255,0.9)"
+                      : theme.palette.text.primary,
+                  }}
+                >
+                  {isEncrypted ? "Encrypted Document" : "Abstract.png"}
+                </Typography>
                 <IconButton>
                   <DownloadSimple />
                 </IconButton>
               </Stack>
+
               {el.message && (
                 <Typography
                   variant="body2"
-                  color={el.incoming ? theme.palette.text : "#fff"}
+                  color={isOwnMessage ? "#fff" : theme.palette.text.primary}
                 >
                   {el.message}
                 </Typography>
@@ -818,10 +1168,10 @@ const DocMsg = memo(
                 variant="caption"
                 sx={{
                   display: "block",
-                  textAlign: el.incoming ? "left" : "right",
-                  color: el.incoming
-                    ? theme.palette.text.secondary
-                    : "rgba(255,255,255,0.7)",
+                  textAlign: isOwnMessage ? "right" : "left",
+                  color: isOwnMessage
+                    ? "rgba(255,255,255,0.7)"
+                    : theme.palette.text.secondary,
                   fontSize: "0.7rem",
                 }}
               >
@@ -847,7 +1197,7 @@ const DocMsg = memo(
 );
 
 // =======================
-//  LINK MESSAGE - HOÀN CHỈNH VỚI DELETE, PIN VÀ roomId
+//  LINK MESSAGE - HOÀN CHỈNH VỚI E2EE SUPPORT
 // =======================
 const LinkMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
@@ -855,6 +1205,9 @@ const LinkMsg = memo(
     const { snackbar, showSnackbar, hideSnackbar } = useMessageSnackbar();
     const dispatch = useDispatch();
     const { pinMessage, unpinMessage } = usePinMessage();
+
+    const isEncrypted = el.isEncrypted || false;
+    const isOwnMessage = el.outgoing;
 
     const handleMenuAction = useCallback(
       (action, messageEl) => {
@@ -868,6 +1221,7 @@ const LinkMsg = memo(
                 content: messageEl.message || "🔗 Link",
                 sender: messageEl.sender,
                 type: "Link",
+                isEncrypted: messageEl.isEncrypted,
               });
             }
             break;
@@ -890,20 +1244,21 @@ const LinkMsg = memo(
       [pinMessage, unpinMessage, showSnackbar]
     );
 
-    // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP
     const handleDelete = useCallback(
       (messageEl, messageIsGroup = false, messageRoomId = null) => {
         console.log("🗑️ Deleting link message:", {
           messageId: messageEl.id || messageEl._id,
           isGroup: messageIsGroup,
           roomId: messageRoomId,
+          isEncrypted: messageEl.isEncrypted,
         });
 
+        const socket = getSocket();
         dispatch(
           deleteMessageThunk(
             messageEl.id || messageEl._id,
             messageIsGroup,
-            messageRoomId, // 🆕 TRUYỀN roomId
+            messageRoomId,
             socket
           )
         );
@@ -926,17 +1281,24 @@ const LinkMsg = memo(
           onMenuAction={handleMenuAction}
           onDelete={handleDelete}
           isGroup={isGroup}
-          roomId={roomId} // 🆕 TRUYỀN roomId CHO CONTAINER
+          roomId={roomId}
         >
           <Box
             px={1.5}
             py={1.5}
             sx={{
-              backgroundColor: el.incoming
-                ? alpha(theme.palette.background.default, 1)
-                : theme.palette.primary.main,
+              backgroundColor: isOwnMessage
+                ? theme.palette.primary.main
+                : alpha(theme.palette.background.default, 1),
               borderRadius: 1.5,
               width: "max-content",
+              border: isEncrypted
+                ? `1px solid ${
+                    isOwnMessage
+                      ? theme.palette.warning.light
+                      : theme.palette.warning.main
+                  }`
+                : "none",
             }}
           >
             {el.replyTo && (
@@ -944,26 +1306,57 @@ const LinkMsg = memo(
             )}
 
             <Stack spacing={2}>
-              <Stack
-                p={2}
-                direction="column"
-                spacing={3}
-                sx={{
-                  backgroundColor: theme.palette.background.paper,
-                  borderRadius: 1,
-                }}
-              >
-                <Embed
-                  width="300px"
-                  isDark
-                  url={`https://youtu.be/xoWxBR34qLE`}
-                />
-              </Stack>
+              {isEncrypted ? (
+                <Stack
+                  p={2}
+                  direction="column"
+                  alignItems="center"
+                  justifyContent="center"
+                  spacing={2}
+                  sx={{
+                    backgroundColor: isOwnMessage
+                      ? "rgba(255,255,255,0.1)"
+                      : theme.palette.background.paper,
+                    borderRadius: 1,
+                    border: `2px dashed ${theme.palette.warning.main}`,
+                    minHeight: 100,
+                  }}
+                >
+                  <Lock size={32} color={theme.palette.warning.main} />
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: isOwnMessage
+                        ? "rgba(255,255,255,0.7)"
+                        : theme.palette.text.secondary,
+                      fontStyle: "italic",
+                    }}
+                  >
+                    Encrypted link content
+                  </Typography>
+                </Stack>
+              ) : (
+                <Stack
+                  p={2}
+                  direction="column"
+                  spacing={3}
+                  sx={{
+                    backgroundColor: theme.palette.background.paper,
+                    borderRadius: 1,
+                  }}
+                >
+                  <Embed
+                    width="300px"
+                    isDark={theme.palette.mode === "dark"}
+                    url={`https://youtu.be/xoWxBR34qLE`}
+                  />
+                </Stack>
+              )}
 
               {el.message && (
                 <Typography
                   variant="body2"
-                  color={el.incoming ? theme.palette.text : "#fff"}
+                  color={isOwnMessage ? "#fff" : theme.palette.text.primary}
                 >
                   <div dangerouslySetInnerHTML={{ __html: el.message }} />
                 </Typography>
@@ -973,10 +1366,10 @@ const LinkMsg = memo(
                 variant="caption"
                 sx={{
                   display: "block",
-                  textAlign: el.incoming ? "left" : "right",
-                  color: el.incoming
-                    ? theme.palette.text.secondary
-                    : "rgba(255,255,255,0.7)",
+                  textAlign: isOwnMessage ? "right" : "left",
+                  color: isOwnMessage
+                    ? "rgba(255,255,255,0.7)"
+                    : theme.palette.text.secondary,
                   fontSize: "0.7rem",
                 }}
               >
@@ -1002,7 +1395,7 @@ const LinkMsg = memo(
 );
 
 // =======================
-//  REPLY MESSAGE - HOÀN CHỈNH VỚI DELETE, PIN VÀ roomId
+//  REPLY MESSAGE - HOÀN CHỈNH VỚI E2EE SUPPORT
 // =======================
 const ReplyMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
@@ -1010,6 +1403,9 @@ const ReplyMsg = memo(
     const { snackbar, showSnackbar, hideSnackbar } = useMessageSnackbar();
     const dispatch = useDispatch();
     const { pinMessage, unpinMessage } = usePinMessage();
+
+    const isEncrypted = el.isEncrypted || false;
+    const isOwnMessage = el.outgoing;
 
     const handleMenuAction = useCallback(
       (action, messageEl) => {
@@ -1023,6 +1419,7 @@ const ReplyMsg = memo(
                 content: messageEl.content || messageEl.message,
                 sender: messageEl.sender,
                 type: "reply",
+                isEncrypted: messageEl.isEncrypted,
               });
             }
             break;
@@ -1042,20 +1439,21 @@ const ReplyMsg = memo(
       [pinMessage, unpinMessage, showSnackbar]
     );
 
-    // 🆕 HANDLER XÓA TIN NHẮN - TRUYỀN roomId CHO GROUP
     const handleDelete = useCallback(
       (messageEl, messageIsGroup = false, messageRoomId = null) => {
         console.log("🗑️ Deleting reply message:", {
           messageId: messageEl.id || messageEl._id,
           isGroup: messageIsGroup,
           roomId: messageRoomId,
+          isEncrypted: messageEl.isEncrypted,
         });
 
+        const socket = getSocket();
         dispatch(
           deleteMessageThunk(
             messageEl.id || messageEl._id,
             messageIsGroup,
-            messageRoomId, // 🆕 TRUYỀN roomId
+            messageRoomId,
             socket
           )
         );
@@ -1090,7 +1488,6 @@ const ReplyMsg = memo(
     };
 
     const replyData = getReplyData();
-    const isOwnMessage = el.outgoing;
 
     const getOriginalSenderName = () => {
       if (!replyData?.sender) return "Unknown";
@@ -1114,6 +1511,9 @@ const ReplyMsg = memo(
       return replyData?.content || replyData?.message || "No content";
     };
 
+    // 🆕 Check if reply is encrypted
+    const isReplyEncrypted = replyData?.isEncrypted || false;
+
     if (!replyData) {
       return (
         <>
@@ -1123,7 +1523,7 @@ const ReplyMsg = memo(
             onMenuAction={handleMenuAction}
             onDelete={handleDelete}
             isGroup={isGroup}
-            roomId={roomId} // 🆕 TRUYỀN roomId CHO CONTAINER
+            roomId={roomId}
           >
             <Box
               px={1.5}
@@ -1135,6 +1535,13 @@ const ReplyMsg = memo(
                 borderRadius: 1.5,
                 width: "max-content",
                 maxWidth: "400px",
+                border: isEncrypted
+                  ? `1px solid ${
+                      isOwnMessage
+                        ? theme.palette.warning.light
+                        : theme.palette.warning.main
+                    }`
+                  : "none",
               }}
             >
               <Typography
@@ -1184,7 +1591,7 @@ const ReplyMsg = memo(
           onMenuAction={handleMenuAction}
           onDelete={handleDelete}
           isGroup={isGroup}
-          roomId={roomId} // 🆕 TRUYỀN roomId CHO CONTAINER
+          roomId={roomId}
         >
           <Box
             px={1.5}
@@ -1196,6 +1603,13 @@ const ReplyMsg = memo(
               borderRadius: 1.5,
               width: "max-content",
               maxWidth: "400px",
+              border: isEncrypted
+                ? `1px solid ${
+                    isOwnMessage
+                      ? theme.palette.warning.light
+                      : theme.palette.warning.main
+                  }`
+                : "none",
             }}
           >
             {/* REPLY PREVIEW SECTION */}
@@ -1230,8 +1644,14 @@ const ReplyMsg = memo(
                       ? "rgba(255,255,255,0.9)"
                       : theme.palette.primary.main,
                     fontSize: "0.7rem",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 0.5,
                   }}
                 >
+                  {isReplyEncrypted && (
+                    <Lock size={10} color={theme.palette.warning.main} />
+                  )}
                   {getOriginalSenderName()}
                 </Typography>
 
@@ -1250,21 +1670,27 @@ const ReplyMsg = memo(
                     WebkitBoxOrient: "vertical",
                   }}
                 >
-                  {getOriginalContent()}
+                  {isReplyEncrypted
+                    ? "🔒 Encrypted message"
+                    : getOriginalContent()}
                 </Typography>
               </Stack>
             </Box>
 
-            {/* NỘI DUNG REPLY HIỆN TẠI */}
-            <Typography
-              variant="body2"
-              sx={{
-                color: isOwnMessage ? "#fff" : theme.palette.text.primary,
-                wordBreak: "break-word",
-              }}
-            >
-              {el.content || el.message}
-            </Typography>
+            {/* MAIN REPLY CONTENT */}
+            {isEncrypted ? (
+              <EncryptedContent el={el} isOwnMessage={isOwnMessage} />
+            ) : (
+              <Typography
+                variant="body2"
+                sx={{
+                  color: isOwnMessage ? "#fff" : theme.palette.text.primary,
+                  wordBreak: "break-word",
+                }}
+              >
+                {el.content || el.message}
+              </Typography>
+            )}
 
             {/* THỜI GIAN */}
             <Typography
@@ -1316,4 +1742,14 @@ const Timeline = memo(({ el }) => {
   );
 });
 
-export { Timeline, MediaMsg, LinkMsg, DocMsg, TextMsg, ReplyMsg };
+export {
+  Timeline,
+  MediaMsg,
+  LinkMsg,
+  DocMsg,
+  TextMsg,
+  ReplyMsg,
+  MessageContainer,
+  usePinMessage,
+  useMessageSnackbar,
+};

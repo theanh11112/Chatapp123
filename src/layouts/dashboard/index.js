@@ -39,7 +39,7 @@ import {
   UpdateVideoCallDialog,
 } from "../../redux/slices/videoCall";
 import VideoCallNotification from "../../sections/dashboard/video/CallNotification";
-import VideoCallDialog from "../../sections/dashboard/video/CallDialog";
+import VideoCallDialog from "../../sections/dashboard/video/VideoCallDialog";
 import CompanyChatBox from "../../components/ChatBox/CompanyChatBox";
 
 const formatMessageTime = (ts) =>

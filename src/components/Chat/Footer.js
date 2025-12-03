@@ -1,4 +1,4 @@
-// Footer.js - ĐÃ THÊM SOCKET LISTENERS CHO DIRECT MESSAGES
+// Footer.js - HOÀN THIỆN VỚI E2EE INTEGRATION
 import React, { useRef, useState, useCallback, useEffect } from "react";
 import {
   Box,
@@ -8,6 +8,8 @@ import {
   Stack,
   TextField,
   Tooltip,
+  Chip,
+  Button,
 } from "@mui/material";
 import {
   Camera,
@@ -18,13 +20,16 @@ import {
   Smiley,
   Sticker,
   User,
+  Lock,
+  LockOpen,
+  Key,
 } from "phosphor-react";
 import { useTheme, styled } from "@mui/material/styles";
 import useResponsive from "../../hooks/useResponsive";
 import { useKeycloak } from "@react-keycloak/web";
 import data from "@emoji-mart/data";
 import Picker from "@emoji-mart/react";
-import { socket } from "../../socket";
+import { getSocket } from "../../socket";
 import { useSelector, useDispatch } from "react-redux";
 import {
   addDirectMessage,
@@ -33,6 +38,8 @@ import {
 } from "../../redux/slices/conversation";
 import { v4 as uuidv4 } from "uuid";
 import { ReplyPreview } from "./ReplyComponents";
+import { useE2EE } from "../../contexts/E2EEContext";
+import { showSnackbar } from "../../redux/slices/app";
 
 const StyledInput = styled(TextField)(({ theme }) => ({
   "& .MuiInputBase-input": {
@@ -60,8 +67,12 @@ const ChatInput = React.memo(
     handleSendMessage,
     replyTo,
     onCancelReply,
+    isE2EEEnabled,
+    isFriendE2EEEnabled,
+    onInitiateKeyExchange,
   }) => {
     const [openActions, setOpenActions] = useState(false);
+    const theme = useTheme();
 
     return (
       <>
@@ -122,6 +133,22 @@ const ChatInput = React.memo(
               </InputAdornment>
             ),
           }}
+          sx={{
+            "& .MuiFilledInput-root": {
+              backgroundColor:
+                isE2EEEnabled && isFriendE2EEEnabled
+                  ? theme.palette.mode === "light"
+                    ? "#e8f5e9"
+                    : "rgba(76, 175, 80, 0.1)"
+                  : theme.palette.mode === "light"
+                  ? "#FFF"
+                  : "rgba(255, 255, 255, 0.05)",
+              border:
+                isE2EEEnabled && isFriendE2EEEnabled
+                  ? `1px solid ${theme.palette.success.main}`
+                  : "1px solid transparent",
+            },
+          }}
         />
       </>
     );
@@ -150,6 +177,15 @@ const Footer = () => {
   const [replyTo, setReplyTo] = useState(null);
   const inputRef = useRef(null);
 
+  // 🆕 E2EE Context
+  const {
+    e2eeEnabled,
+    friendsE2EEStatus,
+    sendEncryptedMessage,
+    initiateKeyExchange,
+    getFriendKey,
+  } = useE2EE();
+
   const user_id =
     initialized && keycloak?.authenticated ? keycloak?.subject : null;
 
@@ -176,8 +212,16 @@ const Footer = () => {
     return null;
   }, [isGroupChat, isDirectChat, current_room, current_conversation, room_id]);
 
+  // 🆕 Kiểm tra E2EE status
+  const currentChat = getCurrentChat();
+  const friendId = currentChat?.user_id;
+  const isFriendE2EEEnabled = friendsE2EEStatus[friendId] || false;
+  const isBothE2EEEnabled = e2eeEnabled && isFriendE2EEEnabled;
+  const hasFriendKey = getFriendKey ? getFriendKey(friendId) : null;
+
   // 🆕 THÊM: Socket event listeners cho direct messages
   useEffect(() => {
+    const socket = getSocket();
     if (!socket || !user_id) return;
 
     // Listener cho tin nhắn direct mới
@@ -229,6 +273,11 @@ const Footer = () => {
           replyTo: processedReplyTo,
           isOptimistic: false,
           tempId: data.tempId || data.messageId,
+          // 🆕 Thêm E2EE flag
+          isEncrypted: data.isEncrypted || false,
+          ciphertext: data.ciphertext,
+          iv: data.iv,
+          keyId: data.keyId,
         };
 
         console.log("🔄 Footer: Processing direct message -", {
@@ -236,6 +285,7 @@ const Footer = () => {
           message_id: messageData.id,
           isOwnMessage,
           hasReply: !!data.replyTo,
+          isEncrypted: data.isEncrypted,
         });
 
         // 🆕 Replace optimistic message với real message từ server
@@ -288,14 +338,29 @@ const Footer = () => {
       handleNewDirectMessage(data);
     };
 
+    // 🆕 Listener cho encrypted messages
+    const handleEncryptedMessage = (data) => {
+      console.log("🔐 Footer: Received encrypted message:", data);
+
+      // Xử lý encrypted message tương tự như regular message
+      handleNewDirectMessage({
+        ...data,
+        isEncrypted: true,
+      });
+    };
+
     socket.on("text_message", handleNewDirectMessage);
     socket.on("text_message_reply", handleDirectReplyMessage);
+    socket.on("encrypted_message", handleEncryptedMessage);
+    socket.on("encrypted_message_reply", handleEncryptedMessage);
 
     return () => {
       socket.off("text_message", handleNewDirectMessage);
       socket.off("text_message_reply", handleDirectReplyMessage);
+      socket.off("encrypted_message", handleEncryptedMessage);
+      socket.off("encrypted_message_reply", handleEncryptedMessage);
     };
-  }, [socket, user_id, dispatch, getCurrentChat]);
+  }, [getCurrentChat, user_id, dispatch]);
 
   // 🆕 Setup reply listener từ parent component
   useEffect(() => {
@@ -319,6 +384,34 @@ const Footer = () => {
   const handleCancelReply = useCallback(() => {
     setReplyTo(null);
   }, []);
+
+  // 🆕 Handle initiate key exchange
+  const handleInitiateKeyExchange = useCallback(async () => {
+    if (!friendId) {
+      console.error("❌ No friend ID available");
+      return;
+    }
+
+    try {
+      const success = await initiateKeyExchange(friendId);
+      if (success) {
+        dispatch(
+          showSnackbar({
+            severity: "success",
+            message: "Key exchange initiated successfully",
+          })
+        );
+      }
+    } catch (error) {
+      console.error("❌ Error initiating key exchange:", error);
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "Failed to initiate key exchange",
+        })
+      );
+    }
+  }, [friendId, initiateKeyExchange, dispatch]);
 
   const handleSendMessage = useCallback(() => {
     console.log("📤 Attempting to send message...", { replyTo });
@@ -349,6 +442,12 @@ const Footer = () => {
       : containsUrl(value)
       ? "link"
       : "text";
+
+    // 🆕 XÁC ĐỊNH CÓ GỬI ENCRYPTED MESSAGE HAY KHÔNG
+    const shouldSendEncrypted =
+      !isGroupChat && // Chỉ cho direct messages
+      isBothE2EEEnabled && // Cả hai đều bật E2EE
+      hasFriendKey; // Đã có key của bạn
 
     if (isGroupChat) {
       // GROUP MESSAGE - code giữ nguyên
@@ -435,6 +534,7 @@ const Footer = () => {
             messageId: msgId,
           };
 
+      const socket = getSocket();
       socket.emit(socketEvent, socketData);
       console.log(`✅ Group ${isReply ? "reply " : ""}message sent via socket`);
     } else {
@@ -444,6 +544,100 @@ const Footer = () => {
         return;
       }
 
+      // 🆕 GỬI ENCRYPTED MESSAGE
+      if (shouldSendEncrypted) {
+        console.log("🔐 Sending encrypted message...");
+
+        // Tạo optimistic encrypted message
+        const optimisticEncryptedMessage = {
+          id: msgId,
+          type: "msg",
+          subtype: messageType,
+          message: "🔒 Encrypted message",
+          content: "🔒 Encrypted message",
+          incoming: false,
+          outgoing: true,
+          time: formatMessageTime(timestamp),
+          createdAt: timestamp,
+          attachments: [],
+          isOptimistic: true,
+          tempId: msgId,
+          isEncrypted: true,
+          encryptionStatus: "encrypting",
+          ...(isReply && {
+            replyTo: {
+              id: replyTo.id || replyTo._id,
+              content: replyTo.content || replyTo.message,
+              sender: replyTo.sender,
+            },
+          }),
+        };
+
+        dispatch(
+          addDirectMessage({
+            message: optimisticEncryptedMessage,
+            conversation_id: currentChat.id,
+            currentUserId: user_id,
+            isGroup: false,
+            isOptimistic: true,
+            tempId: msgId,
+          })
+        );
+
+        // Gửi encrypted message thông qua E2EE service
+        sendEncryptedMessage(
+          currentChat.id,
+          value,
+          currentChat.user_id,
+          replyTo?.id || replyTo?._id
+        )
+          .then((result) => {
+            console.log("✅ Encrypted message sent successfully:", result);
+
+            // Cập nhật message với real data
+            const realMessage = {
+              ...optimisticEncryptedMessage,
+              isOptimistic: false,
+              encryptionStatus: "encrypted",
+              messageId: result.messageId || result.id,
+            };
+
+            if (updateDirectMessage) {
+              dispatch(
+                updateDirectMessage({
+                  tempId: msgId,
+                  realMessage: realMessage,
+                  conversation_id: currentChat.id,
+                })
+              );
+            }
+          })
+          .catch((error) => {
+            console.error("❌ Failed to send encrypted message:", error);
+
+            // Fallback to normal message
+            dispatch(
+              showSnackbar({
+                severity: "warning",
+                message: "Failed to encrypt. Sending as regular message.",
+              })
+            );
+
+            // Gửi tin nhắn thông thường
+            sendNormalMessage();
+          });
+      } else {
+        // GỬI NORMAL MESSAGE
+        sendNormalMessage();
+      }
+    }
+
+    // Reset state
+    setReplyTo(null);
+    setValue("");
+
+    // 🆕 Hàm gửi tin nhắn thông thường
+    function sendNormalMessage() {
       const optimisticMessage = {
         id: msgId,
         type: "msg",
@@ -498,15 +692,13 @@ const Footer = () => {
             type: messageType,
           };
 
+      const socket = getSocket();
       console.log(`🔌 Emitting ${socketEvent}:`, socketData);
       socket.emit(socketEvent, socketData);
       console.log(
         `✅ Direct ${isReply ? "reply " : ""}message sent via socket`
       );
     }
-
-    setReplyTo(null);
-    setValue("");
   }, [
     value,
     replyTo,
@@ -514,8 +706,10 @@ const Footer = () => {
     dispatch,
     user_id,
     isGroupChat,
-    isDirectChat,
     keycloak,
+    isBothE2EEEnabled,
+    hasFriendKey,
+    sendEncryptedMessage,
   ]);
 
   const handleEmojiClick = useCallback(
@@ -564,7 +758,6 @@ const Footer = () => {
     );
   };
 
-  const currentChat = getCurrentChat();
   if (!currentChat) {
     return (
       <Box
@@ -581,6 +774,62 @@ const Footer = () => {
     );
   }
 
+  // 🆕 Render E2EE status indicator
+  const renderE2EEStatus = () => {
+    if (isGroupChat) {
+      return null; // E2EE không hỗ trợ group chat
+    }
+
+    return (
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+        {!e2eeEnabled ? (
+          <Chip
+            icon={<LockOpen size={16} />}
+            label="E2EE Disabled"
+            color="error"
+            size="small"
+            variant="outlined"
+          />
+        ) : !isFriendE2EEEnabled ? (
+          <Chip
+            icon={<LockOpen size={16} />}
+            label="Friend E2EE Disabled"
+            color="warning"
+            size="small"
+            variant="outlined"
+          />
+        ) : !hasFriendKey ? (
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Chip
+              icon={<Key size={16} />}
+              label="Need Key Exchange"
+              color="info"
+              size="small"
+              variant="outlined"
+            />
+            <Button
+              size="small"
+              startIcon={<Key size={14} />}
+              onClick={handleInitiateKeyExchange}
+              variant="contained"
+              sx={{ height: 24 }}
+            >
+              Exchange Keys
+            </Button>
+          </Stack>
+        ) : (
+          <Chip
+            icon={<Lock size={16} />}
+            label="E2EE Active"
+            color="success"
+            size="small"
+            variant="outlined"
+          />
+        )}
+      </Stack>
+    );
+  };
+
   return (
     <Box sx={{ position: "relative" }}>
       <Box
@@ -592,8 +841,14 @@ const Footer = () => {
               ? "#F8FAFF"
               : theme.palette.background.paper,
           boxShadow: "0px 0px 2px rgba(0, 0, 0, 0.25)",
+          borderTop: isBothE2EEEnabled
+            ? `2px solid ${theme.palette.success.main}`
+            : "none",
         }}
       >
+        {/* 🆕 E2EE Status Indicator */}
+        {renderE2EEStatus()}
+
         <Stack direction="row" alignItems="center" spacing={isMobile ? 1 : 3}>
           <Stack sx={{ width: "100%" }}>
             {openPicker && (
@@ -622,6 +877,9 @@ const Footer = () => {
               handleSendMessage={handleSendMessage}
               replyTo={replyTo}
               onCancelReply={handleCancelReply}
+              isE2EEEnabled={e2eeEnabled}
+              isFriendE2EEEnabled={isFriendE2EEEnabled}
+              onInitiateKeyExchange={handleInitiateKeyExchange}
             />
           </Stack>
 
@@ -631,6 +889,7 @@ const Footer = () => {
               width: 48,
               backgroundColor: theme.palette.primary.main,
               borderRadius: 1.5,
+              opacity: isBothE2EEEnabled && hasFriendKey ? 1 : 0.8,
             }}
           >
             <Stack
@@ -638,12 +897,20 @@ const Footer = () => {
               alignItems="center"
               justifyContent="center"
             >
-              <IconButton
-                onClick={handleSendMessage}
-                disabled={!currentChat || !user_id || !value.trim()}
+              <Tooltip
+                title={
+                  isBothE2EEEnabled && hasFriendKey
+                    ? "Send encrypted message"
+                    : "Send message"
+                }
               >
-                <PaperPlaneTilt color="#fff" />
-              </IconButton>
+                <IconButton
+                  onClick={handleSendMessage}
+                  disabled={!currentChat || !user_id || !value.trim()}
+                >
+                  <PaperPlaneTilt color="#fff" />
+                </IconButton>
+              </Tooltip>
             </Stack>
           </Box>
         </Stack>

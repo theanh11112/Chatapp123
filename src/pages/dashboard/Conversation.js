@@ -1,4 +1,10 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  useMemo,
+} from "react";
 import {
   Stack,
   Box,
@@ -6,6 +12,7 @@ import {
   CircularProgress,
   Avatar,
   IconButton,
+  Chip,
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { useTheme } from "@mui/material/styles";
@@ -35,10 +42,14 @@ import {
 import PinnedMessages from "../../components/Chat/PinnedMessages";
 import { useKeycloak } from "@react-keycloak/web";
 import api from "../../utils/axios";
+import { useE2EE } from "../../contexts/E2EEContext";
 
 const Conversation = ({ isMobile, menu }) => {
   const dispatch = useDispatch();
   const theme = useTheme();
+
+  // 🆕 E2EE Context
+  const { e2eeEnabled, friendsE2EEStatus } = useE2EE();
 
   const { conversations, current_conversation, current_messages } = useSelector(
     (state) => state.conversation.direct_chat
@@ -53,14 +64,18 @@ const Conversation = ({ isMobile, menu }) => {
     initialized && keycloak?.authenticated ? keycloak?.subject : null;
 
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [socket, setSocket] = useState(null);
 
-  // 🆕 THÊM: Socket listener cho real-time delete
+  // 🆕 Thiết lập socket cho real-time events
   useEffect(() => {
-    if (window.socket) {
+    const currentSocket = window.socket;
+    if (currentSocket) {
+      setSocket(currentSocket);
+
       const handleMessageDeleted = (data) => {
         console.log("📡 Socket: Message deleted by others", data);
-        // Tin nhắn sẽ tự động được xóa khỏi UI nhờ Redux state update từ backend
       };
+
       const handleMessagePinned = (data) => {
         console.log("📌 Socket: Message pinned", data);
         dispatch(
@@ -81,15 +96,33 @@ const Conversation = ({ isMobile, menu }) => {
         );
       };
 
-      window.socket.on("message_deleted", handleMessageDeleted);
-      window.socket.on("message_pinned", handleMessagePinned);
-      window.socket.on("message_unpinned", handleMessageUnpinned);
+      // 🆕 Socket listeners cho encrypted messages
+      const handleEncryptedMessage = (data) => {
+        console.log("🔐 Socket: Encrypted message received", data);
+        // Xử lý encrypted message trong Redux
+      };
+
+      const handleEncryptedMessageReply = (data) => {
+        console.log("🔐 Socket: Encrypted reply message received", data);
+        // Xử lý encrypted reply message trong Redux
+      };
+
+      currentSocket.on("message_deleted", handleMessageDeleted);
+      currentSocket.on("message_pinned", handleMessagePinned);
+      currentSocket.on("message_unpinned", handleMessageUnpinned);
+      currentSocket.on("encrypted_message", handleEncryptedMessage);
+      currentSocket.on("encrypted_message_reply", handleEncryptedMessageReply);
 
       return () => {
-        if (window.socket) {
-          window.socket.off("message_deleted", handleMessageDeleted);
-          window.socket.off("message_pinned", handleMessagePinned);
-          window.socket.off("message_unpinned", handleMessageUnpinned);
+        if (currentSocket) {
+          currentSocket.off("message_deleted", handleMessageDeleted);
+          currentSocket.off("message_pinned", handleMessagePinned);
+          currentSocket.off("message_unpinned", handleMessageUnpinned);
+          currentSocket.off("encrypted_message", handleEncryptedMessage);
+          currentSocket.off(
+            "encrypted_message_reply",
+            handleEncryptedMessageReply
+          );
         }
       };
     }
@@ -114,6 +147,14 @@ const Conversation = ({ isMobile, menu }) => {
   };
 
   const currentMessages = getCurrentMessages();
+
+  // 🆕 Filter out decrypting/encrypting messages nếu cần
+  const displayMessages = useMemo(() => {
+    return currentMessages.filter((msg) => {
+      // Show all messages, including encrypted ones
+      return true;
+    });
+  }, [currentMessages]);
 
   const formatMessageDate = (timestamp) => {
     if (!timestamp) return "";
@@ -308,6 +349,9 @@ const Conversation = ({ isMobile, menu }) => {
   }) => {
     const isOutgoing = message.outgoing;
 
+    // 🆕 Kiểm tra xem message có encrypted không
+    const isEncrypted = message.isEncrypted || false;
+
     return (
       <Box
         sx={{
@@ -371,6 +415,7 @@ const Conversation = ({ isMobile, menu }) => {
               flexDirection: "column",
               alignItems: isOutgoing ? "flex-end" : "flex-start",
               width: "100%",
+              position: "relative",
             }}
           >
             {children}
@@ -393,27 +438,45 @@ const Conversation = ({ isMobile, menu }) => {
   };
 
   useEffect(() => {
-    if (currentMessages.length > 0) {
-      const grouped = groupMessagesByDate(currentMessages);
+    if (displayMessages.length > 0) {
+      const grouped = groupMessagesByDate(displayMessages);
       console.log("📅 Message Grouping Debug:", {
-        totalMessages: currentMessages.length,
+        totalMessages: displayMessages.length,
+        encryptedMessages: displayMessages.filter((m) => m.isEncrypted).length,
         dateGroups: grouped.length,
         groups: grouped.map((group) => ({
           date: group.displayDate,
           messageCount: group.messages?.length,
+          encryptedCount: group.messages?.filter((m) => m.isEncrypted).length,
         })),
       });
     }
-  }, [currentMessages]);
+  }, [displayMessages]);
 
   useEffect(() => {
     console.log("🎯 Conversation - RENDER DEBUG:", {
       currentMessages_length: currentMessages.length,
+      displayMessages_length: displayMessages.length,
+      encrypted_count: currentMessages.filter((m) => m.isEncrypted).length,
       current_room_messages_length: current_room?.messages?.length,
       room_id,
       chat_type,
+      e2eeEnabled,
+      friendsE2EEStatus:
+        chat_type === "individual"
+          ? friendsE2EEStatus[current_conversation?.user_id]
+          : "N/A",
     });
-  }, [currentMessages, current_room, room_id, chat_type]);
+  }, [
+    currentMessages,
+    displayMessages,
+    current_room,
+    room_id,
+    chat_type,
+    e2eeEnabled,
+    friendsE2EEStatus,
+    current_conversation,
+  ]);
 
   useEffect(() => {
     console.log("🔄 Conversation - Check if should fetch messages:", {
@@ -449,7 +512,7 @@ const Conversation = ({ isMobile, menu }) => {
     }
   }, [room_id, chat_type, current_room, dispatch]);
 
-  // Trong Conversation component - THÊM useEffect để fetch pinned messages
+  // Fetch pinned messages
   useEffect(() => {
     const fetchPinnedMessages = async () => {
       if (!room_id || !currentUserId) return;
@@ -461,7 +524,6 @@ const Conversation = ({ isMobile, menu }) => {
           currentUserId
         );
 
-        // Gọi API để lấy pinned messages
         const response = await api.post("/users/messages/pinned", {
           roomId: room_id,
           keycloakId: currentUserId,
@@ -470,7 +532,6 @@ const Conversation = ({ isMobile, menu }) => {
         if (response.data.status === "success") {
           console.log("✅ Pinned messages fetched:", response.data.data.length);
 
-          // Cập nhật Redux state với pinned messages
           dispatch(
             setPinnedMessages({
               messages: response.data.data,
@@ -485,6 +546,7 @@ const Conversation = ({ isMobile, menu }) => {
 
     fetchPinnedMessages();
   }, [room_id, chat_type, currentUserId, dispatch]);
+
   useEffect(() => {
     if (room_id && chat_type) {
       console.log("🔄 Fetching pinned messages for:", { room_id, chat_type });
@@ -597,6 +659,7 @@ const Conversation = ({ isMobile, menu }) => {
       current_conversation: current_conversation?.id,
       current_room: current_room?.id,
       current_messages_count: currentMessages.length,
+      display_messages_count: displayMessages.length,
       isLoadingMessages,
       current_room_messages_source:
         current_room?.messages?.length > 0 ? "has_messages" : "empty",
@@ -608,13 +671,14 @@ const Conversation = ({ isMobile, menu }) => {
     current_conversation,
     current_room,
     currentMessages,
+    displayMessages,
     isLoadingMessages,
   ]);
 
   const messagesKey =
-    currentMessages.length > 0
-      ? `messages-${currentMessages.length}-${
-          currentMessages[currentMessages.length - 1]?.id
+    displayMessages.length > 0
+      ? `messages-${displayMessages.length}-${
+          displayMessages[displayMessages.length - 1]?.id
         }`
       : "no-messages";
 
@@ -663,10 +727,64 @@ const Conversation = ({ isMobile, menu }) => {
     );
   }
 
-  const groupedMessages = groupMessagesByDate(currentMessages);
+  const groupedMessages = groupMessagesByDate(displayMessages);
+
+  // 🆕 Lấy E2EE status cho direct chat
+  const getE2EEStatusForChat = () => {
+    if (chat_type !== "individual") return null;
+
+    const friendId = current_conversation?.user_id;
+    const isFriendE2EEEnabled = friendsE2EEStatus[friendId] || false;
+
+    return {
+      e2eeEnabled,
+      friendE2EEEnabled: isFriendE2EEEnabled,
+      allEnabled: e2eeEnabled && isFriendE2EEEnabled,
+    };
+  };
+
+  const e2eeStatus = getE2EEStatusForChat();
 
   return (
     <Box p={isMobile ? 0.5 : 2} key={messagesKey}>
+      {/* 🆕 Hiển thị E2EE status banner cho direct chat */}
+      {chat_type === "individual" && e2eeStatus && (
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "center",
+            mb: 2,
+            px: 2,
+          }}
+        >
+          {e2eeStatus.allEnabled ? (
+            <Chip
+              label="🔒 End-to-End Encrypted"
+              color="success"
+              size="small"
+              variant="outlined"
+              sx={{ fontSize: "0.75rem" }}
+            />
+          ) : e2eeStatus.e2eeEnabled && !e2eeStatus.friendE2EEEnabled ? (
+            <Chip
+              label="🔓 Friend doesn't have E2EE enabled"
+              color="warning"
+              size="small"
+              variant="outlined"
+              sx={{ fontSize: "0.75rem" }}
+            />
+          ) : !e2eeStatus.e2eeEnabled ? (
+            <Chip
+              label="🔓 E2EE disabled"
+              color="error"
+              size="small"
+              variant="outlined"
+              sx={{ fontSize: "0.75rem" }}
+            />
+          ) : null}
+        </Box>
+      )}
+
       <Stack spacing={0.5}>
         {groupedMessages.length === 0 ? (
           <Box
@@ -742,12 +860,11 @@ const Conversation = ({ isMobile, menu }) => {
                       showSenderName={showSenderName}
                       isStartOfGroup={isStartOfGroup}
                     >
-                      {/* 🆕 SỬA: Thêm prop roomId cho group messages */}
                       <MsgComponent
                         el={el}
                         menu={menu}
                         isGroup={chat_type === "group"}
-                        roomId={chat_type === "group" ? room_id : null} // 🆕 TRUYỀN roomId
+                        roomId={chat_type === "group" ? room_id : null}
                       />
                     </MessageWrapper>
                   );
@@ -811,7 +928,6 @@ const ChatComponent = () => {
     const scrollToBottom = () => {
       const scrollContainer = messageListRef.current;
       if (scrollContainer) {
-        // Sử dụng smooth scroll cho UX tốt hơn
         scrollContainer.scrollTo({
           top: scrollContainer.scrollHeight,
           behavior: "smooth",
@@ -819,7 +935,6 @@ const ChatComponent = () => {
       }
     };
 
-    // Thêm delay nhỏ để đảm bảo DOM đã render xong
     const timeoutId = setTimeout(scrollToBottom, 150);
     return () => clearTimeout(timeoutId);
   }, [current_messages, current_room?.messages]);
@@ -827,7 +942,6 @@ const ChatComponent = () => {
   // 🆕 THÊM: Scroll đến bottom khi vào conversation mới
   useEffect(() => {
     if (messageListRef.current && room_id) {
-      // Reset auto-scroll state khi chuyển conversation
       isAutoScrolling.current = true;
 
       const timeoutId = setTimeout(() => {
@@ -867,7 +981,6 @@ const ChatComponent = () => {
       };
 
       const handleNewMessage = () => {
-        // Tự động scroll khi có tin nhắn mới từ người khác
         if (isAutoScrolling.current) {
           setTimeout(scrollToBottom, 100);
         }
@@ -877,11 +990,17 @@ const ChatComponent = () => {
       window.socket.on("new_message", handleNewMessage);
       window.socket.on("new_group_message", handleNewMessage);
 
+      // 🆕 Socket listeners cho encrypted messages
+      window.socket.on("encrypted_message", handleNewMessage);
+      window.socket.on("encrypted_message_reply", handleNewMessage);
+
       return () => {
         if (window.socket) {
           window.socket.off("message_deleted", handleMessageDeleted);
           window.socket.off("new_message", handleNewMessage);
           window.socket.off("new_group_message", handleNewMessage);
+          window.socket.off("encrypted_message", handleNewMessage);
+          window.socket.off("encrypted_message_reply", handleNewMessage);
         }
       };
     }

@@ -1,31 +1,27 @@
+// redux/slices/audioCall.js - UPDATED VERSION
 import { createSlice } from "@reduxjs/toolkit";
 import { showSnackbar } from "./app";
-import { FetchCallLogs } from "./app";
-import { socket } from "../../socket";
-import api from "../../utils/axios";
 
 const initialState = {
   open_audio_dialog: false,
   open_audio_notification_dialog: false,
-  call_queue: [], // can have max 1 call at any point of time
+  call_queue: [],
   incoming: false,
-
-  // WebRTC & Call State
-  localStream: null,
-  remoteStream: null,
-  peerConnection: null,
   isCallActive: false,
-  callType: null, // 'direct' or 'group'
-  callRoom: null,
+  callType: null,
   participants: [],
   callDuration: 0,
   isMuted: false,
   isSpeakerOn: true,
-  callStatus: "idle", // 'idle', 'calling', 'ringing', 'connected', 'ended'
-  callStartTime: null,
-  callEndTime: null,
-  zegoEngine: null,
-  zegoToken: null,
+  // WebRTC compatibility states
+  localStream: null,
+  remoteStream: null,
+  peerConnection: null,
+  callRoom: null,
+  callStatus: "idle",
+  connectionState: "disconnected",
+  // Thêm trường mới để lưu call data
+  currentCallData: null,
 };
 
 const slice = createSlice({
@@ -33,29 +29,55 @@ const slice = createSlice({
   initialState,
   reducers: {
     pushToAudioCallQueue(state, action) {
-      // Only allow one call at a time
-      if (state.call_queue.length === 0) {
-        state.call_queue.push(action.payload.call);
-        if (action.payload.incoming) {
-          state.open_audio_notification_dialog = true;
-          state.incoming = true;
-          state.callStatus = "ringing";
-        } else {
-          state.open_audio_dialog = true;
-          state.incoming = false;
-          state.callStatus = "calling";
-        }
+      console.log("🔔 pushToAudioCallQueue:", action.payload);
+
+      // Always reset first to avoid conflicts
+      state.call_queue = [];
+      state.open_audio_notification_dialog = false;
+      state.open_audio_dialog = false;
+
+      const callData = action.payload.call;
+
+      // Ensure call has required properties
+      const enhancedCall = {
+        id: callData.id || callData.callId || `call_${Date.now()}`,
+        callId: callData.callId || callData.id || `call_${Date.now()}`,
+        roomID: callData.roomID || `audio_room_${Date.now()}`,
+        from: callData.from || callData.fromUser?.keycloakId,
+        to: callData.to || callData.toUser?.keycloakId,
+        fromUser: callData.fromUser || {
+          keycloakId: callData.from,
+          username: "Unknown",
+        },
+        toUser: callData.toUser || {
+          keycloakId: callData.to,
+          username: "Unknown",
+        },
+        type: callData.type || "audio",
+        timestamp: callData.timestamp || new Date().toISOString(),
+        incoming: action.payload.incoming,
+        status: "ringing",
+      };
+
+      console.log("🔔 Enhanced call data:", enhancedCall);
+
+      state.call_queue = [enhancedCall];
+      state.currentCallData = enhancedCall;
+
+      if (action.payload.incoming) {
+        state.open_audio_notification_dialog = true;
+        state.incoming = true;
+        state.callStatus = "ringing";
       } else {
-        // Notify that user is busy
-        socket.emit("user_is_busy_audio_call", { ...action.payload });
+        state.open_audio_dialog = true;
+        state.incoming = false;
+        state.callStatus = "calling";
       }
     },
 
     resetAudioCallQueue(state, action) {
-      state.call_queue = [];
-      state.open_audio_notification_dialog = false;
-      state.incoming = false;
-      state.callStatus = "idle";
+      console.log("🔄 resetAudioCallQueue");
+      Object.assign(state, initialState);
     },
 
     closeNotificationDialog(state, action) {
@@ -63,44 +85,13 @@ const slice = createSlice({
     },
 
     updateCallDialog(state, action) {
-      state.open_audio_dialog = action.payload.state;
+      state.open_audio_dialog = !!action.payload.state;
       state.open_audio_notification_dialog = false;
-    },
-
-    // WebRTC & Media Actions
-    setLocalStream(state, action) {
-      state.localStream = action.payload;
-    },
-
-    setRemoteStream(state, action) {
-      state.remoteStream = action.payload;
-    },
-
-    setPeerConnection(state, action) {
-      state.peerConnection = action.payload;
     },
 
     setCallActive(state, action) {
       state.isCallActive = action.payload;
-      if (action.payload) {
-        state.callStatus = "connected";
-        state.callStartTime = new Date().toISOString();
-      } else {
-        state.callStatus = "ended";
-        state.callEndTime = new Date().toISOString();
-      }
-    },
-
-    setCallType(state, action) {
-      state.callType = action.payload;
-    },
-
-    setCallRoom(state, action) {
-      state.callRoom = action.payload;
-    },
-
-    setParticipants(state, action) {
-      state.participants = action.payload;
+      state.callStatus = action.payload ? "connected" : "ended";
     },
 
     updateCallDuration(state, action) {
@@ -108,214 +99,124 @@ const slice = createSlice({
     },
 
     toggleMute(state, action) {
-      state.isMuted = action.payload;
-      if (state.localStream) {
-        state.localStream.getAudioTracks().forEach((track) => {
-          track.enabled = !action.payload;
-        });
-      }
+      state.isMuted = !state.isMuted;
     },
 
     toggleSpeaker(state, action) {
-      state.isSpeakerOn = action.payload;
+      state.isSpeakerOn = !state.isSpeakerOn;
     },
 
-    setCallStatus(state, action) {
+    updateCallStatus(state, action) {
       state.callStatus = action.payload;
     },
 
-    setZegoEngine(state, action) {
-      state.zegoEngine = action.payload;
-    },
-
-    setZegoToken(state, action) {
-      state.zegoToken = action.payload;
-    },
-
-    addParticipant(state, action) {
-      if (!state.participants.find((p) => p.id === action.payload.id)) {
-        state.participants.push(action.payload);
-      }
-    },
-
-    removeParticipant(state, action) {
-      state.participants = state.participants.filter(
-        (p) => p.id !== action.payload
-      );
-    },
-
-    updateParticipant(state, action) {
-      const index = state.participants.findIndex(
-        (p) => p.id === action.payload.id
-      );
-      if (index !== -1) {
-        state.participants[index] = {
-          ...state.participants[index],
-          ...action.payload,
-        };
-      }
+    updateCurrentCallData(state, action) {
+      state.currentCallData = action.payload;
     },
 
     resetCallState(state, action) {
-      // Reset only call-related states, keep dialog states
-      const {
-        open_audio_dialog,
-        open_audio_notification_dialog,
-        call_queue,
-        incoming,
-      } = state;
-
-      Object.assign(state, {
-        ...initialState,
-        open_audio_dialog,
-        open_audio_notification_dialog,
-        call_queue,
-        incoming,
-      });
+      Object.assign(state, initialState);
     },
 
-    // Complete reset
-    completeReset(state, action) {
-      Object.assign(state, initialState);
+    // THÊM REDUCER MỚI: updateCallData
+    updateCallData(state, action) {
+      const { callId, roomID, status } = action.payload;
+
+      if (state.call_queue.length > 0) {
+        const currentCall = state.call_queue[0];
+
+        // Chỉ update nếu roomID khớp
+        if (roomID && currentCall.roomID !== roomID) {
+          console.warn("⚠️ updateCallData: RoomID mismatch", {
+            currentRoomID: currentCall.roomID,
+            newRoomID: roomID,
+          });
+          return;
+        }
+
+        const updatedCall = {
+          ...currentCall,
+          id: callId || currentCall.id,
+          callId: callId || currentCall.callId,
+          roomID: roomID || currentCall.roomID,
+          status: status || currentCall.status,
+        };
+
+        console.log("📝 updateCallData:", updatedCall);
+        state.call_queue[0] = updatedCall;
+        state.currentCallData = updatedCall;
+
+        // Cập nhật callStatus nếu có
+        if (status) {
+          state.callStatus = status;
+        }
+      }
     },
   },
 });
 
-// Reducer
 export default slice.reducer;
 
-// Export all actions
+// ----------------------------------------------------------------------
+
 export const {
   pushToAudioCallQueue,
   resetAudioCallQueue,
   closeNotificationDialog,
   updateCallDialog,
-  setLocalStream,
-  setRemoteStream,
-  setPeerConnection,
   setCallActive,
-  setCallType,
-  setCallRoom,
-  setParticipants,
   updateCallDuration,
   toggleMute,
   toggleSpeaker,
-  setCallStatus,
-  setZegoEngine,
-  setZegoToken,
-  addParticipant,
-  removeParticipant,
-  updateParticipant,
+  updateCallStatus,
+  updateCurrentCallData,
   resetCallState,
-  completeReset,
+  updateCallData, // THÊM DÒNG NÀY
 } = slice.actions;
 
-// Thunk Actions
-export const StartAudioCall = (to, callType = "direct", roomID = null) => {
-  return async (dispatch, getState) => {
-    dispatch(completeReset());
+// ==================== ACTION CREATORS ====================
 
-    try {
-      const state = getState();
-      const from = state.app.user?.keycloakId;
-
-      if (!from) {
-        throw new Error("User not authenticated");
-      }
-
-      const finalRoomID = roomID || `audio-${from}-${to}-${Date.now()}`;
-
-      console.log("📞 Starting audio call:", { from, to, roomID: finalRoomID });
-
-      const response = await api.post("/call/start-audio-call", {
-        from,
-        to,
-        roomID: finalRoomID,
-      });
-
-      console.log("✅ Audio call started:", response.data);
-
-      const callData = {
-        id: response.data.callId,
-        roomID: response.data.roomID,
-        from: from,
-        to: to,
-        callType: callType,
-        name: "User", // Will be updated with real user data
-        avatar: "",
-        timestamp: new Date().toISOString(),
-        ...response.data,
-      };
-
-      dispatch(
-        pushToAudioCallQueue({
-          call: callData,
-          incoming: false,
-        })
-      );
-
-      dispatch(setCallType(callType));
-      dispatch(setCallRoom(response.data.roomID));
-
-      return response.data;
-    } catch (err) {
-      console.error("❌ Start audio call error:", err);
-      dispatch(
-        showSnackbar({
-          severity: "error",
-          message: err.response?.data?.message || "Failed to start audio call",
-        })
-      );
-      throw err;
-    }
-  };
-};
-
-export const StartGroupAudioCall = (
-  participants,
-  roomID = null,
-  callTitle = "Group Call"
+export const StartAudioCall = (
+  toUserId,
+  callType = "direct",
+  roomID = null
 ) => {
   return async (dispatch, getState) => {
-    dispatch(completeReset());
-
     try {
       const state = getState();
-      const from = state.app.user?.keycloakId;
+      const fromUserId = state.auth.user_id || state.auth.user?.keycloakId;
 
-      if (!from) {
+      if (!fromUserId) {
         throw new Error("User not authenticated");
       }
 
-      const finalRoomID = roomID || `group-${from}-${Date.now()}`;
-      const allParticipants = [...new Set([...participants, from])];
-
-      console.log("👥 Starting group audio call:", {
-        from,
-        participants: allParticipants,
-        roomID: finalRoomID,
+      console.log("📞 Starting audio call:", {
+        from: fromUserId,
+        to: toUserId,
+        callType,
       });
 
-      const response = await api.post("/call/start-group-audio-call", {
-        from,
-        participants: allParticipants.filter((p) => p !== from),
-        roomID: finalRoomID,
-        callTitle,
-      });
+      // Reset any existing call first
+      dispatch(resetAudioCallQueue());
 
-      console.log("✅ Group audio call started:", response.data);
+      const finalRoomID =
+        roomID ||
+        `audio_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
+      // KHÔNG tạo callId ở frontend, để backend tự tạo
       const callData = {
-        id: response.data.callId,
-        roomID: response.data.roomID,
-        from: from,
-        participants: allParticipants,
-        callType: "group",
-        name: callTitle,
-        avatar: "",
+        id: `temp_${Date.now()}`, // Temporary ID for frontend only
+        roomID: finalRoomID,
+        from: fromUserId,
+        to: toUserId,
+        callType: callType,
+        type: "audio",
         timestamp: new Date().toISOString(),
-        ...response.data,
+        fromUser: state.auth.user,
+        incoming: false,
       };
+
+      console.log("📞 Dispatching call data:", callData);
 
       dispatch(
         pushToAudioCallQueue({
@@ -324,68 +225,97 @@ export const StartGroupAudioCall = (
         })
       );
 
-      dispatch(setCallType("group"));
-      dispatch(setCallRoom(response.data.roomID));
-      dispatch(
-        setParticipants(
-          allParticipants.map((id) => ({
-            id,
-            status: id === from ? "joined" : "invited",
-          }))
-        )
-      );
+      // Gửi socket event - CHỈ gửi to và roomID
+      import("../../socket")
+        .then(({ getSocket }) => {
+          const socket = getSocket();
+          if (socket && socket.connected) {
+            socket.emit("start_audio_call", {
+              to: toUserId,
+              roomID: finalRoomID,
+            });
+            console.log("📞 Socket event sent: start_audio_call");
+          } else {
+            console.warn(
+              "⚠️ Socket not connected, cannot send start_audio_call"
+            );
+          }
+        })
+        .catch(console.error);
 
-      return response.data;
-    } catch (err) {
-      console.error("❌ Start group audio call error:", err);
+      return callData;
+    } catch (error) {
+      console.error("❌ Start audio call error:", error);
       dispatch(
         showSnackbar({
           severity: "error",
-          message:
-            err.response?.data?.message || "Failed to start group audio call",
+          message: error.message || "Failed to start audio call",
         })
       );
-      throw err;
+      throw error;
     }
   };
 };
 
 export const AcceptAudioCall = () => {
   return async (dispatch, getState) => {
-    const state = getState().audioCall;
-    const currentCall = state.call_queue[0];
-    const userState = getState();
-    const userId = userState.app.user?.keycloakId;
-
     try {
-      if (!currentCall || !userId) {
-        throw new Error("No active call or user not authenticated");
+      const currentCall = getState().audioCall.call_queue[0];
+      if (!currentCall) {
+        throw new Error("No active call");
       }
 
-      console.log("✅ Accepting call:", {
-        callId: currentCall.id,
-        userId,
+      console.log("✅ Accepting audio call:", {
+        roomID: currentCall.roomID,
+        callId: currentCall.callId,
       });
 
-      // Update call status in backend
-      await api.post("/call/update-call-status", {
-        callId: currentCall.id,
-        userId: userId,
-        status: "accepted",
-      });
+      // Cập nhật trạng thái call thành "ongoing" trong Redux
+      if (currentCall.callId && currentCall.callId.startsWith("temp_")) {
+        // Nếu vẫn là temp ID, chưa cập nhật
+        console.log("⚠️ Still using temp callId, waiting for server response");
+      } else {
+        // Đã có callId thật từ server, cập nhật status
+        dispatch(
+          updateCallData({
+            callId: currentCall.callId,
+            roomID: currentCall.roomID,
+            status: "ongoing",
+          })
+        );
+      }
 
-      // Notify caller via socket
-      socket.emit("audio_call_accepted", {
-        callId: currentCall.id,
-        roomId: currentCall.roomID,
-        to: currentCall.from,
-        acceptedBy: userId,
-      });
-
+      // Update state
       dispatch(closeNotificationDialog());
       dispatch(updateCallDialog({ state: true }));
-      dispatch(setCallStatus("connected"));
       dispatch(setCallActive(true));
+
+      // Send accept via socket - CHỈ gửi roomID
+      import("../../socket")
+        .then(({ getSocket }) => {
+          const socket = getSocket();
+          if (socket && socket.connected) {
+            socket.emit("audio_call_accepted", {
+              roomID: currentCall.roomID,
+              // KHÔNG gửi callId
+            });
+            console.log(
+              "✅ Socket event sent: audio_call_accepted (roomID only)"
+            );
+          } else {
+            console.warn(
+              "⚠️ Socket not connected, cannot send audio_call_accepted"
+            );
+          }
+        })
+        .catch(console.error);
+
+      dispatch(
+        showSnackbar({
+          severity: "success",
+          message: "Audio call accepted",
+        })
+      );
     } catch (error) {
       console.error("❌ Accept audio call error:", error);
       dispatch(
@@ -400,86 +330,101 @@ export const AcceptAudioCall = () => {
 
 export const RejectAudioCall = () => {
   return async (dispatch, getState) => {
-    const state = getState().audioCall;
-    const currentCall = state.call_queue[0];
-    const userState = getState();
-    const userId = userState.app.user?.keycloakId;
+    const currentCall = getState().audioCall.call_queue[0];
 
-    try {
-      if (!currentCall || !userId) {
-        throw new Error("No active call or user not authenticated");
-      }
-
-      console.log("❌ Rejecting call:", {
-        callId: currentCall.id,
-        userId,
-      });
-
-      // Update call status in backend
-      await api.post("/call/update-call-status", {
-        callId: currentCall.id,
-        userId: userId,
-        status: "declined",
-      });
-
-      // Notify caller via socket
-      socket.emit("audio_call_rejected", {
-        callId: currentCall.id,
-        roomId: currentCall.roomID,
-        to: currentCall.from,
-        rejectedBy: userId,
-      });
-
-      dispatch(completeReset());
-    } catch (error) {
-      console.error("❌ Reject audio call error:", error);
-      dispatch(completeReset());
+    if (currentCall) {
+      // Send reject via socket
+      import("../../socket")
+        .then(({ getSocket }) => {
+          const socket = getSocket();
+          if (socket && socket.connected) {
+            socket.emit("audio_call_declined", {
+              callId: currentCall.callId || currentCall.id,
+              roomID: currentCall.roomID,
+            });
+            console.log("❌ Socket event sent: audio_call_declined");
+          } else {
+            console.warn(
+              "⚠️ Socket not connected, cannot send audio_call_declined"
+            );
+          }
+        })
+        .catch(console.error);
     }
+
+    dispatch(resetAudioCallQueue());
   };
 };
 
 export const EndAudioCall = () => {
   return async (dispatch, getState) => {
-    const state = getState().audioCall;
-    const currentCall = state.call_queue[0];
-    const userState = getState();
-    const userId = userState.app.user?.keycloakId;
-
     try {
-      if (!currentCall || !userId) {
-        throw new Error("No active call or user not authenticated");
+      const state = getState().audioCall;
+      const currentCall = state.call_queue[0];
+
+      if (currentCall) {
+        console.log("📴 Ending audio call:", {
+          roomID: currentCall.roomID,
+          callId: currentCall.callId,
+          duration: state.callDuration,
+        });
+
+        // Gửi socket event - CHỈ gửi roomID nếu callId không phải ObjectId
+        import("../../socket")
+          .then(({ getSocket }) => {
+            const socket = getSocket();
+            if (socket && socket.connected) {
+              // Kiểm tra xem callId có phải ObjectId không
+              const isValidObjectId = (id) =>
+                id &&
+                typeof id === "string" &&
+                id.length === 24 &&
+                /^[0-9a-fA-F]{24}$/.test(id);
+
+              const callId = currentCall.callId || currentCall.id;
+
+              if (isValidObjectId(callId)) {
+                // Nếu là ObjectId hợp lệ, gửi cả callId và roomID
+                socket.emit("end_call", {
+                  roomID: currentCall.roomID,
+                  callId: callId,
+                });
+                console.log("📴 Socket event sent: end_call (with callId)");
+              } else if (callId.startsWith("temp_")) {
+                // Nếu là temp ID, chỉ gửi roomID
+                socket.emit("end_call", {
+                  roomID: currentCall.roomID,
+                });
+                console.log(
+                  "📴 Socket event sent: end_call (roomID only - temp ID)"
+                );
+              } else {
+                // Default: gửi cả hai
+                socket.emit("end_call", {
+                  roomID: currentCall.roomID,
+                  callId: callId,
+                });
+                console.log("📴 Socket event sent: end_call (with both)");
+              }
+            } else {
+              console.warn("⚠️ Socket not connected, cannot send end_call");
+            }
+          })
+          .catch(console.error);
       }
 
-      console.log("📴 Ending call:", {
-        callId: currentCall.id,
-        userId,
-        duration: state.callDuration,
-      });
+      // Reset state
+      dispatch(resetAudioCallQueue());
 
-      // Update call status in backend
-      await api.post("/call/end-call", {
-        callId: currentCall.id,
-        endedBy: userId,
-        duration: state.callDuration,
-      });
-
-      // Notify participants via socket
-      socket.emit("audio_call_ended", {
-        callId: currentCall.id,
-        roomId: currentCall.roomID,
-        endedBy: userId,
-        duration: state.callDuration,
-      });
-
-      // Refresh call logs
-      if (userId) {
-        dispatch(FetchCallLogs(userId));
-      }
-
-      dispatch(completeReset());
+      dispatch(
+        showSnackbar({
+          severity: "info",
+          message: `Audio call ended (${state.callDuration}s)`,
+        })
+      );
     } catch (error) {
       console.error("❌ End audio call error:", error);
-      dispatch(completeReset());
+      dispatch(resetAudioCallQueue());
     }
   };
 };
@@ -487,57 +432,179 @@ export const EndAudioCall = () => {
 export const ToggleMuteAudio = () => {
   return async (dispatch, getState) => {
     const state = getState().audioCall;
-    const newMuteState = !state.isMuted;
+    dispatch(toggleMute());
 
-    dispatch(toggleMute(newMuteState));
-
-    // Emit mute state to other participants
-    if (state.callRoom) {
-      socket.emit("audio_call_mute_toggled", {
-        isMuted: newMuteState,
-        roomId: state.callRoom,
-      });
+    const currentCall = state.call_queue[0];
+    if (currentCall) {
+      import("../../socket")
+        .then(({ getSocket }) => {
+          const socket = getSocket();
+          if (socket && socket.connected) {
+            socket.emit("toggle_audio_mute", {
+              roomID: currentCall.roomID,
+              isMuted: !state.isMuted,
+            });
+          }
+        })
+        .catch(console.error);
     }
   };
 };
 
 export const ToggleSpeakerAudio = () => {
-  return async (dispatch, getState) => {
-    const state = getState().audioCall;
-    dispatch(toggleSpeaker(!state.isSpeakerOn));
+  return async (dispatch) => {
+    dispatch(toggleSpeaker());
   };
 };
 
-export const UpdateCallDuration = () => {
-  return async (dispatch, getState) => {
-    const state = getState().audioCall;
-    if (state.isCallActive) {
-      dispatch(updateCallDuration(state.callDuration + 1));
-    }
+// THÊM ACTION MỚI: UpdateCallData (wrapper cho updateCallData)
+export const UpdateCallData = (callData) => {
+  return async (dispatch) => {
+    console.log("📝 UpdateCallData action:", callData);
+    dispatch(updateCallData(callData));
   };
 };
 
-// Existing actions for backward compatibility
+// Compatibility exports - FIXED
 export const PushToAudioCallQueue = (call) => {
-  return async (dispatch, getState) => {
-    dispatch(pushToAudioCallQueue({ call, incoming: true }));
-  };
-};
+  return async (dispatch) => {
+    console.log("📞 PushToAudioCallQueue received:", call);
 
-export const ResetAudioCallQueue = () => {
-  return async (dispatch, getState) => {
-    dispatch(resetAudioCallQueue());
+    const enhancedCall = {
+      ...call,
+      id: call.id || call.callId || `call_${Date.now()}`,
+      callId: call.callId || call.id || `call_${Date.now()}`,
+      roomID: call.roomID || `audio_room_${Date.now()}`,
+      from: call.from || call.fromUser?.keycloakId,
+      fromUser: call.fromUser || {
+        keycloakId: call.from,
+        username: call.fromUser?.username || "Unknown",
+      },
+      type: call.type || "audio",
+      timestamp: call.timestamp || new Date().toISOString(),
+      incoming: true,
+      status: "ringing",
+    };
+
+    console.log("📞 Dispatching enhanced call:", enhancedCall);
+
+    dispatch(
+      pushToAudioCallQueue({
+        call: enhancedCall,
+        incoming: true,
+      })
+    );
   };
 };
 
 export const CloseAudioNotificationDialog = () => {
-  return async (dispatch, getState) => {
+  return async (dispatch) => {
     dispatch(closeNotificationDialog());
   };
 };
 
-export const UpdateAudioCallDialog = ({ state }) => {
-  return async (dispatch, getState) => {
+export const UpdateAudioCallDialog = (state) => {
+  return async (dispatch) => {
     dispatch(updateCallDialog({ state }));
+  };
+};
+
+// THÊM ACTION MỚI: Handle incoming audio call started from server
+export const HandleAudioCallStarted = (data) => {
+  return async (dispatch, getState) => {
+    try {
+      console.log("🎯 HandleAudioCallStarted:", data);
+
+      const state = getState().audioCall;
+      const currentCall = state.call_queue[0];
+
+      if (!currentCall) {
+        console.warn("⚠️ No current call to update");
+        return;
+      }
+
+      // Kiểm tra roomID có khớp không
+      if (data.roomID !== currentCall.roomID) {
+        console.warn("⚠️ RoomID mismatch", {
+          currentRoomID: currentCall.roomID,
+          serverRoomID: data.roomID,
+        });
+        return;
+      }
+
+      // Cập nhật callId từ server
+      if (data.callId && data.callId !== currentCall.callId) {
+        console.log("🔄 Updating callId from server:", {
+          oldCallId: currentCall.callId,
+          newCallId: data.callId,
+        });
+
+        dispatch(
+          updateCallData({
+            callId: data.callId,
+            roomID: data.roomID,
+            status: "ringing",
+          })
+        );
+
+        dispatch(
+          showSnackbar({
+            severity: "info",
+            message: "Call connection established",
+          })
+        );
+      }
+    } catch (error) {
+      console.error("❌ HandleAudioCallStarted error:", error);
+    }
+  };
+};
+
+// THÊM ACTION MỚI: Handle call accepted from server
+export const HandleCallAccepted = (data) => {
+  return async (dispatch, getState) => {
+    try {
+      console.log("🎯 HandleCallAccepted:", data);
+
+      const state = getState().audioCall;
+      const currentCall = state.call_queue[0];
+
+      if (!currentCall) {
+        console.warn("⚠️ No current call to update");
+        return;
+      }
+
+      // Kiểm tra roomID có khớp không
+      if (data.roomID !== currentCall.roomID) {
+        console.warn("⚠️ RoomID mismatch in call accepted", {
+          currentRoomID: currentCall.roomID,
+          serverRoomID: data.roomID,
+        });
+        return;
+      }
+
+      // Cập nhật trạng thái call thành ongoing
+      dispatch(
+        updateCallData({
+          callId: data.callId || currentCall.callId,
+          roomID: data.roomID,
+          status: "ongoing",
+        })
+      );
+
+      // Nếu là người gọi, cập nhật isCallActive
+      if (!state.incoming) {
+        dispatch(setCallActive(true));
+      }
+
+      dispatch(
+        showSnackbar({
+          severity: "success",
+          message: `Call accepted by ${data.acceptedBy || "receiver"}`,
+        })
+      );
+    } catch (error) {
+      console.error("❌ HandleCallAccepted error:", error);
+    }
   };
 };

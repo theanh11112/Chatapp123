@@ -1,4 +1,3 @@
-// components/CallElements.js - COMPLETE FIXED VERSION
 import React from "react";
 import {
   Box,
@@ -18,7 +17,8 @@ import {
 } from "phosphor-react";
 import { useDispatch, useSelector } from "react-redux";
 import { StartAudioCall } from "../redux/slices/audioCall";
-import { StartDirectVideoCall } from "../redux/slices/videoCall";
+import { StartVideoCall } from "../redux/slices/videoCall";
+import { showSnackbar } from "../redux/slices/app";
 import { timeAgo } from "../utils/timeAgo";
 
 const CallCard = styled(Box)(({ theme }) => ({
@@ -229,27 +229,43 @@ const CallLogElement = ({ call, currentUserId, onCallAgain }) => {
     const otherParticipant = getOtherParticipant();
     if (otherParticipant) {
       if (type === "audio") {
-        dispatch(StartAudioCall(otherParticipant, call.callType || "direct"));
+        dispatch(StartAudioCall(otherParticipant, call.callType || "direct"))
+          .then(() => {
+            console.log("✅ Audio call started");
+          })
+          .catch((error) => {
+            console.error("❌ Failed to start audio call:", error);
+            dispatch(
+              showSnackbar({
+                severity: "error",
+                message: "Failed to start call. Please try again.",
+              })
+            );
+          });
       } else {
-        // 🆕 SỬA: Tạo call data đầy đủ cho video call
-        const callData = {
-          from: user?.keycloakId || currentUserId,
-          from_name: user?.userName || user?.firstName || "User",
-          to: otherParticipant,
-          to_name: getDisplayName(),
-          roomID: `video_room_${Date.now()}_${Math.random()
-            .toString(36)
-            .substr(2, 9)}`,
-          streamID: `video_stream_${user?.keycloakId}_${Date.now()}`,
-          callType: call.callType || "direct",
-          conversationId: call.conversationId,
-        };
-
-        // Sử dụng action mới để khởi tạo call trực tiếp
-        dispatch(StartDirectVideoCall(callData));
+        // 🆕 SỬA: Sử dụng StartVideoCall thay vì StartDirectVideoCall
+        dispatch(StartVideoCall(otherParticipant, call.callType || "direct"))
+          .then(() => {
+            console.log("✅ Video call started");
+          })
+          .catch((error) => {
+            console.error("❌ Failed to start video call:", error);
+            dispatch(
+              showSnackbar({
+                severity: "error",
+                message: "Failed to start video call. Please try again.",
+              })
+            );
+          });
       }
     } else {
       console.error("❌ Cannot find other participant for call again");
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "Cannot start call - participant not found",
+        })
+      );
     }
   };
 
@@ -474,26 +490,25 @@ const CallElement = ({ img, name, id, handleClose }) => {
   const { user } = useSelector((state) => state.auth);
 
   const handleAudioCall = () => {
-    dispatch(StartAudioCall(id, "direct"));
-    if (handleClose) handleClose();
+    dispatch(StartAudioCall(id, "direct"))
+      .then(() => {
+        console.log("✅ Audio call started");
+        if (handleClose) handleClose();
+      })
+      .catch((error) => {
+        console.error("❌ Failed to start audio call:", error);
+      });
   };
 
   const handleVideoCall = () => {
-    // 🆕 SỬA: Tạo call data đầy đủ cho video call
-    const callData = {
-      from: user?.keycloakId,
-      from_name: user?.userName || user?.firstName || "User",
-      to: id,
-      to_name: name || "User",
-      roomID: `video_room_${Date.now()}_${Math.random()
-        .toString(36)
-        .substr(2, 9)}`,
-      streamID: `video_stream_${user?.keycloakId}_${Date.now()}`,
-      callType: "direct",
-    };
-
-    dispatch(StartDirectVideoCall(callData));
-    if (handleClose) handleClose();
+    dispatch(StartVideoCall(id, "direct"))
+      .then(() => {
+        console.log("✅ Video call started");
+        if (handleClose) handleClose();
+      })
+      .catch((error) => {
+        console.error("❌ Failed to start video call:", error);
+      });
   };
 
   return (

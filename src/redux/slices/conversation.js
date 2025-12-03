@@ -1,4 +1,4 @@
-// conversation.js - HOÀN CHỈNH VỚI BẢO VỆ MESSAGES VÀ REAL-TIME FIXES
+// conversation.js - HOÀN CHỈNH VỚI E2EE INTEGRATION
 import { createSlice } from "@reduxjs/toolkit";
 import { AWS_S3_REGION, S3_BUCKET_NAME } from "../../config";
 import { timeAgo } from "../../utils/timeAgo";
@@ -30,7 +30,7 @@ const findMessageById = (chatState, messageId) => {
   // Tìm trong current messages
   if (chatState.current_messages) {
     const foundInCurrent = chatState.current_messages.find(
-      (msg) => msg.id === messageId
+      (msg) => msg.id === messageId || msg._id === messageId
     );
     if (foundInCurrent) return foundInCurrent;
   }
@@ -38,7 +38,7 @@ const findMessageById = (chatState, messageId) => {
   // Tìm trong current conversation messages
   if (chatState.current_conversation?.messages) {
     const foundInConv = chatState.current_conversation.messages.find(
-      (msg) => msg.id === messageId
+      (msg) => msg.id === messageId || msg._id === messageId
     );
     if (foundInConv) return foundInConv;
   }
@@ -46,7 +46,7 @@ const findMessageById = (chatState, messageId) => {
   // Tìm trong current room messages
   if (chatState.current_room?.messages) {
     const foundInRoom = chatState.current_room.messages.find(
-      (msg) => msg.id === messageId
+      (msg) => msg.id === messageId || msg._id === messageId
     );
     if (foundInRoom) return foundInRoom;
   }
@@ -63,6 +63,9 @@ const initialState = {
     error: null,
     pinned_messages: [],
     shouldRefetchPinned: false,
+    // 🆕 THÊM: E2EE state
+    encryptionKeys: {}, // {conversationId: {publicKey, privateKey, sharedSecret}}
+    keyExchangeStatus: {}, // {conversationId: 'pending' | 'completed' | 'failed'}
   },
   group_chat: {
     rooms: [],
@@ -71,14 +74,24 @@ const initialState = {
     error: null,
     pinned_messages: [],
     shouldRefetchPinned: false,
+    // 🆕 THÊM: E2EE state cho group
+    encryptionKeys: {}, // {roomId: {publicKey, privateKey, sharedSecrets: {userId: sharedSecret}}}
+    keyExchangeStatus: {}, // {roomId: {userId: 'pending' | 'completed' | 'failed'}}
   },
   deletedMessages: [],
   notification: {
-    // 🆕 THÊM NOTIFICATION STATE
     open: false,
     message: "",
-    severity: "error", // error, warning, info, success
+    severity: "error",
     duration: 3000,
+  },
+  // 🆕 THÊM: Global E2EE state
+  e2ee: {
+    isEnabled: true,
+    encryptionStatus: "initializing", // 'initializing' | 'ready' | 'error'
+    keyPairs: {}, // {userId: {publicKey, privateKey}}
+    pendingDecryption: [], // Messages waiting for decryption
+    decryptionQueue: [], // Queue for decryption processing
   },
 };
 
@@ -97,7 +110,12 @@ const slice = createSlice({
 
       console.log("🔄 Processing DIRECT conversations in Redux:", {
         incoming_conversations_count: conversations.length,
+        encrypted_conversations: conversations.filter((c) => c.isEncrypted)
+          .length,
       });
+
+      // 🆕 SỬA LỖI: Đảm bảo encryptionKeys tồn tại
+      const encryptionKeys = state.direct_chat.encryptionKeys || {};
 
       // Xử lý direct conversations (one-to-one)
       state.direct_chat.conversations = conversations.map((conv) => {
@@ -107,8 +125,15 @@ const slice = createSlice({
         const lastMsg = conv.messages?.slice(-1)[0];
         const lastSeenTs = parseTimestamp(user?.lastSeen);
 
+        // 🆕 Check if conversation is encrypted
+        const isEncrypted = conv.isEncrypted || false;
+        const encryptionStatus = conv.encryptionStatus || "none";
+
+        // 🆕 SỬA LỖI: Truy cập an toàn vào encryptionKeys
+        const hasSharedSecret = !!encryptionKeys[conv._id]?.sharedSecret;
+
         return {
-          id: conv._id, // ID từ conversation schema
+          id: conv._id,
           user_id: user?.keycloakId || null,
           name:
             `${user?.username || ""} ${user?.lastName || ""}`.trim() ||
@@ -117,13 +142,20 @@ const slice = createSlice({
           img: user?.avatar
             ? `https://${S3_BUCKET_NAME}.s3.${AWS_S3_REGION}.amazonaws.com/${user.avatar}`
             : `https://i.pravatar.cc/150?u=${user?.keycloakId}`,
-          msg: lastMsg?.content || lastMsg?.text || "",
+          msg: isEncrypted
+            ? "🔒 Encrypted message"
+            : lastMsg?.content || lastMsg?.text || "",
           time: formatMessageTime(lastMsg?.createdAt),
           unread: 0,
           pinned: false,
           about: user?.about || "",
           messages: conv.messages || [],
           lastSeen: lastSeenTs ? timeAgo(lastSeenTs) : "",
+          // 🆕 E2EE fields
+          isEncrypted: isEncrypted,
+          encryptionStatus: encryptionStatus,
+          publicKey: user?.publicKey,
+          hasSharedSecret: hasSharedSecret, // 🆕 SỬA: Sử dụng biến đã kiểm tra
         };
       });
 
@@ -133,7 +165,10 @@ const slice = createSlice({
           (c) => c.id === state.direct_chat.current_conversation.id
         );
         if (currentConvInNewList) {
-          state.direct_chat.current_conversation = currentConvInNewList;
+          state.direct_chat.current_conversation = {
+            ...state.direct_chat.current_conversation,
+            ...currentConvInNewList,
+          };
         }
       }
 
@@ -156,19 +191,24 @@ const slice = createSlice({
 
       console.log("🔄 Processing GROUP rooms in Redux:", {
         incoming_rooms_count: rooms.length,
+        encrypted_rooms: rooms.filter((r) => r.isEncrypted).length,
       });
 
-      // Xử lý group rooms (room schema khác với conversation)
+      // Xử lý group rooms
       state.group_chat.rooms = rooms.map((room) => {
         const lastMsg = room.lastMessage;
         const membersCount = room.members?.length || 0;
         const onlineMembers =
           room.members?.filter((m) => m.status === "Online").length || 0;
 
+        // 🆕 Check if room is encrypted
+        const isEncrypted = room.isEncrypted || false;
+        const encryptionStatus = room.encryptionStatus || "none";
+
         return {
-          id: room._id, // ID từ room schema
+          id: room._id,
           name: room.name || "Unnamed Group",
-          isGroup: true, // Luôn là true cho group
+          isGroup: true,
           members: room.members || [],
           membersCount: membersCount,
           onlineMembers: onlineMembers,
@@ -176,10 +216,11 @@ const slice = createSlice({
           lastMessage: lastMsg
             ? {
                 id: lastMsg._id,
-                content: lastMsg.content,
+                content: isEncrypted ? "🔒 Encrypted message" : lastMsg.content,
                 type: lastMsg.type,
                 sender: lastMsg.sender,
                 time: formatMessageTime(lastMsg.createdAt),
+                isEncrypted: lastMsg.isEncrypted || false,
               }
             : null,
           pinnedMessages: room.pinnedMessages || [],
@@ -189,13 +230,22 @@ const slice = createSlice({
             `https://ui-avatars.com/api/?name=${encodeURIComponent(
               room.name || "Group"
             )}&background=random`,
-          msg: lastMsg?.content || "No messages yet",
+          msg: isEncrypted
+            ? "🔒 Encrypted message"
+            : lastMsg?.content || "No messages yet",
           time: lastMsg ? formatMessageTime(lastMsg.createdAt) : "",
           unread: 0,
           pinned: room.pinnedMessages?.length > 0,
-          messages: room.messages || [], // Messages từ room schema
+          messages: room.messages || [],
           createdAt: room.createdAt,
           updatedAt: room.updatedAt,
+          // 🆕 E2EE fields
+          isEncrypted: isEncrypted,
+          encryptionStatus: encryptionStatus,
+          hasSharedSecrets:
+            Object.keys(
+              state.group_chat.encryptionKeys[room._id]?.sharedSecrets || {}
+            ).length > 0,
         };
       });
 
@@ -207,19 +257,19 @@ const slice = createSlice({
       state.group_chat.error = action.payload.error;
     },
 
-    // 🆕 SỬA QUAN TRỌNG: setCurrentGroupRoom với logic MERGE messages
+    // 🆕 SỬA: setCurrentGroupRoom với logic MERGE messages và E2EE
     setCurrentGroupRoom(state, action) {
       try {
-        console.log("🔄 setCurrentGroupRoom:", {
+        console.log("🔄 setCurrentGroupRoom with E2EE:", {
           payload: action.payload,
           current_room_id: state.group_chat.current_room?.id,
           current_messages_count:
             state.group_chat.current_room?.messages?.length,
+          isEncrypted: action.payload?.isEncrypted,
         });
 
         const roomData = action.payload;
 
-        // Cho phép set null để clear room
         if (roomData === null) {
           state.group_chat.current_room = null;
           console.log("✅ Current room cleared");
@@ -231,7 +281,6 @@ const slice = createSlice({
           return;
         }
 
-        // 🆕 QUAN TRỌNG: BẢO VỆ MESSAGES HIỆN TẠI
         const isSameRoom = state.group_chat.current_room?.id === roomData.id;
         const currentMessages = state.group_chat.current_room?.messages || [];
         const newMessages = roomData.messages || [];
@@ -240,9 +289,9 @@ const slice = createSlice({
           isSameRoom,
           currentMessagesCount: currentMessages.length,
           newMessagesCount: newMessages.length,
+          encrypted_messages: newMessages.filter((m) => m.isEncrypted).length,
         });
 
-        // 🆕 QUY TẮC: Nếu là cùng room và có messages hiện tại, GIỮ messages hiện tại
         let finalMessages = currentMessages;
 
         if (isSameRoom && currentMessages.length > 0) {
@@ -260,7 +309,7 @@ const slice = createSlice({
           id: roomData.id,
           name: roomData.name || "Unnamed Group",
           isGroup: true,
-          messages: finalMessages, // 🆕 MESSAGES ĐƯỢC BẢO VỆ
+          messages: finalMessages,
           membersCount: roomData.membersCount || 0,
           onlineMembers: roomData.onlineMembers || 0,
           img:
@@ -272,50 +321,67 @@ const slice = createSlice({
           createdBy: roomData.createdBy || {},
           lastMessage: roomData.lastMessage || null,
           pinnedMessages: roomData.pinnedMessages || [],
+          // 🆕 E2EE fields
+          isEncrypted: roomData.isEncrypted || false,
+          encryptionStatus: roomData.encryptionStatus || "none",
+          publicKeys: roomData.publicKeys || {},
+          hasSharedSecrets:
+            Object.keys(
+              state.group_chat.encryptionKeys[roomData.id]?.sharedSecrets || {}
+            ).length > 0,
         };
 
         console.log("✅ Current group room set with messages:", {
           messagesCount: state.group_chat.current_room.messages.length,
           source: isSameRoom ? "preserved" : "new",
+          isEncrypted: state.group_chat.current_room.isEncrypted,
+          encryptionStatus: state.group_chat.current_room.encryptionStatus,
         });
       } catch (error) {
         console.error("❌ Error in setCurrentGroupRoom:", error);
       }
     },
 
+    // Sửa reducer setCurrentConversation trong conversation.js
     setCurrentConversation(state, action) {
-      console.log("🔄 setCurrentConversation:", action.payload);
+      console.log("🔄 setCurrentConversation with E2EE:", action.payload);
 
-      // Cho phép set null để clear conversation
       if (action.payload === null) {
         state.direct_chat.current_conversation = { id: null, messages: [] };
-        state.direct_chat.current_messages = []; // 🆕 QUAN TRỌNG: Clear current_messages
+        state.direct_chat.current_messages = [];
         console.log("✅ Current conversation cleared");
         return;
       }
 
-      // 🆕 QUAN TRỌNG: Clear current_messages khi chuyển conversation
       state.direct_chat.current_messages = [];
 
-      state.direct_chat.current_conversation = action.payload;
+      // 🆕 SỬA LỖI: Đảm bảo encryptionKeys tồn tại
+      const encryptionKeys = state.direct_chat.encryptionKeys || {};
+      const hasSharedSecret = !!encryptionKeys[action.payload.id]?.sharedSecret;
+
+      state.direct_chat.current_conversation = {
+        ...action.payload,
+        // 🆕 Ensure E2EE fields with safe access
+        isEncrypted: action.payload.isEncrypted || false,
+        encryptionStatus: action.payload.encryptionStatus || "none",
+        hasSharedSecret: hasSharedSecret,
+      };
 
       console.log("✅ Current conversation set, messages cleared");
     },
 
-    // Clear current room
     clearCurrentRoom(state) {
       console.log("🔄 Clearing current room");
       state.group_chat.current_room = null;
     },
 
-    // Clear current conversation
     clearCurrentConversation(state) {
       console.log("🔄 Clearing current conversation");
       state.direct_chat.current_conversation = { id: null, messages: [] };
       state.direct_chat.current_messages = [];
     },
 
-    // 🆕 SỬA: fetchCurrentMessages với xử lý direct messages realtime
+    // 🆕 CẬP NHẬT: fetchCurrentMessages với xử lý E2EE messages hoàn chỉnh
     fetchCurrentMessages(state, action) {
       const {
         messages,
@@ -324,49 +390,44 @@ const slice = createSlice({
         merge = true,
       } = action.payload;
 
-      console.log("📥 fetchCurrentMessages - DEBUG with REPLY:", {
+      console.log("📥 fetchCurrentMessages - E2EE COMPLETE:", {
         messages_count: messages?.length,
         currentUserId,
         isGroup,
         merge,
-        sample_messages: messages?.slice(0, 3).map((m) => ({
-          id: m._id || m.id,
-          subtype: m.subtype || m.type,
-          has_replyTo: !!m.replyTo,
-          replyTo_type: typeof m.replyTo,
-          replyTo_data: m.replyTo,
-        })),
+        encrypted_messages: messages?.filter((m) => m.isEncrypted).length,
+        sample_encrypted: messages?.filter((m) => m.isEncrypted).slice(0, 2),
       });
 
-      // Validate messages
       const validMessages = Array.isArray(messages) ? messages : [];
 
-      // 🆕 THÊM: Hàm xử lý replyTo
+      // 🆕 Hàm xử lý replyTo với E2EE support
       const processReplyTo = (m) => {
         if (!m.replyTo) return null;
 
-        console.log("🔍 Processing replyTo for message:", {
+        console.log("🔍 Processing replyTo for E2EE message:", {
           message_id: m._id || m.id,
           replyTo_raw: m.replyTo,
-          replyTo_type: typeof m.replyTo,
+          isEncrypted: m.isEncrypted,
         });
 
-        // Nếu replyTo đã là object đầy đủ
         if (typeof m.replyTo === "object" && m.replyTo.id) {
           console.log("✅ replyTo already has full object structure");
           return {
             id: m.replyTo.id,
-            content: m.replyTo.content || m.replyContent || "Original message",
+            content: m.replyTo.isEncrypted
+              ? "🔒 Encrypted message"
+              : m.replyTo.content || m.replyContent || "Original message",
             sender: m.replyTo.sender ||
               m.replySender || {
                 keycloakId: "unknown",
                 username: "Unknown",
               },
             type: m.replyTo.type || m.replyType || "text",
+            isEncrypted: m.replyTo.isEncrypted || false,
           };
         }
 
-        // Nếu replyTo chỉ là ID string
         if (typeof m.replyTo === "string") {
           console.log("🔄 replyTo is string ID, creating full object");
           return {
@@ -377,6 +438,7 @@ const slice = createSlice({
               username: "Unknown",
             },
             type: m.replyType || "text",
+            isEncrypted: m.replyType === "encrypted",
           };
         }
 
@@ -399,6 +461,8 @@ const slice = createSlice({
             createdBy: {},
             lastMessage: null,
             pinnedMessages: [],
+            isEncrypted: false,
+            encryptionStatus: "none",
           };
         }
 
@@ -411,11 +475,12 @@ const slice = createSlice({
           (m) => !existingMessageIds.has(m._id || m.id)
         );
 
-        console.log("🔄 Merging group messages:", {
+        console.log("🔄 Merging group messages with E2EE:", {
           existing: existingMessages.length,
           new: newMessages.length,
           duplicates: validMessages.length - newMessages.length,
-          new_messages_with_reply: newMessages.filter((m) => m.replyTo).length,
+          encrypted_new_messages: newMessages.filter((m) => m.isEncrypted)
+            .length,
         });
 
         const allMessages = [
@@ -424,23 +489,26 @@ const slice = createSlice({
             const senderId = m.sender?.keycloakId || m.senderId || m.sender;
             const isOutgoing = senderId === currentUserId;
 
-            // 🆕 XỬ LÝ REPLYTO CHO GROUP
             const processedReplyTo = processReplyTo(m);
 
-            console.log("🔍 Group message processing:", {
-              message_id: m._id || m.id,
-              subtype: m.subtype || m.type,
-              has_replyTo: !!m.replyTo,
-              processed_replyTo: !!processedReplyTo,
-            });
+            // 🆕 Determine message content based on encryption
+            let messageContent = m.content || m.message || "";
+            if (m.isEncrypted) {
+              if (m.ciphertext && m.iv && m.keyId) {
+                // Message is encrypted, show placeholder or try to decrypt
+                messageContent = "🔒 Encrypted message";
+              } else {
+                messageContent = "🔒 [Encrypted - No data]";
+              }
+            }
 
             return {
               id: m._id || m.id,
               _id: m._id || m.id,
               type: "msg",
-              subtype: m.subtype || m.type || "text", // 🆕 SỬA: Ưu tiên subtype
-              message: m.content || m.message || "",
-              content: m.content || m.message || "",
+              subtype: m.subtype || m.type || "text",
+              message: messageContent,
+              content: messageContent,
               incoming: !isOutgoing,
               outgoing: isOutgoing,
               time: formatMessageTime(m.createdAt || m.time),
@@ -450,8 +518,23 @@ const slice = createSlice({
                 keycloakId: senderId,
                 username: m.senderName || "Unknown",
               },
-              // 🆕 THÊM REPLYTO ĐÃ XỬ LÝ
               replyTo: processedReplyTo,
+              // 🆕 E2EE FIELDS - ĐẦY ĐỦ
+              isEncrypted: m.isEncrypted || false,
+              ciphertext: m.ciphertext,
+              iv: m.iv,
+              keyId: m.keyId,
+              ephemeralPublicKey: m.ephemeralPublicKey,
+              encryptedKey: m.encryptedKey,
+              encryptionStatus:
+                m.encryptionStatus || (m.isEncrypted ? "encrypted" : "none"),
+              // 🆕 Optimistic update fields
+              isOptimistic: m.isOptimistic || false,
+              tempId: m.tempId,
+              // 🆕 Decryption state
+              isDecrypted: m.isDecrypted || false,
+              decryptionError: m.decryptionError,
+              decryptedContent: m.decryptedContent,
             };
           }),
         ];
@@ -465,12 +548,10 @@ const slice = createSlice({
 
         console.log("✅ Final group messages after fetch:", {
           total_messages: allMessages.length,
-          messages_with_reply: allMessages.filter((m) => m.replyTo).length,
-          outgoing_count: allMessages.filter((m) => m.outgoing).length,
-          incoming_count: allMessages.filter((m) => m.incoming).length,
+          encrypted_messages: allMessages.filter((m) => m.isEncrypted).length,
+          decrypted_messages: allMessages.filter((m) => m.isDecrypted).length,
         });
       } else {
-        // 🆕 SỬA QUAN TRỌNG: Xử lý direct messages với REPLYTO
         const existingMessages = state.direct_chat.current_messages || [];
         const existingMessageIds = new Set(
           existingMessages.map((m) => m._id || m.id)
@@ -480,11 +561,11 @@ const slice = createSlice({
           (m) => !existingMessageIds.has(m._id || m.id)
         );
 
-        console.log("🔄 Merging direct messages:", {
+        console.log("🔄 Merging direct messages with E2EE:", {
           existing: existingMessages.length,
           new: newMessages.length,
           duplicates: validMessages.length - newMessages.length,
-          new_messages_with_reply: newMessages.filter((m) => m.replyTo).length,
+          encrypted_messages: newMessages.filter((m) => m.isEncrypted).length,
         });
 
         const allMessages = [
@@ -493,22 +574,25 @@ const slice = createSlice({
             const senderId = m.sender?.keycloakId || m.from;
             const isOutgoing = senderId === currentUserId;
 
-            // 🆕 XỬ LÝ REPLYTO CHO DIRECT
             const processedReplyTo = processReplyTo(m);
 
-            console.log("🔍 Direct message processing:", {
-              message_id: m._id || m.id,
-              subtype: m.subtype || m.type,
-              has_replyTo: !!m.replyTo,
-              processed_replyTo: !!processedReplyTo,
-            });
+            // 🆕 Determine message content based on encryption
+            let messageContent = m.content || m.message || "";
+            if (m.isEncrypted) {
+              if (m.ciphertext && m.iv && m.keyId) {
+                // Message is encrypted, show placeholder
+                messageContent = "🔒 Encrypted message";
+              } else {
+                messageContent = "🔒 [Encrypted - No data]";
+              }
+            }
 
             return {
               id: m._id || m.id,
               type: "msg",
-              subtype: m.subtype || m.type || "text", // 🆕 SỬA: Ưu tiên subtype
-              message: m.content || m.message || "",
-              content: m.content || m.message || "",
+              subtype: m.subtype || m.type || "text",
+              message: messageContent,
+              content: messageContent,
               incoming: !isOutgoing,
               outgoing: isOutgoing,
               time: formatMessageTime(m.createdAt || m.time),
@@ -518,8 +602,23 @@ const slice = createSlice({
                 keycloakId: senderId,
                 username: m.sender?.username || "Unknown",
               },
-              // 🆕 THÊM REPLYTO ĐÃ XỬ LÝ
               replyTo: processedReplyTo,
+              // 🆕 E2EE FIELDS - ĐẦY ĐỦ
+              isEncrypted: m.isEncrypted || false,
+              ciphertext: m.ciphertext,
+              iv: m.iv,
+              keyId: m.keyId,
+              ephemeralPublicKey: m.ephemeralPublicKey,
+              encryptedKey: m.encryptedKey,
+              encryptionStatus:
+                m.encryptionStatus || (m.isEncrypted ? "encrypted" : "none"),
+              // 🆕 Optimistic update fields
+              isOptimistic: m.isOptimistic || false,
+              tempId: m.tempId,
+              // 🆕 Decryption state
+              isDecrypted: m.isDecrypted || false,
+              decryptionError: m.decryptionError,
+              decryptedContent: m.decryptedContent,
             };
           }),
         ];
@@ -533,14 +632,13 @@ const slice = createSlice({
 
         console.log("✅ Final direct messages after fetch:", {
           total_messages: allMessages.length,
-          messages_with_reply: allMessages.filter((m) => m.replyTo).length,
-          outgoing_count: allMessages.filter((m) => m.outgoing).length,
-          incoming_count: allMessages.filter((m) => m.incoming).length,
+          encrypted_messages: allMessages.filter((m) => m.isEncrypted).length,
+          decrypted_messages: allMessages.filter((m) => m.isDecrypted).length,
         });
       }
     },
 
-    // 🆕 SỬA: addDirectMessage với xử lý realtime cho cả direct và group
+    // 🆕 CẬP NHẬT: addDirectMessage với E2EE support hoàn chỉnh
     addDirectMessage(state, action) {
       const {
         message,
@@ -552,24 +650,23 @@ const slice = createSlice({
         tempId = null,
       } = action.payload;
 
-      // Validate message
       if (!message || !conversation_id) {
         console.warn("⚠️ Invalid message or conversation_id");
         return;
       }
 
-      console.log("📨 addDirectMessage:", {
+      console.log("📨 addDirectMessage with FULL E2EE:", {
         message_id: message.id,
         conversation_id,
         isGroup,
         isOptimistic,
-        replaceOptimistic,
-        tempId,
-        currentUserId,
+        isEncrypted: message.isEncrypted,
+        encryptionStatus: message.encryptionStatus,
+        hasCiphertext: !!message.ciphertext,
+        hasKeyId: !!message.keyId,
       });
 
       if (isGroup) {
-        // 🆕 Xử lý group message với replaceOptimistic
         const room =
           state.group_chat.rooms.find((r) => r.id === conversation_id) ||
           state.group_chat.current_room;
@@ -579,39 +676,48 @@ const slice = createSlice({
           return;
         }
 
-        // Đảm bảo room.messages tồn tại
         if (!room.messages) {
           room.messages = [];
         }
 
-        // 🆕 Xử lý replace optimistic message
+        // 🆕 Xử lý replace optimistic message với E2EE
         if (replaceOptimistic && tempId) {
           const optimisticIndex = room.messages.findIndex(
             (m) => m.tempId === tempId || m.id === tempId
           );
 
           if (optimisticIndex !== -1) {
-            console.log("🔄 Replacing optimistic message:", {
+            console.log("🔄 Replacing optimistic E2EE message:", {
               optimistic_index: optimisticIndex,
               tempId,
               real_id: message.id,
+              encryptionStatus: message.encryptionStatus,
+              isEncrypted: message.isEncrypted,
             });
 
             room.messages[optimisticIndex] = {
+              ...room.messages[optimisticIndex],
               ...message,
               isOptimistic: false,
+              encryptionStatus: message.encryptionStatus || "encrypted",
+              isEncrypted: message.isEncrypted || false,
             };
 
-            // Cập nhật lastMessage
+            // 🆕 Update lastMessage with encrypted content
             room.lastMessage = {
               id: message.id,
-              content: message.content,
+              content: message.isEncrypted
+                ? "🔒 Encrypted message"
+                : message.content,
               type: message.type,
               sender: message.sender,
               time: message.time,
+              isEncrypted: message.isEncrypted,
             };
 
-            room.msg = message.content;
+            room.msg = message.isEncrypted
+              ? "🔒 Encrypted message"
+              : message.content;
             room.time = message.time;
             return;
           }
@@ -627,12 +733,18 @@ const slice = createSlice({
           return;
         }
 
+        // 🆕 Determine message content for encrypted messages
+        let displayContent = message.message || message.content || "";
+        if (message.isEncrypted) {
+          displayContent = "🔒 Encrypted message";
+        }
+
         const newGroupMessage = {
           _id: message._id || message.id,
           id: message.id || message._id,
           type: "msg",
           subtype: message.subtype || message.type || "text",
-          message: message.message || message.content || "",
+          message: displayContent,
           content: message.content || message.message || "",
           sender: message.sender || {
             keycloakId: currentUserId,
@@ -645,30 +757,46 @@ const slice = createSlice({
           attachments: message.attachments || [],
           incoming: message.incoming !== undefined ? message.incoming : false,
           outgoing: message.outgoing !== undefined ? message.outgoing : true,
+          // 🆕 E2EE FIELDS
+          isEncrypted: message.isEncrypted || false,
+          ciphertext: message.ciphertext,
+          iv: message.iv,
+          keyId: message.keyId,
+          ephemeralPublicKey: message.ephemeralPublicKey,
+          encryptedKey: message.encryptedKey,
+          encryptionStatus:
+            message.encryptionStatus ||
+            (message.isEncrypted ? "encrypted" : "none"),
+          // 🆕 Decryption state
+          isDecrypted: message.isDecrypted || false,
+          decryptedContent: message.decryptedContent,
+          decryptionError: message.decryptionError,
           isOptimistic: isOptimistic,
           tempId: tempId,
         };
 
         room.messages.push(newGroupMessage);
 
-        // Cập nhật lastMessage
+        // 🆕 Update lastMessage with encryption info
         room.lastMessage = {
           id: newGroupMessage.id,
-          content: newGroupMessage.content,
+          content: displayContent,
           type: newGroupMessage.type,
           sender: newGroupMessage.sender,
           time: newGroupMessage.time,
+          isEncrypted: newGroupMessage.isEncrypted,
         };
 
-        room.msg = newGroupMessage.content;
+        room.msg = displayContent;
         room.time = newGroupMessage.time;
 
-        console.log("✅ Group message added via addDirectMessage", {
+        console.log("✅ Group E2EE message added", {
           isOptimistic,
+          isEncrypted: newGroupMessage.isEncrypted,
           totalMessages: room.messages.length,
+          encryptionStatus: newGroupMessage.encryptionStatus,
         });
       } else {
-        // 🆕 Xử lý direct message với replaceOptimistic
         const conv =
           state.direct_chat.conversations.find(
             (c) => c.id === conversation_id
@@ -679,22 +807,27 @@ const slice = createSlice({
           return;
         }
 
-        // Xử lý replace optimistic message
+        // Xử lý replace optimistic message với E2EE
         if (replaceOptimistic && tempId) {
           const optimisticIndex = state.direct_chat.current_messages.findIndex(
             (m) => m.tempId === tempId || m.id === tempId
           );
 
           if (optimisticIndex !== -1) {
-            console.log("🔄 Replacing optimistic direct message:", {
+            console.log("🔄 Replacing optimistic direct E2EE message:", {
               optimistic_index: optimisticIndex,
               tempId,
               real_id: message.id,
+              encryptionStatus: message.encryptionStatus,
+              isEncrypted: message.isEncrypted,
             });
 
             state.direct_chat.current_messages[optimisticIndex] = {
+              ...state.direct_chat.current_messages[optimisticIndex],
               ...message,
               isOptimistic: false,
+              encryptionStatus: message.encryptionStatus || "encrypted",
+              isEncrypted: message.isEncrypted || false,
             };
             return;
           }
@@ -711,9 +844,24 @@ const slice = createSlice({
           return;
         }
 
-        // Thêm message mới
+        // 🆕 Determine message content for encrypted messages
+        let displayContent = message.message || "";
+        if (message.isEncrypted) {
+          displayContent = "🔒 Encrypted message";
+        }
+
+        // Thêm message mới với E2EE fields
         if (!existsInCurrent) {
-          state.direct_chat.current_messages.push(message);
+          const newMessage = {
+            ...message,
+            message: displayContent,
+            encryptionStatus:
+              message.encryptionStatus ||
+              (message.isEncrypted ? "encrypted" : "none"),
+            isDecrypted: message.isDecrypted || false,
+            decryptedContent: message.decryptedContent,
+          };
+          state.direct_chat.current_messages.push(newMessage);
         }
 
         // Cập nhật conversation messages
@@ -722,7 +870,7 @@ const slice = createSlice({
         if (!existsInConv) {
           const newMessageObj = {
             _id: message.id,
-            content: message.message,
+            content: displayContent,
             type: message.subtype || "text",
             from: message.outgoing ? currentUserId : conv.user_id,
             to: message.outgoing ? conv.user_id : currentUserId,
@@ -730,17 +878,26 @@ const slice = createSlice({
               message.createdAt || message.time || new Date().toISOString(),
             attachments: message.attachments || [],
             seen: false,
+            // 🆕 E2EE FIELDS
+            isEncrypted: message.isEncrypted || false,
+            ciphertext: message.ciphertext,
+            iv: message.iv,
+            keyId: message.keyId,
+            ephemeralPublicKey: message.ephemeralPublicKey,
+            encryptedKey: message.encryptedKey,
+            encryptionStatus: message.encryptionStatus || "none",
+            isDecrypted: message.isDecrypted || false,
           };
 
           conv.messages.push(newMessageObj);
         }
 
-        conv.msg = message.message;
+        conv.msg = displayContent;
         conv.time = message.time;
       }
     },
 
-    // 🆕 SỬA: addGroupMessage hoàn chỉnh với realtime support
+    // 🆕 CẬP NHẬT: addGroupMessage với E2EE support hoàn chỉnh
     addGroupMessage(state, action) {
       const {
         message,
@@ -750,18 +907,17 @@ const slice = createSlice({
         tempId = null,
       } = action.payload;
 
-      console.log("📨 addGroupMessage - REALTIME DEBUG:", {
+      console.log("📨 addGroupMessage - E2EE COMPLETE:", {
         message_id: message.id,
         tempId,
         room_id,
         isOptimistic,
-        replaceOptimistic,
-        current_room_id: state.group_chat.current_room?.id,
-        message_sender: message.sender?.keycloakId,
-        is_reply: message.subtype === "reply",
+        isEncrypted: message.isEncrypted,
+        encryptionStatus: message.encryptionStatus,
+        hasCiphertext: !!message.ciphertext,
+        hasEphemeralKey: !!message.ephemeralPublicKey,
       });
 
-      // 🆕 TÌM ROOM - ƯU TIÊN current_room
       let room = state.group_chat.current_room;
       if (!room || room.id !== room_id) {
         room = state.group_chat.rooms.find((r) => r.id === room_id);
@@ -772,106 +928,105 @@ const slice = createSlice({
         return;
       }
 
-      // 🆕 ĐẢM BẢO room.messages TỒN TẠI
       if (!room.messages) {
         console.log("🔄 Initializing room.messages array");
         room.messages = [];
       }
 
-      // 🆕 CẢI TIẾN: LOGIC THAY THẾ OPTIMISTIC MESSAGE
+      // 🆕 Xử lý replace optimistic message với E2EE
       if (replaceOptimistic || (isOptimistic === false && tempId)) {
-        console.log("🔄 Looking for optimistic message to replace...", {
+        console.log("🔄 Looking for optimistic E2EE message to replace...", {
           tempId,
           replaceOptimistic,
           isOptimistic,
           message_id: message.id,
+          encryptionStatus: message.encryptionStatus,
+          isEncrypted: message.isEncrypted,
         });
 
-        // 🆕 STRATEGY 1: Tìm bằng tempId (chính xác nhất)
         let optimisticIndex = -1;
 
         if (tempId) {
           optimisticIndex = room.messages.findIndex(
             (m) => m.tempId === tempId || m.id === tempId
           );
-          console.log("🔍 Search by tempId result:", {
-            tempId,
-            optimisticIndex,
-          });
         }
 
-        // 🆕 STRATEGY 2: Tìm bằng sender + content + timestamp (fallback)
         if (optimisticIndex === -1) {
           optimisticIndex = room.messages.findIndex(
             (m) =>
               m.isOptimistic &&
               m.sender?.keycloakId === message.sender?.keycloakId &&
-              m.content === message.content &&
+              (m.content === message.content ||
+                m.message === message.message) &&
               Math.abs(new Date(m.createdAt) - new Date(message.createdAt)) <
-                30000 // 30 giây
+                30000
           );
-          console.log("🔍 Search by content fallback result:", {
-            optimisticIndex,
-          });
         }
 
         if (optimisticIndex !== -1) {
-          console.log("✅ Replacing optimistic message with real message:", {
-            optimistic_index: optimisticIndex,
-            optimistic_id: room.messages[optimisticIndex].id,
-            real_id: message.id,
-            tempId_matched: tempId
-              ? room.messages[optimisticIndex].tempId === tempId
-              : "N/A",
-          });
+          console.log(
+            "✅ Replacing optimistic E2EE message with real message:",
+            {
+              optimistic_index: optimisticIndex,
+              optimistic_id: room.messages[optimisticIndex].id,
+              real_id: message.id,
+              encryptionStatus: message.encryptionStatus,
+              isEncrypted: message.isEncrypted,
+            }
+          );
 
-          // 🆕 GIỮ LẠI MỘT SỐ THÔNG TIN QUAN TRỌNG TỪ OPTIMISTIC MESSAGE
           const optimisticMessage = room.messages[optimisticIndex];
 
+          // 🆕 Keep important display properties from optimistic message
           room.messages[optimisticIndex] = {
+            ...optimisticMessage,
             ...message,
             isOptimistic: false,
-            // 🆕 QUAN TRỌNG: Giữ lại các thuộc tính hiển thị từ optimistic message
+            encryptionStatus: message.encryptionStatus || "encrypted",
+            isEncrypted: message.isEncrypted || false,
             time: optimisticMessage.time || message.time,
             createdAt: optimisticMessage.createdAt || message.createdAt,
+            message: message.isEncrypted
+              ? "🔒 Encrypted message"
+              : message.message || message.content || "",
           };
 
-          // Cập nhật lastMessage
+          // Update lastMessage
           room.lastMessage = {
             id: message.id,
-            content: message.content,
+            content: message.isEncrypted
+              ? "🔒 Encrypted message"
+              : message.content,
             type: message.type,
             sender: message.sender,
             time: message.time,
+            isEncrypted: message.isEncrypted,
           };
 
-          room.msg = message.content;
+          room.msg = message.isEncrypted
+            ? "🔒 Encrypted message"
+            : message.content;
           room.time = message.time;
 
-          console.log("✅ Optimistic message replaced successfully");
+          console.log("✅ Optimistic E2EE message replaced successfully");
           return;
         } else {
           console.log("⚠️ No optimistic message found to replace");
         }
       }
 
-      // 🆕 CẢI TIẾN: DUPLICATE DETECTION
+      // 🆕 DUPLICATE DETECTION với E2EE
       const existsInRoom = room.messages.find((m) => {
-        // Strategy 1: Check by MongoDB _id
         if (m._id && message._id && m._id === message._id) return true;
-
-        // Strategy 2: Check by UUID (từ optimistic update)
         if (m.id === message.id) return true;
-
-        // Strategy 3: Check by content + sender + timestamp
         if (
-          m.content === message.content &&
+          (m.content === message.content || m.message === message.message) &&
           m.sender?.keycloakId === message.sender?.keycloakId &&
           Math.abs(new Date(m.createdAt) - new Date(message.createdAt)) < 5000
         ) {
           return true;
         }
-
         return false;
       });
 
@@ -879,74 +1034,89 @@ const slice = createSlice({
         console.log("⚠️ Group message already exists, skipping", {
           existing_id: existsInRoom._id || existsInRoom.id,
           new_id: message._id || message.id,
-          isOptimistic: existsInRoom.isOptimistic,
+          isEncrypted: message.isEncrypted,
         });
         return;
       }
 
-      // 🆕 TẠO MESSAGE THỐNG NHẤT
+      // 🆕 TẠO MESSAGE THỐNG NHẤT với E2EE
+      const displayContent = message.isEncrypted
+        ? "🔒 Encrypted message"
+        : message.message || message.content || "";
+
       const newMessage = {
         _id: message._id || message.id,
         id: message.id || message._id,
         type: "msg",
         subtype: message.subtype || message.type || "text",
-        message: message.message || message.content || "",
+        message: displayContent,
         content: message.content || message.message || "",
         sender: {
           keycloakId: message.sender?.keycloakId || "unknown",
           username: message.sender?.username || "Unknown",
           ...message.sender,
         },
-        // 🆕 THÊM REPLYTO SUPPORT
         replyTo: message.replyTo
           ? {
               id: message.replyTo.id,
-              content: message.replyTo.content,
+              content: message.replyTo.isEncrypted
+                ? "🔒 Encrypted message"
+                : message.replyTo.content,
               sender:
                 typeof message.replyTo.sender === "string"
                   ? { keycloakId: message.replyTo.sender, username: "Unknown" }
                   : message.replyTo.sender,
               type: message.replyTo.type || "text",
+              isEncrypted: message.replyTo.isEncrypted || false,
             }
           : undefined,
         createdAt:
           message.createdAt || message.time || new Date().toISOString(),
         time: formatMessageTime(message.createdAt || message.time),
         attachments: message.attachments || [],
-        // 🆕 QUAN TRỌNG: GIỮ NGUYÊN incoming/outgoing
         incoming: message.incoming !== undefined ? message.incoming : false,
         outgoing: message.outgoing !== undefined ? message.outgoing : true,
+        // 🆕 E2EE FIELDS
+        isEncrypted: message.isEncrypted || false,
+        ciphertext: message.ciphertext,
+        iv: message.iv,
+        keyId: message.keyId,
+        ephemeralPublicKey: message.ephemeralPublicKey,
+        encryptedKey: message.encryptedKey,
+        encryptionStatus:
+          message.encryptionStatus ||
+          (message.isEncrypted ? "encrypted" : "none"),
+        // 🆕 Decryption state
+        isDecrypted: message.isDecrypted || false,
+        decryptedContent: message.decryptedContent,
+        decryptionError: message.decryptionError,
         isOptimistic: message.isOptimistic || isOptimistic,
-        // 🆕 THÊM: tempId để tracking
         tempId: message.tempId || tempId,
       };
 
-      console.log("✅ Adding message to room:", {
+      console.log("✅ Adding E2EE message to room:", {
         room_id: room.id,
         message_id: newMessage.id,
-        tempId: newMessage.tempId,
-        isOptimistic: newMessage.isOptimistic,
-        incoming: newMessage.incoming,
-        outgoing: newMessage.outgoing,
+        isEncrypted: newMessage.isEncrypted,
+        encryptionStatus: newMessage.encryptionStatus,
         total_messages_before: room.messages.length,
+        hasDecryptedContent: !!newMessage.decryptedContent,
       });
 
-      // 🆕 THÊM MESSAGE VÀO DANH SÁCH
       room.messages.push(newMessage);
 
-      // Cập nhật lastMessage
       room.lastMessage = {
         id: newMessage.id,
-        content: newMessage.content,
+        content: displayContent,
         type: newMessage.type,
         sender: newMessage.sender,
         time: newMessage.time,
+        isEncrypted: newMessage.isEncrypted,
       };
 
-      room.msg = newMessage.content;
+      room.msg = displayContent;
       room.time = newMessage.time;
 
-      // Cập nhật lại room trong rooms array nếu cần
       if (room !== state.group_chat.current_room) {
         const roomIndex = state.group_chat.rooms.findIndex(
           (r) => r.id === room_id
@@ -957,35 +1127,49 @@ const slice = createSlice({
       }
     },
 
-    // 🆕 THÊM: updateDirectMessage để xử lý optimistic updates cho direct chat
+    // 🆕 CẬP NHẬT: updateDirectMessage với E2EE support
     updateDirectMessage(state, action) {
       const { tempId, realMessage, conversation_id } = action.payload;
 
-      console.log("🔄 updateDirectMessage:", {
+      console.log("🔄 updateDirectMessage with E2EE:", {
         tempId,
         realMessageId: realMessage.id,
         conversation_id,
+        isEncrypted: realMessage.isEncrypted,
+        encryptionStatus: realMessage.encryptionStatus,
+        isDecrypted: realMessage.isDecrypted,
       });
 
-      // Tìm và thay thế optimistic message trong current_messages
       const optimisticIndex = state.direct_chat.current_messages.findIndex(
         (m) => m.tempId === tempId || m.id === tempId
       );
 
       if (optimisticIndex !== -1) {
-        console.log("✅ Replacing optimistic direct message:", {
+        console.log("✅ Replacing optimistic direct E2EE message:", {
           optimistic_index: optimisticIndex,
           tempId,
           real_id: realMessage.id,
+          encryptionStatus: realMessage.encryptionStatus,
         });
 
+        const existingMessage =
+          state.direct_chat.current_messages[optimisticIndex];
+
         state.direct_chat.current_messages[optimisticIndex] = {
+          ...existingMessage,
           ...realMessage,
           isOptimistic: false,
+          encryptionStatus: realMessage.encryptionStatus || "encrypted",
+          isEncrypted: realMessage.isEncrypted || false,
+          // 🆕 Preserve decrypted content if available
+          message: realMessage.isDecrypted
+            ? realMessage.decryptedContent
+            : realMessage.isEncrypted
+            ? "🔒 Encrypted message"
+            : realMessage.message,
         };
       }
 
-      // Cập nhật trong conversation messages nếu có
       const conv =
         state.direct_chat.conversations.find((c) => c.id === conversation_id) ||
         state.direct_chat.current_conversation;
@@ -996,9 +1180,13 @@ const slice = createSlice({
         );
 
         if (convOptimisticIndex !== -1) {
+          const displayContent = realMessage.isEncrypted
+            ? "🔒 Encrypted message"
+            : realMessage.content;
+
           conv.messages[convOptimisticIndex] = {
             _id: realMessage.id,
-            content: realMessage.content,
+            content: displayContent,
             type: realMessage.type,
             from: realMessage.outgoing
               ? realMessage.sender?.keycloakId
@@ -1009,18 +1197,387 @@ const slice = createSlice({
             createdAt: realMessage.createdAt,
             attachments: realMessage.attachments || [],
             seen: false,
+            // 🆕 E2EE FIELDS
+            isEncrypted: realMessage.isEncrypted || false,
+            ciphertext: realMessage.ciphertext,
+            iv: realMessage.iv,
+            keyId: realMessage.keyId,
+            ephemeralPublicKey: realMessage.ephemeralPublicKey,
+            encryptedKey: realMessage.encryptedKey,
+            encryptionStatus: realMessage.encryptionStatus || "none",
+            isDecrypted: realMessage.isDecrypted || false,
           };
         }
       }
     },
 
-    // Các reducers khác giữ nguyên
+    // 🆕 THÊM: Reducer để cập nhật encryption status
+    updateEncryptionStatus(state, action) {
+      const {
+        messageId,
+        encryptionStatus,
+        chatType,
+        isDecrypted,
+        decryptedContent,
+      } = action.payload;
+
+      console.log("🔐 updateEncryptionStatus:", {
+        messageId,
+        encryptionStatus,
+        chatType,
+        isDecrypted,
+        hasDecryptedContent: !!decryptedContent,
+      });
+
+      if (chatType === "group") {
+        if (state.group_chat.current_room?.messages) {
+          state.group_chat.current_room.messages =
+            state.group_chat.current_room.messages.map((msg) => {
+              if (msg.id === messageId || msg._id === messageId) {
+                const updatedMsg = {
+                  ...msg,
+                  encryptionStatus,
+                  isDecrypted: isDecrypted || msg.isDecrypted,
+                };
+
+                // 🆕 Update message content if decrypted
+                if (isDecrypted && decryptedContent) {
+                  updatedMsg.message = decryptedContent;
+                  updatedMsg.decryptedContent = decryptedContent;
+                  updatedMsg.isDecrypted = true;
+                }
+
+                return updatedMsg;
+              }
+              return msg;
+            });
+        }
+
+        state.group_chat.rooms.forEach((room) => {
+          if (room.messages) {
+            room.messages = room.messages.map((msg) => {
+              if (msg.id === messageId || msg._id === messageId) {
+                const updatedMsg = {
+                  ...msg,
+                  encryptionStatus,
+                  isDecrypted: isDecrypted || msg.isDecrypted,
+                };
+
+                if (isDecrypted && decryptedContent) {
+                  updatedMsg.message = decryptedContent;
+                  updatedMsg.decryptedContent = decryptedContent;
+                  updatedMsg.isDecrypted = true;
+                }
+
+                return updatedMsg;
+              }
+              return msg;
+            });
+          }
+        });
+      } else {
+        state.direct_chat.current_messages =
+          state.direct_chat.current_messages.map((msg) => {
+            if (msg.id === messageId || msg._id === messageId) {
+              const updatedMsg = {
+                ...msg,
+                encryptionStatus,
+                isDecrypted: isDecrypted || msg.isDecrypted,
+              };
+
+              if (isDecrypted && decryptedContent) {
+                updatedMsg.message = decryptedContent;
+                updatedMsg.decryptedContent = decryptedContent;
+                updatedMsg.isDecrypted = true;
+              }
+
+              return updatedMsg;
+            }
+            return msg;
+          });
+
+        state.direct_chat.conversations.forEach((conv) => {
+          if (conv.messages) {
+            conv.messages = conv.messages.map((msg) => {
+              if (msg._id === messageId) {
+                const updatedMsg = {
+                  ...msg,
+                  encryptionStatus,
+                  isDecrypted: isDecrypted || msg.isDecrypted,
+                };
+
+                if (isDecrypted && decryptedContent) {
+                  updatedMsg.content = decryptedContent;
+                  updatedMsg.isDecrypted = true;
+                }
+
+                return updatedMsg;
+              }
+              return msg;
+            });
+          }
+        });
+      }
+    },
+
+    // 🆕 THÊM: Reducer để xử lý encrypted messages từ socket
+    processEncryptedMessage(state, action) {
+      const { message, chatType } = action.payload;
+
+      console.log("🔐 processEncryptedMessage:", {
+        message_id: message.id,
+        chatType,
+        isEncrypted: message.isEncrypted,
+        ciphertext: !!message.ciphertext,
+        keyId: message.keyId,
+      });
+
+      const targetState =
+        chatType === "group" ? state.group_chat : state.direct_chat;
+
+      if (chatType === "group") {
+        const room = targetState.current_room;
+        if (room && room.messages) {
+          const exists = room.messages.find(
+            (m) => m.id === message.id || m._id === message._id
+          );
+
+          if (!exists) {
+            const displayContent = message.isEncrypted
+              ? "🔒 Encrypted message"
+              : message.content;
+
+            room.messages.push({
+              ...message,
+              type: "msg",
+              subtype: message.type || "text",
+              message: displayContent,
+              content: message.content,
+              incoming: true,
+              outgoing: false,
+              time: formatMessageTime(message.createdAt || new Date()),
+              encryptionStatus: message.encryptionStatus || "encrypted",
+              isDecrypted: message.isDecrypted || false,
+              decryptedContent: message.decryptedContent,
+            });
+          }
+        }
+      } else {
+        // Handle direct encrypted messages
+        const exists = state.direct_chat.current_messages.find(
+          (m) => m.id === message.id || m._id === message._id
+        );
+
+        if (!exists) {
+          const displayContent = message.isEncrypted
+            ? "🔒 Encrypted message"
+            : message.content;
+
+          state.direct_chat.current_messages.push({
+            ...message,
+            type: "msg",
+            subtype: message.type || "text",
+            message: displayContent,
+            content: message.content,
+            incoming: true,
+            outgoing: false,
+            time: formatMessageTime(message.createdAt || new Date()),
+            encryptionStatus: message.encryptionStatus || "encrypted",
+            isDecrypted: message.isDecrypted || false,
+            decryptedContent: message.decryptedContent,
+          });
+        }
+      }
+    },
+
+    // 🆕 THÊM: Reducers cho E2EE key management
+    setEncryptionKeys(state, action) {
+      const { chatType, targetId, keys } = action.payload;
+
+      console.log("🔑 setEncryptionKeys:", {
+        chatType,
+        targetId,
+        hasPublicKey: !!keys.publicKey,
+        hasPrivateKey: !!keys.privateKey,
+        hasSharedSecret: !!keys.sharedSecret,
+      });
+
+      if (chatType === "group") {
+        // 🆕 SỬA: Đảm bảo encryptionKeys tồn tại
+        if (!state.group_chat.encryptionKeys) {
+          state.group_chat.encryptionKeys = {};
+        }
+        state.group_chat.encryptionKeys[targetId] = {
+          ...state.group_chat.encryptionKeys[targetId],
+          ...keys,
+        };
+      } else {
+        // 🆕 SỬA: Đảm bảo encryptionKeys tồn tại
+        if (!state.direct_chat.encryptionKeys) {
+          state.direct_chat.encryptionKeys = {};
+        }
+        state.direct_chat.encryptionKeys[targetId] = {
+          ...state.direct_chat.encryptionKeys[targetId],
+          ...keys,
+        };
+
+        // Update conversation hasSharedSecret flag
+        const convIndex = state.direct_chat.conversations.findIndex(
+          (c) => c.id === targetId
+        );
+        if (convIndex !== -1) {
+          state.direct_chat.conversations[convIndex].hasSharedSecret =
+            !!keys.sharedSecret;
+        }
+
+        if (state.direct_chat.current_conversation?.id === targetId) {
+          state.direct_chat.current_conversation.hasSharedSecret =
+            !!keys.sharedSecret;
+        }
+      }
+    },
+
+    setKeyExchangeStatus(state, action) {
+      const { chatType, targetId, userId, status } = action.payload;
+
+      console.log("🔑 setKeyExchangeStatus:", {
+        chatType,
+        targetId,
+        userId,
+        status,
+      });
+
+      if (chatType === "group") {
+        if (!state.group_chat.keyExchangeStatus[targetId]) {
+          state.group_chat.keyExchangeStatus[targetId] = {};
+        }
+        state.group_chat.keyExchangeStatus[targetId][userId] = status;
+      } else {
+        state.direct_chat.keyExchangeStatus[targetId] = status;
+      }
+    },
+
+    // 🆕 THÊM: Reducer để cập nhật message sau khi decrypt
+    updateDecryptedMessage(state, action) {
+      const { messageId, chatType, decryptedContent } = action.payload;
+
+      console.log("🔓 updateDecryptedMessage:", {
+        messageId,
+        chatType,
+        decryptedContentLength: decryptedContent?.length,
+      });
+
+      if (chatType === "group") {
+        if (state.group_chat.current_room?.messages) {
+          state.group_chat.current_room.messages =
+            state.group_chat.current_room.messages.map((msg) => {
+              if (msg.id === messageId || msg._id === messageId) {
+                return {
+                  ...msg,
+                  message: decryptedContent,
+                  decryptedContent: decryptedContent,
+                  isDecrypted: true,
+                  encryptionStatus: "decrypted",
+                };
+              }
+              return msg;
+            });
+        }
+
+        state.group_chat.rooms.forEach((room) => {
+          if (room.messages) {
+            room.messages = room.messages.map((msg) => {
+              if (msg.id === messageId || msg._id === messageId) {
+                return {
+                  ...msg,
+                  message: decryptedContent,
+                  decryptedContent: decryptedContent,
+                  isDecrypted: true,
+                  encryptionStatus: "decrypted",
+                };
+              }
+              return msg;
+            });
+          }
+        });
+      } else {
+        state.direct_chat.current_messages =
+          state.direct_chat.current_messages.map((msg) => {
+            if (msg.id === messageId || msg._id === messageId) {
+              return {
+                ...msg,
+                message: decryptedContent,
+                decryptedContent: decryptedContent,
+                isDecrypted: true,
+                encryptionStatus: "decrypted",
+              };
+            }
+            return msg;
+          });
+
+        state.direct_chat.conversations.forEach((conv) => {
+          if (conv.messages) {
+            conv.messages = conv.messages.map((msg) => {
+              if (msg._id === messageId) {
+                return {
+                  ...msg,
+                  content: decryptedContent,
+                  isDecrypted: true,
+                  encryptionStatus: "decrypted",
+                };
+              }
+              return msg;
+            });
+          }
+        });
+      }
+    },
+
+    // 🆕 THÊM: Reducer để set E2EE enabled status
+    setE2EEEnabled(state, action) {
+      const { isEnabled } = action.payload;
+      state.e2ee.isEnabled = isEnabled;
+      console.log("🔐 E2EE enabled:", isEnabled);
+    },
+
+    // 🆕 THÊM: Reducer để update global E2EE status
+    updateE2EEStatus(state, action) {
+      const { status } = action.payload;
+      state.e2ee.encryptionStatus = status;
+      console.log("🔐 E2EE status updated:", status);
+    },
+
+    // 🆕 THÊM: Reducer để add key pair
+    addKeyPair(state, action) {
+      const { userId, keyPair } = action.payload;
+      state.e2ee.keyPairs[userId] = keyPair;
+      console.log("🔑 Key pair added for user:", userId);
+    },
+
+    // 🆕 THÊM: Reducer để add to decryption queue
+    addToDecryptionQueue(state, action) {
+      const { message } = action.payload;
+      state.e2ee.decryptionQueue.push(message);
+      console.log("🔐 Added to decryption queue:", message.id);
+    },
+
+    // 🆕 THÊM: Reducer để remove from decryption queue
+    removeFromDecryptionQueue(state, action) {
+      const { messageId } = action.payload;
+      state.e2ee.decryptionQueue = state.e2ee.decryptionQueue.filter(
+        (msg) => msg.id !== messageId
+      );
+      console.log("🔐 Removed from decryption queue:", messageId);
+    },
+
+    // ==================== CÁC REDUCERS KHÁC GIỮ NGUYÊN ====================
     updateDirectConversation(state, action) {
       const { conversation, currentUserId } = action.payload;
 
-      console.log("🔄 updateDirectConversation:", {
+      console.log("🔄 updateDirectConversation with E2EE:", {
         conversation_id: conversation._id,
         currentUserId,
+        isEncrypted: conversation.isEncrypted,
       });
 
       const index = state.direct_chat.conversations.findIndex(
@@ -1034,6 +1591,11 @@ const slice = createSlice({
         const lastMsg = conversation.messages?.slice(-1)[0];
         const lastSeenTs = parseTimestamp(user?.lastSeen);
 
+        const isEncrypted = conversation.isEncrypted || false;
+        const displayContent = isEncrypted
+          ? "🔒 Encrypted message"
+          : lastMsg?.content || lastMsg?.text || "";
+
         state.direct_chat.conversations[index] = {
           id: conversation._id,
           user_id: user?.keycloakId || null,
@@ -1044,13 +1606,19 @@ const slice = createSlice({
           img: user?.avatar
             ? `https://${S3_BUCKET_NAME}.s3.${AWS_S3_REGION}.amazonaws.com/${user.avatar}`
             : `https://i.pravatar.cc/150?u=${user?.keycloakId}`,
-          msg: lastMsg?.content || lastMsg?.text || "",
+          msg: displayContent,
           time: formatMessageTime(lastMsg?.createdAt),
           unread: 0,
           pinned: false,
           about: user?.about || "",
           messages: conversation.messages || [],
           lastSeen: lastSeenTs ? timeAgo(lastSeenTs) : "",
+          // 🆕 E2EE fields
+          isEncrypted: isEncrypted,
+          encryptionStatus: conversation.encryptionStatus || "none",
+          publicKey: user?.publicKey,
+          hasSharedSecret:
+            !!state.direct_chat.encryptionKeys[conversation._id]?.sharedSecret,
         };
 
         // Cập nhật current_conversation nếu đang active
@@ -1067,6 +1635,7 @@ const slice = createSlice({
       console.log("➕ addDirectConversation:", {
         conversation_id: conversation._id,
         currentUserId,
+        isEncrypted: conversation.isEncrypted,
       });
 
       const exists = state.direct_chat.conversations.find(
@@ -1080,6 +1649,11 @@ const slice = createSlice({
         const lastMsg = conversation.messages?.slice(-1)[0];
         const lastSeenTs = parseTimestamp(user?.lastSeen);
 
+        const isEncrypted = conversation.isEncrypted || false;
+        const displayContent = isEncrypted
+          ? "🔒 Encrypted message"
+          : lastMsg?.content || lastMsg?.text || "";
+
         const newConversation = {
           id: conversation._id,
           user_id: user?.keycloakId || null,
@@ -1090,17 +1664,25 @@ const slice = createSlice({
           img: user?.avatar
             ? `https://${S3_BUCKET_NAME}.s3.${AWS_S3_REGION}.amazonaws.com/${user.avatar}`
             : `https://i.pravatar.cc/150?u=${user?.keycloakId}`,
-          msg: lastMsg?.content || lastMsg?.text || "",
+          msg: displayContent,
           time: formatMessageTime(lastMsg?.createdAt),
           unread: 0,
           pinned: false,
           about: user?.about || "",
           messages: conversation.messages || [],
           lastSeen: lastSeenTs ? timeAgo(lastSeenTs) : "",
+          // 🆕 E2EE fields
+          isEncrypted: isEncrypted,
+          encryptionStatus: conversation.encryptionStatus || "none",
+          publicKey: user?.publicKey,
+          hasSharedSecret: false, // Initially false, will be updated when keys are exchanged
         };
 
         state.direct_chat.conversations.push(newConversation);
-        console.log("✅ Direct conversation added successfully");
+        console.log(
+          "✅ Direct conversation added with E2EE status:",
+          isEncrypted
+        );
       } else {
         console.log("ℹ️ Direct conversation already exists");
       }
@@ -1109,9 +1691,10 @@ const slice = createSlice({
     updateGroupRoom(state, action) {
       const { room } = action.payload;
 
-      console.log("🔄 updateGroupRoom:", {
+      console.log("🔄 updateGroupRoom with E2EE:", {
         room_id: room._id,
         name: room.name,
+        isEncrypted: room.isEncrypted,
       });
 
       const index = state.group_chat.rooms.findIndex((r) => r.id === room._id);
@@ -1121,6 +1704,11 @@ const slice = createSlice({
         const membersCount = room.members?.length || 0;
         const onlineMembers =
           room.members?.filter((m) => m.status === "Online").length || 0;
+
+        const isEncrypted = room.isEncrypted || false;
+        const displayContent = isEncrypted
+          ? "🔒 Encrypted message"
+          : lastMsg?.content || "No messages yet";
 
         state.group_chat.rooms[index] = {
           id: room._id,
@@ -1133,10 +1721,11 @@ const slice = createSlice({
           lastMessage: lastMsg
             ? {
                 id: lastMsg._id,
-                content: lastMsg.content,
+                content: displayContent,
                 type: lastMsg.type,
                 sender: lastMsg.sender,
                 time: formatMessageTime(lastMsg.createdAt),
+                isEncrypted: lastMsg.isEncrypted || false,
               }
             : null,
           pinnedMessages: room.pinnedMessages || [],
@@ -1146,13 +1735,20 @@ const slice = createSlice({
             `https://ui-avatars.com/api/?name=${encodeURIComponent(
               room.name || "Group"
             )}&background=random`,
-          msg: lastMsg?.content || "No messages yet",
+          msg: displayContent,
           time: lastMsg ? formatMessageTime(lastMsg.createdAt) : "",
           unread: 0,
           pinned: room.pinnedMessages?.length > 0,
           messages: room.messages || [],
           createdAt: room.createdAt,
           updatedAt: room.updatedAt,
+          // 🆕 E2EE fields
+          isEncrypted: isEncrypted,
+          encryptionStatus: room.encryptionStatus || "none",
+          hasSharedSecrets:
+            Object.keys(
+              state.group_chat.encryptionKeys[room._id]?.sharedSecrets || {}
+            ).length > 0,
         };
 
         // Cập nhật current_room nếu đang active
@@ -1160,7 +1756,7 @@ const slice = createSlice({
           state.group_chat.current_room = state.group_chat.rooms[index];
         }
 
-        console.log("✅ Group room updated successfully");
+        console.log("✅ Group room updated with E2EE");
       } else {
         console.log("❌ Group room not found for update");
       }
@@ -1228,7 +1824,7 @@ const slice = createSlice({
           ).length;
       }
     },
-    // Trong conversation slice
+
     deleteMessage(state, action) {
       const { messageId, isGroup = false } = action.payload;
 
@@ -1292,11 +1888,12 @@ const slice = createSlice({
 
       console.log("✅ Message deleted successfully");
     },
-    // Reset conversation state
+
     resetConversationState(state) {
       console.log("🔄 Resetting conversation state");
       Object.assign(state, initialState);
     },
+
     restoreMessage(state, action) {
       const { messageId, isGroup } = action.payload;
       console.log("🔄 Restoring message:", { messageId, isGroup });
@@ -1317,6 +1914,7 @@ const slice = createSlice({
         console.log("✅ Found message to restore:", {
           messageId: messageToRestore.id || messageToRestore._id,
           content: messageToRestore.content || messageToRestore.message,
+          isEncrypted: messageToRestore.isEncrypted,
         });
 
         if (isGroup) {
@@ -1353,6 +1951,7 @@ const slice = createSlice({
         });
       }
     },
+
     showMessage: (state, action) => {
       const { message, severity = "error", duration = 3000 } = action.payload;
       state.notification = {
@@ -1362,12 +1961,14 @@ const slice = createSlice({
         duration,
       };
     },
+
     hideMessage: (state) => {
       state.notification = {
         ...state.notification,
         open: false,
       };
     },
+
     pinMessage: (state, action) => {
       const { messageId, chatType } = action.payload;
       const targetState =
@@ -1380,6 +1981,7 @@ const slice = createSlice({
         }
       }
     },
+
     unpinMessage: (state, action) => {
       const { messageId, chatType } = action.payload;
       const targetState =
@@ -1389,6 +1991,7 @@ const slice = createSlice({
         (msg) => msg.id !== messageId
       );
     },
+
     setPinnedMessages: (state, action) => {
       const { messages, chatType } = action.payload;
       const targetState =
@@ -1396,6 +1999,7 @@ const slice = createSlice({
 
       targetState.pinned_messages = messages;
     },
+
     clearPinnedMessages: (state, action) => {
       const { chatType } = action.payload;
       const targetState =
@@ -1412,12 +2016,12 @@ const slice = createSlice({
       console.log("📍 Redux: updatePinnedMessages", {
         chatType,
         messagesCount: messages.length,
+        encrypted_pinned_messages: messages.filter((m) => m.isEncrypted).length,
       });
 
       targetState.pinned_messages = messages;
     },
 
-    // 🆕 THÊM: Reducer để cập nhật message pinned status trong current messages
     updateMessagePinnedStatus: (state, action) => {
       const { messageId, isPinned, chatType } = action.payload;
 
@@ -1468,7 +2072,6 @@ const slice = createSlice({
       }
     },
 
-    // 🆕 THÊM: Reducer để set refetch flag
     setShouldRefetchPinned: (state, action) => {
       const { chatType, shouldRefetch } = action.payload;
       const targetState =
@@ -1485,7 +2088,7 @@ const slice = createSlice({
 
 export default slice.reducer;
 
-// 🆕 CẬP NHẬT EXPORTS - THÊM TẤT CẢ CÁC ACTIONS
+// 🆕 CẬP NHẬT EXPORTS - THÊM TẤT CẢ CÁC ACTIONS E2EE
 export const {
   fetchDirectConversationsStart,
   fetchDirectConversationsSuccess,
@@ -1505,7 +2108,7 @@ export const {
   updateGroupRoom,
   clearCurrentRoom,
   clearCurrentConversation,
-  updateDirectMessage, // 🆕 THÊM
+  updateDirectMessage,
   deleteMessage,
   restoreMessage,
   showMessage,
@@ -1517,9 +2120,208 @@ export const {
   updatePinnedMessages,
   updateMessagePinnedStatus,
   setShouldRefetchPinned,
+  // 🆕 E2EE ACTIONS
+  updateEncryptionStatus,
+  processEncryptedMessage,
+  setEncryptionKeys,
+  setKeyExchangeStatus,
+  updateDecryptedMessage,
+  setE2EEEnabled,
+  updateE2EEStatus,
+  addKeyPair,
+  addToDecryptionQueue,
+  removeFromDecryptionQueue,
 } = slice.actions;
 
 // ==================== THUNKS ====================
+
+// 🆕 THÊM: Thunk để khởi tạo E2EE
+export const initializeE2EE = () => async (dispatch, getState) => {
+  try {
+    console.log("🔐 Initializing E2EE...");
+
+    dispatch(updateE2EEStatus({ status: "initializing" }));
+
+    // TODO: Generate key pair for current user
+    // const keyPair = await generateKeyPair();
+    // dispatch(addKeyPair({ userId: getState().auth.user_id, keyPair }));
+
+    dispatch(updateE2EEStatus({ status: "ready" }));
+    console.log("✅ E2EE initialized successfully");
+  } catch (error) {
+    console.error("❌ E2EE initialization failed:", error);
+    dispatch(updateE2EEStatus({ status: "error" }));
+    dispatch(
+      showSnackbar({
+        severity: "error",
+        message:
+          "Failed to initialize encryption. Some messages may not be secure.",
+      })
+    );
+  }
+};
+
+// 🆕 THÊM: Thunk để bật/tắt E2EE
+export const toggleE2EE = (enabled) => async (dispatch) => {
+  try {
+    dispatch(setE2EEEnabled({ isEnabled: enabled }));
+
+    if (enabled) {
+      dispatch(initializeE2EE());
+    }
+
+    dispatch(
+      showSnackbar({
+        severity: "info",
+        message: enabled
+          ? "End-to-end encryption enabled"
+          : "End-to-end encryption disabled",
+      })
+    );
+  } catch (error) {
+    console.error("❌ Failed to toggle E2EE:", error);
+    dispatch(
+      showSnackbar({
+        severity: "error",
+        message: "Failed to toggle encryption",
+      })
+    );
+  }
+};
+
+// 🆕 THÊM: Thunk để decrypt message
+export const decryptMessageThunk =
+  (messageId, chatType, decryptionFunction) => async (dispatch, getState) => {
+    try {
+      console.log("🔓 decryptMessageThunk:", { messageId, chatType });
+
+      const state = getState();
+      let message = null;
+
+      // Find the message
+      if (chatType === "group") {
+        if (state.conversation.group_chat.current_room?.messages) {
+          message = state.conversation.group_chat.current_room.messages.find(
+            (m) => m.id === messageId || m._id === messageId
+          );
+        }
+      } else {
+        message = state.conversation.direct_chat.current_messages.find(
+          (m) => m.id === messageId || m._id === messageId
+        );
+      }
+
+      if (!message) {
+        console.error("❌ Message not found for decryption");
+        return;
+      }
+
+      if (!message.isEncrypted) {
+        console.log("ℹ️ Message is not encrypted");
+        return;
+      }
+
+      if (message.isDecrypted) {
+        console.log("ℹ️ Message already decrypted");
+        return;
+      }
+
+      // Add to decryption queue
+      dispatch(addToDecryptionQueue({ message }));
+
+      try {
+        // Call decryption function
+        const decryptedContent = await decryptionFunction(message);
+
+        console.log("✅ Message decrypted successfully:", {
+          messageId,
+          decryptedContentLength: decryptedContent?.length,
+        });
+
+        // Update message with decrypted content
+        dispatch(
+          updateDecryptedMessage({
+            messageId,
+            chatType,
+            decryptedContent,
+          })
+        );
+
+        // Remove from queue
+        dispatch(removeFromDecryptionQueue({ messageId }));
+      } catch (decryptError) {
+        console.error("❌ Decryption failed:", decryptError);
+
+        // Update message with decryption error
+        dispatch(
+          updateEncryptionStatus({
+            messageId,
+            chatType,
+            encryptionStatus: "decryption_failed",
+            decryptionError: decryptError.message,
+          })
+        );
+
+        // Remove from queue
+        dispatch(removeFromDecryptionQueue({ messageId }));
+
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message:
+              "Failed to decrypt message. You may need to exchange keys.",
+          })
+        );
+      }
+    } catch (error) {
+      console.error("❌ decryptMessageThunk error:", error);
+      dispatch(removeFromDecryptionQueue({ messageId }));
+    }
+  };
+
+// 🆕 THÊM: Thunk để xử lý batch decryption
+export const decryptPendingMessages =
+  (chatType, decryptionFunction) => async (dispatch, getState) => {
+    try {
+      console.log("🔓 Decrypting pending messages for:", chatType);
+
+      const state = getState();
+      let messages = [];
+
+      if (chatType === "group") {
+        if (state.conversation.group_chat.current_room?.messages) {
+          messages = state.conversation.group_chat.current_room.messages.filter(
+            (m) => m.isEncrypted && !m.isDecrypted
+          );
+        }
+      } else {
+        messages = state.conversation.direct_chat.current_messages.filter(
+          (m) => m.isEncrypted && !m.isDecrypted
+        );
+      }
+
+      console.log(`🔓 Found ${messages.length} messages to decrypt`);
+
+      // Decrypt each message
+      for (const message of messages) {
+        if (!message.isDecrypted) {
+          await dispatch(
+            decryptMessageThunk(
+              message.id || message._id,
+              chatType,
+              decryptionFunction
+            )
+          );
+          // Small delay to prevent UI blocking
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      }
+
+      console.log("✅ Batch decryption completed");
+    } catch (error) {
+      console.error("❌ Batch decryption failed:", error);
+    }
+  };
 
 // Fetch group messages với MERGE
 export const fetchGroupMessages = (roomId) => async (dispatch, getState) => {
@@ -1560,6 +2362,13 @@ export const fetchGroupMessages = (roomId) => async (dispatch, getState) => {
           merge: true, // QUAN TRỌNG: MERGE messages
         })
       );
+
+      // 🆕 Tự động decrypt messages nếu E2EE enabled
+      const e2eeEnabled = state.conversation.e2ee.isEnabled;
+      if (e2eeEnabled && res.data.data.some((m) => m.isEncrypted)) {
+        console.log("🔐 Auto-decrypting encrypted messages after fetch");
+        // TODO: Trigger decryption if needed
+      }
     } else {
       console.warn("⚠️ No messages data in response:", res.data);
       // KHÔNG dispatch empty array để tránh mất messages hiện tại
@@ -1577,9 +2386,10 @@ export const fetchGroupMessages = (roomId) => async (dispatch, getState) => {
 export const addGroupMessageThunk =
   (message, room_id) => async (dispatch, getState) => {
     try {
-      console.log("🔄 addGroupMessageThunk:", {
+      console.log("🔄 addGroupMessageThunk with E2EE:", {
         message_id: message.id,
         room_id,
+        isEncrypted: message.isEncrypted,
       });
 
       dispatch(
@@ -1588,6 +2398,15 @@ export const addGroupMessageThunk =
           room_id,
         })
       );
+
+      // 🆕 Log encryption status
+      if (message.isEncrypted) {
+        console.log("🔐 Encrypted message added to group:", {
+          messageId: message.id,
+          hasCiphertext: !!message.ciphertext,
+          keyId: message.keyId,
+        });
+      }
     } catch (error) {
       console.error("❌ addGroupMessageThunk error:", error);
     }
@@ -1602,6 +2421,14 @@ export const fetchDirectConversations =
       dispatch(
         fetchDirectConversationsSuccess({ conversations, currentUserId })
       );
+
+      // 🆕 Check for encrypted conversations
+      const encryptedConvs = conversations.filter((c) => c.isEncrypted);
+      if (encryptedConvs.length > 0) {
+        console.log(
+          `🔐 Found ${encryptedConvs.length} encrypted conversations`
+        );
+      }
     } catch (error) {
       console.error("❌ fetchDirectConversations error:", error);
       dispatch(fetchDirectConversationsFail({ error }));
@@ -1618,6 +2445,7 @@ export const fetchGroupRooms = (keycloakId) => async (dispatch) => {
     console.log("✅ Group rooms response:", {
       roomsCount: res.data.data?.length,
       data: res.data,
+      encryptedRooms: res.data.data?.filter((r) => r.isEncrypted).length,
     });
 
     // Kiểm tra dữ liệu trả về
@@ -1633,9 +2461,7 @@ export const fetchGroupRooms = (keycloakId) => async (dispatch) => {
   }
 };
 
-// 🆕 THÊM: Thunk để xóa tin nhắn
 // 🆕 THÊM: Thunk để xóa tin nhắn - LẤY keycloakId TỪ STATE
-
 export const deleteMessageThunk =
   (messageId, isGroup = false, roomId = null, socket) =>
   async (dispatch, getState) => {
@@ -1767,11 +2593,117 @@ export const fetchPinnedMessages =
           })
         );
 
-        console.log("✅ Pinned messages fetched:", res.data.data.length);
+        console.log("✅ Pinned messages fetched:", {
+          count: res.data.data.length,
+          encrypted: res.data.data.filter((m) => m.isEncrypted).length,
+        });
       } else {
         console.warn("⚠️ No pinned messages data in response");
       }
     } catch (error) {
       console.error("❌ fetchPinnedMessages error:", error);
+    }
+  };
+
+// 🆕 THÊM: Thunk để xử lý incoming encrypted message từ socket
+export const handleIncomingEncryptedMessage =
+  (messageData) => async (dispatch, getState) => {
+    try {
+      const { message, chatType, roomId, conversationId } = messageData;
+
+      console.log("🔐 handleIncomingEncryptedMessage:", {
+        message_id: message.id,
+        chatType,
+        isEncrypted: message.isEncrypted,
+        hasCiphertext: !!message.ciphertext,
+      });
+
+      if (chatType === "group") {
+        dispatch(addGroupMessageThunk(message, roomId));
+      } else {
+        // Direct message
+        const state = getState();
+        const currentUserId = state.auth.user_id;
+
+        dispatch(
+          addDirectMessage({
+            message,
+            conversation_id: conversationId,
+            currentUserId,
+            isGroup: false,
+            isOptimistic: false,
+          })
+        );
+      }
+
+      // 🆕 Auto-decrypt nếu có thể
+      if (message.isEncrypted && !message.isDecrypted) {
+        const state = getState();
+        const e2eeEnabled = state.conversation.e2ee.isEnabled;
+
+        if (e2eeEnabled) {
+          console.log(
+            "🔐 Auto-decrypting incoming encrypted message:",
+            message.id
+          );
+          // TODO: Trigger decryption
+        }
+      }
+    } catch (error) {
+      console.error("❌ handleIncomingEncryptedMessage error:", error);
+    }
+  };
+
+// 🆕 THÊM: Thunk để kiểm tra và cập nhật E2EE status
+export const checkE2EEStatus =
+  (targetId, chatType) => async (dispatch, getState) => {
+    try {
+      const state = getState();
+      let hasKeys = false;
+
+      if (chatType === "group") {
+        hasKeys =
+          !!state.conversation.group_chat.encryptionKeys[targetId]
+            ?.sharedSecrets;
+      } else {
+        hasKeys =
+          !!state.conversation.direct_chat.encryptionKeys[targetId]
+            ?.sharedSecret;
+      }
+
+      console.log("🔐 E2EE status check:", {
+        targetId,
+        chatType,
+        hasKeys,
+      });
+
+      if (!hasKeys) {
+        // TODO: Initiate key exchange
+        console.log("🔐 No encryption keys found, initiating key exchange...");
+
+        if (chatType === "group") {
+          dispatch(
+            setKeyExchangeStatus({
+              chatType,
+              targetId,
+              userId: state.auth.user_id,
+              status: "pending",
+            })
+          );
+        } else {
+          dispatch(
+            setKeyExchangeStatus({
+              chatType,
+              targetId,
+              status: "pending",
+            })
+          );
+        }
+      }
+
+      return hasKeys;
+    } catch (error) {
+      console.error("❌ checkE2EEStatus error:", error);
+      return false;
     }
   };

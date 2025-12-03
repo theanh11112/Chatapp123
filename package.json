@@ -49,7 +49,7 @@
     "uuidv4": "^6.2.13",
     "web-vitals": "^2.1.4",
     "yup": "^0.32.11",
-    "zego-express-engine-webrtc": "^2.23.0"
+    "zego-express-engine-webrtc": "^2.26.2"
   },
   "scripts": {
     "start": "react-scripts start",

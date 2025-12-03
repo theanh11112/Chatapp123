@@ -5,6 +5,7 @@ import {
   Stack,
   Typography,
   Link,
+  Alert,
 } from "@mui/material";
 import { MagnifyingGlass, Phone } from "phosphor-react";
 import React, { useEffect, useState } from "react";
@@ -19,7 +20,7 @@ import { SimpleBarStyle } from "../../components/Scrollbar";
 import { CallLogElement } from "../../components/CallElement";
 import StartCall from "../../sections/dashboard/StartCall";
 import { useDispatch, useSelector } from "react-redux";
-import { FetchCallLogs } from "../../redux/slices/app";
+import { FetchCallLogs, showSnackbar } from "../../redux/slices/app"; // Đã import showSnackbar
 import { useKeycloak } from "@react-keycloak/web";
 import CallPlaceholder from "./CallPlaceholder";
 import {
@@ -27,12 +28,17 @@ import {
   PushToAudioCallQueue,
 } from "../../redux/slices/audioCall";
 import AudioCallDialog from "../../sections/dashboard/Audio/AudioCallDialog";
-import { socket } from "../../socket";
+import VideoCallDialog from "../../sections/dashboard/video/VideoCallDialog";
+import {
+  StartVideoCall,
+  PushToVideoCallQueue,
+} from "../../redux/slices/videoCall";
 
 const Call = () => {
   const dispatch = useDispatch();
   const { call_logs } = useSelector((state) => state.app);
   const audioCallState = useSelector((state) => state.audioCall);
+  const videoCallState = useSelector((state) => state.videoCall);
 
   // Lấy keycloakId từ Keycloak
   const { keycloak, initialized } = useKeycloak();
@@ -41,63 +47,147 @@ const Call = () => {
 
   const [openDialog, setOpenDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [socketConnected, setSocketConnected] = useState(false);
 
+  // Fetch call logs khi user đăng nhập
   useEffect(() => {
     if (currentUserId) {
+      console.log("📋 Fetching call logs for user:", currentUserId);
       dispatch(FetchCallLogs(currentUserId));
     }
   }, [dispatch, currentUserId]);
 
-  // Socket Event Listeners cho call thực tế
+  // Monitor socket connection
   useEffect(() => {
-    if (!socket) return;
+    let socket;
 
-    console.log("🔌 Setting up socket listeners for call...");
+    const initSocket = async () => {
+      try {
+        // Dynamic import để tránh circular dependencies
+        const socketModule = await import("../../socket");
+        socket = socketModule.socket || socketModule.default;
 
-    // Listen for incoming audio calls
-    socket.on("audio_call_notification", (data) => {
-      console.log("📞 Incoming audio call received:", data);
-      dispatch(PushToAudioCallQueue(data));
-    });
+        if (socket) {
+          setSocketConnected(socket.connected);
 
-    // Listen for incoming video calls
-    socket.on("video_call_notification", (data) => {
-      console.log("📹 Incoming video call received:", data);
-      // Xử lý video call notification nếu cần
-    });
+          const handleConnect = () => {
+            console.log("✅ Socket connected");
+            setSocketConnected(true);
+          };
 
-    // Listen for call ended
-    socket.on("call_ended", (data) => {
-      console.log("📴 Call ended:", data);
-      // Refresh call logs khi call kết thúc
-      if (currentUserId) {
-        dispatch(FetchCallLogs(currentUserId));
+          const handleDisconnect = () => {
+            console.log("❌ Socket disconnected");
+            setSocketConnected(false);
+          };
+
+          socket.on("connect", handleConnect);
+          socket.on("disconnect", handleDisconnect);
+        }
+      } catch (error) {
+        console.error("❌ Failed to initialize socket:", error);
       }
-    });
+    };
 
-    // Listen for audio_call_ended
-    socket.on("audio_call_ended", (data) => {
-      console.log("📴 Audio call ended:", data);
-      if (currentUserId) {
-        dispatch(FetchCallLogs(currentUserId));
-      }
-    });
+    initSocket();
 
-    // Listen for video_call_ended
-    socket.on("video_call_ended", (data) => {
-      console.log("📴 Video call ended:", data);
-      if (currentUserId) {
-        dispatch(FetchCallLogs(currentUserId));
+    return () => {
+      if (socket) {
+        socket.off("connect");
+        socket.off("disconnect");
       }
-    });
+    };
+  }, []);
+
+  // 🆕 Socket Event Listeners
+  useEffect(() => {
+    let socket;
+    let cleanupFunctions = [];
+
+    const setupSocketListeners = async () => {
+      try {
+        const socketModule = await import("../../socket");
+        socket = socketModule.socket || socketModule.default;
+
+        if (!socket) {
+          console.warn("Socket not available");
+          return;
+        }
+
+        console.log("🔌 Setting up socket listeners for call...");
+
+        // Listen for incoming audio calls
+        const handleAudioCallNotification = (data) => {
+          console.log("📞 Incoming audio call received:", data);
+          dispatch(PushToAudioCallQueue(data));
+        };
+
+        // Listen for incoming video calls
+        const handleVideoCallNotification = (data) => {
+          console.log("📹 Incoming video call received:", data);
+          dispatch(PushToVideoCallQueue(data));
+        };
+
+        // Listen for call ended
+        const handleCallEnded = (data) => {
+          console.log("📴 Call ended:", data);
+          // Refresh call logs khi call kết thúc
+          if (currentUserId) {
+            setTimeout(() => {
+              console.log("🔄 Refreshing call logs after call ended");
+              dispatch(FetchCallLogs(currentUserId));
+            }, 1500);
+          }
+        };
+
+        // Listen for call_status_update
+        const handleCallStatusUpdate = (data) => {
+          console.log("📞 Call status update:", data);
+          if (data.status === "ended" && currentUserId) {
+            setTimeout(() => {
+              dispatch(FetchCallLogs(currentUserId));
+            }, 1000);
+          }
+        };
+
+        // Listen for call_logs_updated
+        const handleCallLogsUpdated = () => {
+          console.log("📝 Call logs updated event received");
+          if (currentUserId) {
+            setTimeout(() => {
+              dispatch(FetchCallLogs(currentUserId));
+            }, 500);
+          }
+        };
+
+        // Đăng ký listeners
+        socket.on("audio_call_notification", handleAudioCallNotification);
+        socket.on("video_call_notification", handleVideoCallNotification);
+        socket.on("audio_call_ended", handleCallEnded);
+        socket.on("video_call_ended", handleCallEnded);
+        socket.on("call_status_update", handleCallStatusUpdate);
+        socket.on("call_logs_updated", handleCallLogsUpdated);
+
+        // Store cleanup functions
+        cleanupFunctions = [
+          () =>
+            socket.off("audio_call_notification", handleAudioCallNotification),
+          () =>
+            socket.off("video_call_notification", handleVideoCallNotification),
+          () => socket.off("audio_call_ended", handleCallEnded),
+          () => socket.off("video_call_ended", handleCallEnded),
+          () => socket.off("call_status_update", handleCallStatusUpdate),
+          () => socket.off("call_logs_updated", handleCallLogsUpdated),
+        ];
+      } catch (error) {
+        console.error("❌ Failed to setup socket listeners:", error);
+      }
+    };
+
+    setupSocketListeners();
 
     return () => {
       console.log("🧹 Cleaning up socket listeners...");
-      socket.off("audio_call_notification");
-      socket.off("video_call_notification");
-      socket.off("call_ended");
-      socket.off("audio_call_ended");
-      socket.off("video_call_ended");
+      cleanupFunctions.forEach((cleanup) => cleanup());
     };
   }, [dispatch, currentUserId]);
 
@@ -109,10 +199,27 @@ const Call = () => {
     setOpenDialog(true);
   };
 
-  // Hàm gọi thực tế
+  // 🆕 Hàm gọi thực tế với WebRTC
   const startRealCall = (toUserId, callType = "direct", isVideo = false) => {
     if (!currentUserId) {
       console.error("❌ User not authenticated");
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "Please login to make calls",
+        })
+      );
+      return;
+    }
+
+    if (!socketConnected) {
+      console.error("❌ Socket not connected");
+      dispatch(
+        showSnackbar({
+          severity: "warning",
+          message: "Connecting... Please wait",
+        })
+      );
       return;
     }
 
@@ -122,8 +229,7 @@ const Call = () => {
     );
 
     if (isVideo) {
-      // Video call logic sẽ được xử lý trong StartCall component
-      console.log("Video call initiated");
+      dispatch(StartVideoCall(toUserId, callType));
     } else {
       dispatch(StartAudioCall(toUserId, callType));
     }
@@ -151,6 +257,9 @@ const Call = () => {
 
     // Tìm kiếm theo status
     if (call.status?.toLowerCase().includes(searchLower)) return true;
+
+    // Tìm kiếm theo room name (cho group calls)
+    if (call.room?.name?.toLowerCase().includes(searchLower)) return true;
 
     return false;
   });
@@ -182,20 +291,35 @@ const Call = () => {
               direction="row"
             >
               <Typography variant="h5">Call Log</Typography>
-              {/* <Stack direction="row" spacing={1}>
+              <Stack direction="row" spacing={1} alignItems="center">
                 <Box
                   sx={{
                     width: 8,
                     height: 8,
                     borderRadius: "50%",
-                    backgroundColor: socket?.connected
-                      ? "success.main"
-                      : "error.main",
-                    mt: 1,
+                    backgroundColor: socketConnected
+                      ? theme.palette.success.main
+                      : theme.palette.error.main,
                   }}
                 />
-              </Stack> */}
+                <Typography variant="caption" color="text.secondary">
+                  {socketConnected ? "Connected" : "Disconnected"}
+                </Typography>
+              </Stack>
             </Stack>
+
+            {/* Socket Connection Alert */}
+            {!socketConnected && (
+              <Alert
+                severity="warning"
+                sx={{
+                  py: 0.5,
+                  fontSize: "0.75rem",
+                }}
+              >
+                Connection lost. Calls may not work properly.
+              </Alert>
+            )}
 
             {/* Search */}
             <Stack sx={{ width: "100%" }}>
@@ -218,33 +342,39 @@ const Call = () => {
               alignItems={"center"}
               direction={"row"}
             >
-              <Typography variant="subtitle2" sx={{}} component={Link}>
+              <Typography variant="subtitle2" component={Link}>
                 Start a conversation
               </Typography>
               <IconButton
                 onClick={handleOpenDialog}
-                disabled={!currentUserId}
+                disabled={!currentUserId || !socketConnected}
                 sx={{
-                  backgroundColor: currentUserId
-                    ? theme.palette.primary.main + "08"
-                    : "transparent",
+                  backgroundColor:
+                    currentUserId && socketConnected
+                      ? theme.palette.primary.main + "08"
+                      : "transparent",
                   border: `1px solid ${
-                    currentUserId
+                    currentUserId && socketConnected
                       ? theme.palette.primary.main + "20"
                       : theme.palette.divider
                   }`,
                   "&:hover": {
-                    backgroundColor: currentUserId
-                      ? theme.palette.primary.main + "15"
-                      : "transparent",
+                    backgroundColor:
+                      currentUserId && socketConnected
+                        ? theme.palette.primary.main + "15"
+                        : "transparent",
+                  },
+                  "&:disabled": {
+                    cursor: "not-allowed",
                   },
                 }}
               >
                 <Phone
                   style={{
-                    color: currentUserId
-                      ? theme.palette.primary.main
-                      : theme.palette.text.disabled,
+                    color:
+                      currentUserId && socketConnected
+                        ? theme.palette.primary.main
+                        : theme.palette.text.disabled,
                   }}
                 />
               </IconButton>
@@ -253,7 +383,7 @@ const Call = () => {
             <Divider />
 
             {/* Call Logs List */}
-            <Stack sx={{ flexGrow: 1, overflow: "scroll", height: "100%" }}>
+            <Stack sx={{ flexGrow: 1, overflow: "hidden", height: "100%" }}>
               <SimpleBarStyle timeout={500} clickOnTrack={false}>
                 <Stack spacing={1.5}>
                   {filteredCallLogs.length > 0 && currentUserId ? (
@@ -307,7 +437,10 @@ const Call = () => {
       </Stack>
 
       {/* Audio Call Dialog */}
-      <AudioCallDialog />
+      {audioCallState.open_audio_dialog && <AudioCallDialog />}
+
+      {/* Video Call Dialog */}
+      {videoCallState.open_video_dialog && <VideoCallDialog />}
 
       {/* Start Call Dialog */}
       {openDialog && (

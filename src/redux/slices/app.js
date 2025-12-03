@@ -1,8 +1,7 @@
-// src/redux/slices/app.js
+// src/redux/slices/app.js - ĐÃ SỬA LỖI DUPLICATE
 import { createSlice } from "@reduxjs/toolkit";
 import api from "../../utils/axios";
 import { v4 } from "uuid";
-// SỬA: Import named exports thay vì default import
 import { uploadToS3, getS3Url } from "../../utils/s3";
 import { S3_BUCKET_NAME } from "../../config";
 
@@ -30,6 +29,7 @@ const initialState = {
   call_logs: [],
   messages: [],
   current_chat_info: {}, // 🆕 Thông tin chat hiện tại
+  isLoading: false, // 🆕 THÊM: Loading state
 };
 
 // ----------------------------------------------------------------------
@@ -38,6 +38,19 @@ const slice = createSlice({
   name: "app",
   initialState,
   reducers: {
+    // 🆕 THÊM: Loading actions
+    StartLoading(state) {
+      state.isLoading = true;
+    },
+    StopLoading(state) {
+      state.isLoading = false;
+    },
+
+    // 🆕 THÊM: setCallLogs action
+    setCallLogs(state, action) {
+      state.call_logs = action.payload;
+    },
+
     fetchCallLogs(state, action) {
       state.call_logs = action.payload.call_logs;
     },
@@ -132,9 +145,39 @@ const slice = createSlice({
 export default slice.reducer;
 
 // ----------------------------------------------------------------------
-// Snackbar actions
+// EXPORT ACTIONS từ slice
+// ----------------------------------------------------------------------
 
-export const closeSnackBar = () => (dispatch) => {
+export const {
+  StartLoading,
+  StopLoading,
+  setCallLogs,
+  fetchCallLogs,
+  addNewCallLog,
+  updateCallLogStatus,
+  fetchUser,
+  updateUser,
+  toggleSideBar,
+  updateSideBarType,
+  updateTab,
+  openSnackBar,
+  closeSnackBar, // Reducer action
+  updateUsers,
+  updateAllUsers,
+  updateFriends,
+  updateFriendRequests,
+  selectConversation,
+  updateCurrentChatInfo,
+  setMessages,
+  resetAppState,
+} = slice.actions;
+
+// ----------------------------------------------------------------------
+// Snackbar actions - THUNK ACTIONS (sử dụng tên khác)
+// ----------------------------------------------------------------------
+
+// 🆕 SỬA: Đổi tên thunk action thành closeSnackBarAction
+export const closeSnackBarAction = () => (dispatch) => {
   dispatch(slice.actions.closeSnackBar());
 };
 
@@ -149,6 +192,7 @@ export const showSnackbar =
 
 // ----------------------------------------------------------------------
 // Sidebar / Tab controls
+// ----------------------------------------------------------------------
 
 export const ToggleSidebar = () => (dispatch) => {
   dispatch(slice.actions.toggleSideBar());
@@ -164,6 +208,7 @@ export const UpdateTab = (tab) => (dispatch) => {
 
 // ----------------------------------------------------------------------
 // API CALLS
+// ----------------------------------------------------------------------
 
 export const FetchUsers = () => async (dispatch) => {
   try {
@@ -193,7 +238,6 @@ export const FetchFriends = (keycloakId) => async (dispatch) => {
     dispatch(slice.actions.updateFriends({ friends: res.data.data }));
   } catch (err) {
     console.error("FetchFriends error:", err);
-    // Có thể dispatch action error nếu cần
     dispatch(
       showSnackbar({
         severity: "error",
@@ -309,7 +353,6 @@ export const RespondToFriendRequest =
 
       console.log("✅ Friend request responded:", res.data.data);
 
-      // Cập nhật state
       if (action === "accept") {
         dispatch(
           showSnackbar({
@@ -317,7 +360,6 @@ export const RespondToFriendRequest =
             message: "Friend request accepted",
           })
         );
-        // Có thể fetch lại danh sách bạn bè
         dispatch(FetchFriends(keycloakId));
       } else {
         dispatch(
@@ -341,37 +383,48 @@ export const RespondToFriendRequest =
     }
   };
 
-// 🆕 Cập nhật SelectConversation để hỗ trợ cả group
-export const SelectConversation =
-  ({ room_id, chat_type = "individual", chat_info = {} }) =>
-  (dispatch) => {
-    console.log("🔍 Selecting conversation:", {
-      room_id,
-      chat_type,
-      chat_info,
-    });
-    dispatch(
-      slice.actions.selectConversation({ room_id, chat_type, chat_info })
-    );
-  };
+// ----------------------------------------------------------------------
+// CALL LOGS
+// ----------------------------------------------------------------------
 
-// call logs
-export const FetchCallLogs = () => async (dispatch) => {
-  try {
-    const res = await api.get("/users/call/history");
-    dispatch(slice.actions.fetchCallLogs({ call_logs: res.data.data }));
-  } catch (err) {
-    console.error("FetchCallLogs error:", err);
-    dispatch(
-      showSnackbar({
-        severity: "error",
-        message: "Failed to fetch call logs",
-      })
-    );
-  }
+export const FetchCallLogs = (userId) => {
+  return async (dispatch) => {
+    try {
+      dispatch(slice.actions.StartLoading());
+
+      console.log("📞 Fetching call logs for user:", userId);
+
+      const response = await api.post("/users/call/history", {
+        limit: 50,
+        skip: 0,
+        userId: userId,
+      });
+
+      console.log("✅ Call logs fetched:", response.data.calls?.length || 0);
+
+      dispatch(slice.actions.setCallLogs(response.data.calls || []));
+
+      dispatch(slice.actions.StopLoading());
+      return response.data;
+    } catch (error) {
+      console.error("❌ Fetch call logs error:", error);
+      dispatch(slice.actions.StopLoading());
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message:
+            error.response?.data?.message || "Failed to fetch call history",
+        })
+      );
+      return { success: false, calls: [] };
+    }
+  };
 };
 
-// user profile
+// ----------------------------------------------------------------------
+// USER PROFILE
+// ----------------------------------------------------------------------
+
 export const FetchUserProfile = () => async (dispatch) => {
   try {
     const res = await api.get("/users/me");
@@ -387,7 +440,6 @@ export const FetchUserProfile = () => async (dispatch) => {
   }
 };
 
-// SỬA: UpdateUserProfile với uploadToS3
 export const UpdateUserProfile = (formValues) => async (dispatch) => {
   const file = formValues.avatar;
 
@@ -395,15 +447,13 @@ export const UpdateUserProfile = (formValues) => async (dispatch) => {
     if (file) {
       console.log("📤 Uploading avatar...");
 
-      // Sử dụng hàm uploadToS3 từ utils/s3
       const uploadResult = await uploadToS3(file);
 
       console.log("✅ Avatar uploaded:", uploadResult);
 
-      // Gọi API update user với avatar fileKey
       const res = await api.patch("/users/update-me", {
         ...formValues,
-        avatar: uploadResult.fileKey, // Lưu fileKey vào database
+        avatar: uploadResult.fileKey,
       });
 
       dispatch(slice.actions.updateUser({ user: res.data.data }));
@@ -414,7 +464,6 @@ export const UpdateUserProfile = (formValues) => async (dispatch) => {
         })
       );
     } else {
-      // Nếu không có file avatar, chỉ update thông tin khác
       const res = await api.patch("/users/update-me", formValues);
       dispatch(slice.actions.updateUser({ user: res.data.data }));
       dispatch(
@@ -436,13 +485,24 @@ export const UpdateUserProfile = (formValues) => async (dispatch) => {
 };
 
 // ----------------------------------------------------------------------
-// 👉 EXPORT ACTION SetMessages
+// CHAT ACTIONS
 // ----------------------------------------------------------------------
+
+export const SelectConversation =
+  ({ room_id, chat_type = "individual", chat_info = {} }) =>
+  (dispatch) => {
+    console.log("🔍 Selecting conversation:", {
+      room_id,
+      chat_type,
+      chat_info,
+    });
+    dispatch(
+      slice.actions.selectConversation({ room_id, chat_type, chat_info })
+    );
+  };
 
 export const SetMessages =
   ({ messages }) =>
   (dispatch) => {
     dispatch(slice.actions.setMessages({ messages }));
   };
-
-export const { resetAppState } = slice.actions;

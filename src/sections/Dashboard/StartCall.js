@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+// frontend/src/components/dialogs/StartCall.js
+import React, { useEffect, useState, useCallback } from "react";
 import {
   Dialog,
   DialogContent,
@@ -14,55 +15,244 @@ import {
   InputAdornment,
   TextField,
   Badge,
+  Tooltip,
+  CircularProgress,
 } from "@mui/material";
-import { MagnifyingGlass, Phone, UserPlus, X, Funnel } from "phosphor-react";
+import {
+  MagnifyingGlass,
+  Phone,
+  UserPlus,
+  X,
+  Funnel,
+  VideoCamera,
+  UserCircle,
+  Clock,
+  CheckCircle,
+  XCircle,
+} from "phosphor-react";
 import { useTheme } from "@mui/material/styles";
 import { useDispatch, useSelector } from "react-redux";
 import { FetchAllUsers } from "../../redux/slices/app";
-import { faker } from "@faker-js/faker";
 import { SimpleBarStyle } from "../../components/Scrollbar";
+import { startSocketAudioCall } from "../../socket";
+import { showSnackbar } from "../../redux/slices/app";
+import webRTCService from "../../services/webRTCService";
+import { getSocket } from "../../socket";
 
 const Transition = React.forwardRef(function Transition(props, ref) {
   return <Slide direction="up" ref={ref} {...props} />;
 });
 
-const StartCall = ({ open, handleClose }) => {
+const StartCall = ({ open, handleClose, isVideoCall = false }) => {
   const theme = useTheme();
   const { all_users } = useSelector((state) => state.app);
+  const { user } = useSelector((state) => state.auth);
   const dispatch = useDispatch();
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filteredUsers, setFilteredUsers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState(null);
+  const [onlineUsers, setOnlineUsers] = useState(new Set());
 
+  // Lấy danh sách người dùng
   useEffect(() => {
     dispatch(FetchAllUsers());
   }, [dispatch]);
 
+  // Theo dõi trạng thái online
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const handlePresenceUpdate = (data) => {
+      if (data.status === "online") {
+        setOnlineUsers((prev) => new Set([...prev, data.userId]));
+      } else {
+        setOnlineUsers((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(data.userId);
+          return newSet;
+        });
+      }
+    };
+
+    socket.on("presence_update", handlePresenceUpdate);
+
+    return () => {
+      socket.off("presence_update", handlePresenceUpdate);
+    };
+  }, []);
+
+  // Lọc người dùng
   useEffect(() => {
     if (all_users.length > 0) {
-      const filtered = all_users.filter((user) =>
-        `${user?.firstName} ${user?.lastName}`
-          .toLowerCase()
-          .includes(searchTerm.toLowerCase())
-      );
+      const filtered = all_users
+        .filter((userItem) => userItem.keycloakId !== user?.keycloakId) // Loại bỏ chính mình
+        .filter(
+          (userItem) =>
+            `${userItem?.firstName} ${userItem?.lastName}`
+              .toLowerCase()
+              .includes(searchTerm.toLowerCase()) ||
+            userItem?.email?.toLowerCase().includes(searchTerm.toLowerCase())
+        )
+        .sort((a, b) => {
+          // Sắp xếp: online trước, offline sau
+          const aOnline = onlineUsers.has(a.keycloakId);
+          const bOnline = onlineUsers.has(b.keycloakId);
+          if (aOnline && !bOnline) return -1;
+          if (!aOnline && bOnline) return 1;
+          return 0;
+        });
+
       setFilteredUsers(filtered);
     }
-  }, [all_users, searchTerm]);
+  }, [all_users, searchTerm, user, onlineUsers]);
 
-  const handleUserClick = (user) => {
-    console.log("Starting call with:", user);
-    // TODO: Implement start call logic
-    handleClose();
+  // Xử lý bắt đầu cuộc gọi
+  const handleStartCall = useCallback(
+    async (targetUser) => {
+      if (!user || !targetUser) {
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: "Cannot start call: User information missing",
+          })
+        );
+        return;
+      }
+
+      if (targetUser.keycloakId === user.keycloakId) {
+        dispatch(
+          showSnackbar({
+            severity: "warning",
+            message: "Cannot call yourself",
+          })
+        );
+        return;
+      }
+
+      setLoading(true);
+      setSelectedUserId(targetUser.keycloakId);
+
+      try {
+        const socket = getSocket();
+        if (!socket || !socket.connected) {
+          throw new Error("Socket not connected. Please refresh the page.");
+        }
+
+        // Tạo room ID duy nhất
+        const roomID = `${
+          isVideoCall ? "video" : "audio"
+        }_room_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+        console.log("📞 Starting call:", {
+          from: user.keycloakId,
+          to: targetUser.keycloakId,
+          roomID,
+          isVideoCall,
+        });
+
+        // Gửi yêu cầu gọi qua socket
+        const success = await startSocketAudioCall(
+          targetUser.keycloakId,
+          roomID
+        );
+
+        if (success) {
+          // Khởi tạo WebRTC service
+          await webRTCService.initialize({
+            userId: user.keycloakId,
+            username: user.username,
+            socket: socket,
+            roomId: roomID,
+            callId: null,
+            targetUserId: targetUser.keycloakId,
+            isVideoCall: isVideoCall,
+            isInitiator: true,
+          });
+
+          // Bắt đầu cuộc gọi
+          await webRTCService.startCall();
+
+          dispatch(
+            showSnackbar({
+              severity: "success",
+              message: `${isVideoCall ? "Video" : "Audio"} call started with ${
+                targetUser.firstName
+              } ${targetUser.lastName}`,
+            })
+          );
+
+          // Đóng dialog
+          handleClose();
+        } else {
+          throw new Error("Failed to start call");
+        }
+      } catch (error) {
+        console.error("❌ Failed to start call:", error);
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: error.message || "Failed to start call. Please try again.",
+          })
+        );
+      } finally {
+        setLoading(false);
+        setSelectedUserId(null);
+      }
+    },
+    [user, isVideoCall, dispatch, handleClose]
+  );
+
+  // Xử lý click user
+  const handleUserClick = useCallback(
+    (userItem) => {
+      if (loading) return;
+
+      console.log("📞 Starting call with:", userItem);
+      handleStartCall(userItem);
+    },
+    [loading, handleStartCall]
+  );
+
+  // Lấy avatar URL
+  const getAvatarUrl = (userItem) => {
+    if (userItem?.avatar) return userItem.avatar;
+
+    // Fallback to avatar based on name
+    const name = `${userItem?.firstName} ${userItem?.lastName}`;
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(
+      name
+    )}&background=random&color=fff&size=128`;
   };
 
-  const userList = filteredUsers.map((user) => ({
-    id: user?._id,
-    name: `${user?.firstName} ${user?.lastName}`,
-    email: user?.email,
-    image: faker.image.avatar(),
-    status: Math.random() > 0.7 ? "online" : "offline",
-    lastSeen: Math.random() > 0.5 ? "2h ago" : null,
-  }));
+  // Lấy trạng thái user
+  const getUserStatus = (userId) => {
+    if (onlineUsers.has(userId)) {
+      return { status: "online", label: "Online", color: "success" };
+    }
+    return { status: "offline", label: "Offline", color: "default" };
+  };
+
+  const userList = filteredUsers.map((userItem) => {
+    const status = getUserStatus(userItem.keycloakId);
+    const fullName = `${userItem?.firstName || ""} ${
+      userItem?.lastName || ""
+    }`.trim();
+
+    return {
+      id: userItem.keycloakId,
+      name: fullName || userItem?.email,
+      email: userItem?.email,
+      avatar: getAvatarUrl(userItem),
+      status: status.status,
+      statusLabel: status.label,
+      statusColor: status.color,
+      isCurrentUser: userItem.keycloakId === user?.keycloakId,
+      userData: userItem,
+    };
+  });
 
   return (
     <Dialog
@@ -77,6 +267,7 @@ const StartCall = ({ open, handleClose }) => {
           borderRadius: 3,
           height: "80vh",
           background: theme.palette.background.paper,
+          overflow: "hidden",
         },
       }}
     >
@@ -86,10 +277,9 @@ const StartCall = ({ open, handleClose }) => {
           p: 3,
           pb: 2,
           borderBottom: `1px solid ${theme.palette.divider}`,
-          background:
-            theme.palette.mode === "light"
-              ? "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
-              : "linear-gradient(135deg, #2c3e50 0%, #3498db 100%)",
+          background: isVideoCall
+            ? "linear-gradient(135deg, #FF416C 0%, #FF4B2B 100%)"
+            : "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
           color: "white",
         }}
       >
@@ -99,9 +289,13 @@ const StartCall = ({ open, handleClose }) => {
           justifyContent="space-between"
         >
           <Stack direction="row" alignItems="center" spacing={2}>
-            <Phone size={24} weight="bold" />
+            {isVideoCall ? (
+              <VideoCamera size={24} weight="bold" />
+            ) : (
+              <Phone size={24} weight="bold" />
+            )}
             <Typography variant="h5" fontWeight="bold">
-              Start New Call
+              Start New {isVideoCall ? "Video" : "Audio"} Call
             </Typography>
           </Stack>
           <IconButton
@@ -112,13 +306,14 @@ const StartCall = ({ open, handleClose }) => {
                 background: "rgba(255,255,255,0.1)",
               },
             }}
+            disabled={loading}
           >
             <X size={20} />
           </IconButton>
         </Stack>
 
         <Typography variant="body2" sx={{ mt: 1, opacity: 0.9 }}>
-          Select a contact to start audio call
+          Select a contact to start {isVideoCall ? "video" : "audio"} call
         </Typography>
       </DialogTitle>
 
@@ -129,9 +324,10 @@ const StartCall = ({ open, handleClose }) => {
             <TextField
               fullWidth
               variant="outlined"
-              placeholder="Search contacts..."
+              placeholder="Search contacts by name or email..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
+              disabled={loading}
               InputProps={{
                 startAdornment: (
                   <InputAdornment position="start">
@@ -143,7 +339,11 @@ const StartCall = ({ open, handleClose }) => {
                 ),
                 endAdornment: searchTerm && (
                   <InputAdornment position="end">
-                    <IconButton size="small" onClick={() => setSearchTerm("")}>
+                    <IconButton
+                      size="small"
+                      onClick={() => setSearchTerm("")}
+                      disabled={loading}
+                    >
                       <X size={16} />
                     </IconButton>
                   </InputAdornment>
@@ -166,9 +366,29 @@ const StartCall = ({ open, handleClose }) => {
                 size="small"
                 color="primary"
                 variant="filled"
+                onClick={() => setSearchTerm("")}
               />
-              <Chip label="Online" size="small" variant="outlined" />
-              <Chip label="Recent" size="small" variant="outlined" />
+              <Chip
+                label="Online"
+                size="small"
+                variant={searchTerm === "" ? "outlined" : "filled"}
+                icon={<CheckCircle size={14} />}
+                onClick={() => {
+                  const onlineIds = Array.from(onlineUsers);
+                  const onlineUsersList = all_users.filter(
+                    (u) =>
+                      onlineIds.includes(u.keycloakId) &&
+                      u.keycloakId !== user?.keycloakId
+                  );
+                  setFilteredUsers(onlineUsersList);
+                }}
+              />
+              <Chip
+                label="Recent"
+                size="small"
+                variant="outlined"
+                icon={<Clock size={14} />}
+              />
             </Stack>
           </Box>
 
@@ -176,11 +396,25 @@ const StartCall = ({ open, handleClose }) => {
 
           {/* User List */}
           <Box sx={{ flexGrow: 1, overflow: "hidden" }}>
+            {loading && (
+              <Box
+                sx={{
+                  display: "flex",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  height: "100px",
+                }}
+              >
+                <CircularProgress />
+                <Typography sx={{ ml: 2 }}>Starting call...</Typography>
+              </Box>
+            )}
+
             <SimpleBarStyle style={{ height: "100%" }}>
               <Stack spacing={0.5} sx={{ p: 2 }}>
                 {userList.length > 0 ? (
-                  userList.map((user, index) => (
-                    <Box key={user.id}>
+                  userList.map((userItem, index) => (
+                    <Box key={userItem.id}>
                       <Stack
                         direction="row"
                         alignItems="center"
@@ -188,21 +422,25 @@ const StartCall = ({ open, handleClose }) => {
                         sx={{
                           p: 2,
                           borderRadius: 2,
-                          cursor: "pointer",
+                          cursor: loading ? "not-allowed" : "pointer",
                           transition: "all 0.2s",
+                          opacity:
+                            loading && selectedUserId !== userItem.id ? 0.5 : 1,
                           "&:hover": {
-                            background: theme.palette.action.hover,
-                            transform: "translateY(-1px)",
-                            boxShadow: theme.shadows[1],
+                            background: loading
+                              ? "transparent"
+                              : theme.palette.action.hover,
+                            transform: loading ? "none" : "translateY(-1px)",
+                            boxShadow: loading ? "none" : theme.shadows[1],
                           },
                         }}
-                        onClick={() => handleUserClick(user)}
+                        onClick={() =>
+                          !loading && handleUserClick(userItem.userData)
+                        }
                       >
                         {/* Avatar with Status */}
                         <Badge
-                          color={
-                            user.status === "online" ? "success" : "default"
-                          }
+                          color={userItem.statusColor}
                           variant="dot"
                           anchorOrigin={{
                             vertical: "bottom",
@@ -211,13 +449,15 @@ const StartCall = ({ open, handleClose }) => {
                           overlap="circular"
                         >
                           <Avatar
-                            src={user.image}
+                            src={userItem.avatar}
                             sx={{
                               width: 50,
                               height: 50,
                               border: `2px solid ${theme.palette.background.paper}`,
                             }}
-                          />
+                          >
+                            {!userItem.avatar && <UserCircle size={24} />}
+                          </Avatar>
                         </Badge>
 
                         {/* User Info */}
@@ -227,39 +467,64 @@ const StartCall = ({ open, handleClose }) => {
                             fontWeight="600"
                             noWrap
                           >
-                            {user.name}
+                            {userItem.name}
+                            {userItem.isCurrentUser && (
+                              <Typography
+                                component="span"
+                                variant="caption"
+                                sx={{ ml: 1, color: "text.secondary" }}
+                              >
+                                (You)
+                              </Typography>
+                            )}
                           </Typography>
                           <Typography
                             variant="body2"
                             color="text.secondary"
                             noWrap
                           >
-                            {user.email}
+                            {userItem.email}
                           </Typography>
-                          {user.lastSeen && (
-                            <Typography
-                              variant="caption"
-                              color="text.secondary"
-                            >
-                              Last seen {user.lastSeen}
-                            </Typography>
-                          )}
+                          <Typography variant="caption" color="text.secondary">
+                            Status: {userItem.statusLabel}
+                          </Typography>
                         </Stack>
 
                         {/* Call Button */}
-                        <IconButton
-                          sx={{
-                            background: theme.palette.primary.main,
-                            color: "white",
-                            "&:hover": {
-                              background: theme.palette.primary.dark,
-                              transform: "scale(1.1)",
-                            },
-                            transition: "all 0.2s",
-                          }}
+                        <Tooltip
+                          title={`Start ${
+                            isVideoCall ? "video" : "audio"
+                          } call`}
                         >
-                          <Phone size={20} weight="bold" />
-                        </IconButton>
+                          <IconButton
+                            sx={{
+                              background: isVideoCall
+                                ? theme.palette.error.main
+                                : theme.palette.primary.main,
+                              color: "white",
+                              "&:hover": {
+                                background: isVideoCall
+                                  ? theme.palette.error.dark
+                                  : theme.palette.primary.dark,
+                                transform: loading ? "none" : "scale(1.1)",
+                              },
+                              transition: "all 0.2s",
+                              opacity:
+                                loading && selectedUserId !== userItem.id
+                                  ? 0.5
+                                  : 1,
+                            }}
+                            disabled={loading}
+                          >
+                            {loading && selectedUserId === userItem.id ? (
+                              <CircularProgress size={20} color="inherit" />
+                            ) : isVideoCall ? (
+                              <VideoCamera size={20} weight="bold" />
+                            ) : (
+                              <Phone size={20} weight="bold" />
+                            )}
+                          </IconButton>
+                        </Tooltip>
                       </Stack>
 
                       {index < userList.length - 1 && (
@@ -307,7 +572,8 @@ const StartCall = ({ open, handleClose }) => {
               textAlign="center"
               display="block"
             >
-              {userList.length} contacts • Tap to start audio call
+              {userList.length} contacts • {onlineUsers.size} online • Tap to
+              start {isVideoCall ? "video" : "audio"} call
             </Typography>
           </Box>
         </Stack>
