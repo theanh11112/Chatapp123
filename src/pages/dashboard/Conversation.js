@@ -28,6 +28,7 @@ import {
   Timeline,
 } from "../../sections/dashboard/Conversation";
 import { useDispatch, useSelector } from "react-redux";
+import encryptionHelpers from "../../e2ee/utils/encryptionHelpers";
 import {
   fetchCurrentMessages,
   setCurrentConversation,
@@ -38,11 +39,18 @@ import {
   clearPinnedMessages,
   setPinnedMessages,
   fetchPinnedMessages,
+  addDirectMessage, // 🆕 ĐẢM BẢO CÓ DÒNG NÀY
+  addGroupMessage, // 🆕 ĐẢM BẢO CÓ DÒNG NÀY
+  updateEncryptionStatus,
+  updateDecryptedMessage,
+  decryptMessageThunk,
+  decryptPendingMessages as decryptPendingMessagesAction,
 } from "../../redux/slices/conversation";
 import PinnedMessages from "../../components/Chat/PinnedMessages";
 import { useKeycloak } from "@react-keycloak/web";
 import api from "../../utils/axios";
 import { useE2EE } from "../../contexts/E2EEContext";
+import { useChatE2EEIntegration } from "../../e2ee/integration/chatIntegration";
 
 const Conversation = ({ isMobile, menu }) => {
   const dispatch = useDispatch();
@@ -65,68 +73,228 @@ const Conversation = ({ isMobile, menu }) => {
 
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [socket, setSocket] = useState(null);
+  const peerId =
+    chat_type === "individual" ? current_conversation?.user_id : null;
+  console.log("11111", peerId);
+  const {
+    isReady: e2eeReady,
+    getEncryptionStatus,
+    sendMessage: e2eeSendMessage,
+    encryptionStats,
+    decryptMessage,
+    encryptMessage,
+  } = useChatE2EEIntegration(room_id, peerId, chat_type === "group");
+
+  // 🆕 E2EE Status Effect
+  useEffect(() => {
+    if (room_id && e2eeReady) {
+      const status = getEncryptionStatus();
+      console.log("🔐 E2EE Status:", {
+        roomId: room_id,
+        chatType: chat_type,
+        e2eeReady,
+        status,
+        peerId,
+      });
+    }
+  }, [room_id, chat_type, e2eeReady, getEncryptionStatus, peerId]);
 
   // 🆕 Thiết lập socket cho real-time events
+  // Trong Conversation component
+  // Conversation.js - THÊM socket handler với logging chi tiết
   useEffect(() => {
     const currentSocket = window.socket;
+
+    console.log("🔌 [Socket] Setting up listeners in Conversation.js");
+    console.log("📡 Current socket:", !!currentSocket);
+    console.log("🎯 Current room_id:", room_id);
+    console.log("💬 Current chat_type:", chat_type);
+
     if (currentSocket) {
       setSocket(currentSocket);
 
-      const handleMessageDeleted = (data) => {
-        console.log("📡 Socket: Message deleted by others", data);
+      // 🆕 HANDLER CHÍNH cho encrypted messages
+      const handleReceiveEncryptedMessage = (data) => {
+        console.log(
+          "🔐 [Socket - Conversation] RAW encrypted message data:",
+          data
+        );
+
+        // Debug: Kiểm tra data structure
+        const messageData = Array.isArray(data) ? data[0] : data;
+        console.log("📦 Processed message data:", {
+          messageId: messageData.messageId,
+          conversationId: messageData.conversationId,
+          roomId: messageData.roomId,
+          senderId: messageData.senderId,
+          isEncrypted: messageData.isEncrypted,
+          hasCiphertext: !!messageData.ciphertext,
+          currentRoomId: room_id,
+          currentChatType: chat_type,
+        });
+
+        // 🆕 QUAN TRỌNG: Kiểm tra xem message có thuộc conversation hiện tại không
+        const isForCurrentConversation =
+          messageData.conversationId === room_id ||
+          messageData.roomId === room_id;
+
+        console.log("🎯 Is for current conversation?", {
+          isForCurrentConversation,
+          messageConversationId: messageData.conversationId,
+          messageRoomId: messageData.roomId,
+          currentRoomId: room_id,
+        });
+
+        if (!isForCurrentConversation) {
+          console.log("⚠️ Message not for current conversation, skipping");
+          return;
+        }
+
+        // 🆕 THÊM TIMESTAMP nếu chưa có
+        const timestamp = messageData.timestamp || new Date().toISOString();
+
+        // 🆕 TẠO MESSAGE OBJECT HOÀN CHỈNH
+        const messageObject = {
+          id: messageData.messageId,
+          _id: messageData.messageId,
+          type: "msg",
+          subtype: "text",
+          message: "🔒 Encrypted message",
+          content: "🔒 Encrypted message",
+          sender: {
+            keycloakId: messageData.senderId,
+            username: messageData.senderName || "Unknown",
+          },
+          isEncrypted: true,
+          ciphertext: messageData.ciphertext,
+          iv: messageData.iv,
+          keyId: messageData.keyId,
+          algorithm: messageData.algorithm,
+          createdAt: timestamp,
+          time: new Date(timestamp).toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+          incoming: messageData.senderId !== currentUserId,
+          outgoing: messageData.senderId === currentUserId,
+          // 🆕 Thêm các field quan trọng
+          encryptionStatus: "encrypted",
+          isDecrypted: false,
+        };
+
+        console.log("📨 Prepared message object:", {
+          id: messageObject.id,
+          isIncoming: messageObject.incoming,
+          isOutgoing: messageObject.outgoing,
+          senderId: messageObject.sender.keycloakId,
+          currentUserId,
+        });
+
+        // 🆕 DISPATCH VÀO REDUX
+        if (chat_type === "group") {
+          console.log("👥 Dispatching group message to Redux");
+          dispatch(
+            addGroupMessage({
+              message: messageObject,
+              room_id: messageData.roomId || messageData.conversationId,
+              isOptimistic: false,
+            })
+          );
+
+          // 🆕 Force UI update bằng cách trigger state change
+          setTimeout(() => {
+            console.log("🔄 Triggering UI update for group message");
+          }, 100);
+        } else {
+          console.log("📱 Dispatching direct message to Redux");
+          dispatch(
+            addDirectMessage({
+              message: messageObject,
+              conversation_id: messageData.conversationId,
+              currentUserId: currentUserId,
+              isGroup: false,
+              isOptimistic: false,
+            })
+          );
+
+          // 🆕 Force UI update
+          setTimeout(() => {
+            console.log("🔄 Triggering UI update for direct message");
+          }, 100);
+        }
+
+        // 🆕 LOG REDUX STATE AFTER DISPATCH
+        //   setTimeout(() => {
+        //  //   const state = store?.getState?.();
+        //     if (state) {
+        //       console.log("📊 Redux state after dispatch:", {
+        //         direct_messages_count:
+        //           state.conversation?.direct_chat?.current_messages?.length,
+        //         group_messages_count:
+        //           state.conversation?.group_chat?.current_room?.messages?.length,
+        //         current_room_id: state.conversation?.group_chat?.current_room?.id,
+        //       });
+        //     }
+        //   }, 200);
+
+        // 🆕 TRY TO DECRYPT
+        console.log("🔓 Attempting to decrypt message:", messageData.messageId);
+        // handleDecryptMessage(messageData);
       };
 
-      const handleMessagePinned = (data) => {
-        console.log("📌 Socket: Message pinned", data);
+      // 🆕 THÊM CÁC HANDLERS KHÁC
+      const handleMessageDecrypted = (data) => {
+        console.log("✅ [Socket] Message decrypted:", data);
         dispatch(
-          pinMessage({
+          updateDecryptedMessage({
             messageId: data.messageId,
-            chatType: data.chatType,
+            chatType: chat_type,
+            decryptedContent: data.decryptedContent,
           })
         );
       };
 
-      const handleMessageUnpinned = (data) => {
-        console.log("📌 Socket: Message unpinned", data);
-        dispatch(
-          unpinMessage({
-            messageId: data.messageId,
-            chatType: data.chatType,
-          })
-        );
+      const handleNewMessageNotification = (data) => {
+        console.log("📢 [Socket] New message notification:", data);
+        // Trigger UI refresh
       };
 
-      // 🆕 Socket listeners cho encrypted messages
-      const handleEncryptedMessage = (data) => {
-        console.log("🔐 Socket: Encrypted message received", data);
-        // Xử lý encrypted message trong Redux
-      };
+      // 🆕 ĐĂNG KÝ LISTENERS
+      console.log("📡 Registering socket listeners...");
 
-      const handleEncryptedMessageReply = (data) => {
-        console.log("🔐 Socket: Encrypted reply message received", data);
-        // Xử lý encrypted reply message trong Redux
-      };
+      currentSocket.on(
+        "receive_encrypted_message",
+        handleReceiveEncryptedMessage
+      );
+      currentSocket.on("message_decrypted", handleMessageDecrypted);
+      currentSocket.on("new_message", handleNewMessageNotification);
+      currentSocket.on("message_received", handleNewMessageNotification);
 
-      currentSocket.on("message_deleted", handleMessageDeleted);
-      currentSocket.on("message_pinned", handleMessagePinned);
-      currentSocket.on("message_unpinned", handleMessageUnpinned);
-      currentSocket.on("encrypted_message", handleEncryptedMessage);
-      currentSocket.on("encrypted_message_reply", handleEncryptedMessageReply);
+      // 🆕 TEST: Gửi test event để kiểm tra socket
+      setTimeout(() => {
+        console.log("🧪 Sending test socket event...");
+        currentSocket.emit("test_message", {
+          test: "socket_working",
+          timestamp: new Date().toISOString(),
+        });
+      }, 1000);
 
       return () => {
+        console.log("🧹 Cleaning up socket listeners...");
         if (currentSocket) {
-          currentSocket.off("message_deleted", handleMessageDeleted);
-          currentSocket.off("message_pinned", handleMessagePinned);
-          currentSocket.off("message_unpinned", handleMessageUnpinned);
-          currentSocket.off("encrypted_message", handleEncryptedMessage);
           currentSocket.off(
-            "encrypted_message_reply",
-            handleEncryptedMessageReply
+            "receive_encrypted_message",
+            handleReceiveEncryptedMessage
           );
+          currentSocket.off("message_decrypted", handleMessageDecrypted);
+          currentSocket.off("new_message", handleNewMessageNotification);
+          currentSocket.off("message_received", handleNewMessageNotification);
         }
       };
+    } else {
+      console.error("❌ No socket found!");
     }
-  }, [dispatch]);
+  }, [dispatch, room_id, chat_type, currentUserId]);
 
   const getCurrentChatInfo = () => {
     if (chat_type === "group") {

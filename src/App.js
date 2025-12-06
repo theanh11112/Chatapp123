@@ -1,4 +1,4 @@
-// App.js - HOÀN THIỆN VỚI FIX E2EE SETTINGS MODAL
+// App.js - HOÀN THIỆN VỚI E2EE INTEGRATION
 import React, { useEffect, useCallback, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useKeycloak } from "@react-keycloak/web";
@@ -10,8 +10,20 @@ import {
   DialogTitle,
   IconButton,
   Box,
+  Tooltip,
+  CircularProgress,
+  Badge,
 } from "@mui/material";
-import { Close } from "@mui/icons-material";
+import {
+  Close,
+  Security as SecurityIcon,
+  VpnKey as KeyIcon,
+  Lock as LockIcon,
+  LockOpen as LockOpenIcon,
+  Error as ErrorIcon,
+  CheckCircle as CheckCircleIcon,
+  Sync as SyncIcon,
+} from "@mui/icons-material";
 import ThemeSettings from "./components/settings";
 import ThemeProvider from "./theme";
 import Router from "./routes";
@@ -21,10 +33,19 @@ import { AuthProvider } from "./contexts/AuthContext";
 import { E2EEProvider } from "./contexts/E2EEContext";
 import KeyExchangeDialog from "./pages/roles/components/dialogs/KeyExchangeDialog";
 import E2EESettings from "./sections/dashboard/Settings/E2EESettings";
-import { socket } from "./socket";
-import LoadingScreen from "./components/LoadingScreen";
 import { showSnackbar } from "./redux/slices/app";
 import { getSocket } from "./socket";
+import LoadingScreen from "./components/LoadingScreen";
+
+// 🆕 IMPORT E2EE SYSTEM
+import {
+  setupE2EESystem,
+  quickStartE2EE,
+  useAutoE2EE,
+  E2EEStatusIndicator,
+  EncryptionBadge,
+  debugE2EESystem,
+} from "./e2ee";
 
 const vertical = "top";
 const horizontal = "center";
@@ -33,7 +54,7 @@ const Alert = React.forwardRef((props, ref) => (
   <MuiAlert elevation={6} ref={ref} variant="filled" {...props} />
 ));
 
-// 🆕 Tạo global notification handlers
+// 🆕 Tạo global notification handlers với E2EE support
 const setupGlobalNotificationHandlers = (dispatch) => {
   window.showNotification = (notification) => {
     dispatch(showSnackbar(notification));
@@ -43,12 +64,197 @@ const setupGlobalNotificationHandlers = (dispatch) => {
     dispatch(
       showSnackbar({
         severity: "info",
-        message: `Key exchange request from ${data.username}`,
+        message: `🔐 Key exchange request from ${data.username || "friend"}`,
         action: "key_exchange",
         data: data,
+        autoHideDuration: 10000,
       })
     );
   };
+
+  // 🆕 Debug function
+  window.debugE2EE = debugE2EESystem;
+
+  // 🆕 Quick access to E2EE functions
+  window.e2ee = {
+    showSettings: null, // Will be set later
+    regenerateKeys: null, // Will be set later
+    status: null, // Will be set later
+  };
+};
+
+// 🆕 Component cho E2EE Status Floating Button
+const E2EEStatusFloatingButton = ({ onOpenSettings, onDebug }) => {
+  const { status, isReady, myFingerprint, isInitializing } = useAutoE2EE();
+  const [hover, setHover] = useState(false);
+  const [showTooltip, setShowTooltip] = useState(false);
+
+  const getButtonConfig = () => {
+    switch (status) {
+      case "ready":
+        return {
+          icon: <LockIcon />,
+          color: "#4caf50",
+          bgColor: "#e8f5e9",
+          tooltip: "End-to-end encryption active",
+          pulse: true,
+        };
+      case "initializing":
+        return {
+          icon: <SyncIcon className="spin" />,
+          color: "#ff9800",
+          bgColor: "#fff3e0",
+          tooltip: "Initializing encryption...",
+          pulse: false,
+        };
+      case "error":
+        return {
+          icon: <ErrorIcon />,
+          color: "#f44336",
+          bgColor: "#ffebee",
+          tooltip: "Encryption error - Click to debug",
+          pulse: true,
+        };
+      default:
+        return {
+          icon: <LockOpenIcon />,
+          color: "#9e9e9e",
+          bgColor: "#f5f5f5",
+          tooltip: "Encryption disabled",
+          pulse: false,
+        };
+    }
+  };
+
+  const config = getButtonConfig();
+
+  // Thêm CSS cho animation
+  useEffect(() => {
+    const style = document.createElement("style");
+    style.textContent = `
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+      @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7); }
+        70% { box-shadow: 0 0 0 10px rgba(76, 175, 80, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0); }
+      }
+      .spin {
+        animation: spin 2s linear infinite;
+      }
+      .pulse {
+        animation: pulse 2s infinite;
+      }
+    `;
+    document.head.appendChild(style);
+    return () => document.head.removeChild(style);
+  }, []);
+
+  return (
+    <>
+      <Tooltip
+        title={
+          <Box sx={{ p: 1 }}>
+            <Box sx={{ fontWeight: "bold", mb: 0.5 }}>{config.tooltip}</Box>
+            {myFingerprint && (
+              <Box sx={{ fontSize: "0.75rem", fontFamily: "monospace" }}>
+                Fingerprint: {myFingerprint}
+              </Box>
+            )}
+            <Box sx={{ fontSize: "0.75rem", mt: 0.5 }}>
+              Status: {status}
+              {isInitializing && " (Initializing...)"}
+            </Box>
+          </Box>
+        }
+        arrow
+        open={showTooltip || hover}
+        onOpen={() => setShowTooltip(true)}
+        onClose={() => setShowTooltip(false)}
+        placement="left"
+      >
+        <Box
+          sx={{
+            position: "fixed",
+            top: "200px",
+            right: "20px",
+            zIndex: 1200,
+          }}
+        >
+          <IconButton
+            onClick={status === "error" ? onDebug : onOpenSettings}
+            onMouseEnter={() => setHover(true)}
+            onMouseLeave={() => setHover(false)}
+            sx={{
+              width: 56,
+              height: 56,
+              backgroundColor: config.bgColor,
+              color: config.color,
+              border: `2px solid ${config.color}`,
+              boxShadow: 3,
+              "&:hover": {
+                backgroundColor: config.color,
+                color: "white",
+                transform: "scale(1.1)",
+              },
+              transition: "all 0.3s ease",
+              animation: config.pulse ? "pulse 2s infinite" : "none",
+            }}
+          >
+            {isInitializing ? (
+              <CircularProgress size={24} color="inherit" />
+            ) : (
+              config.icon
+            )}
+          </IconButton>
+
+          {/* Badge cho trạng thái */}
+          {status === "ready" && (
+            <Badge
+              color="success"
+              variant="dot"
+              sx={{
+                position: "absolute",
+                top: 5,
+                right: 5,
+                "& .MuiBadge-dot": {
+                  width: 12,
+                  height: 12,
+                  borderRadius: "50%",
+                },
+              }}
+            />
+          )}
+        </Box>
+      </Tooltip>
+
+      {/* Debug button */}
+      {process.env.NODE_ENV === "development" && (
+        <IconButton
+          onClick={onDebug}
+          sx={{
+            position: "fixed",
+            top: "270px",
+            right: "20px",
+            zIndex: 1200,
+            backgroundColor: "#333",
+            color: "white",
+            width: 40,
+            height: 40,
+            fontSize: "0.75rem",
+            "&:hover": {
+              backgroundColor: "#555",
+            },
+          }}
+          title="Debug E2EE"
+        >
+          🐛
+        </IconButton>
+      )}
+    </>
+  );
 };
 
 function App() {
@@ -57,21 +263,124 @@ function App() {
   const [keyExchangeDialogOpen, setKeyExchangeDialogOpen] = useState(false);
   const [keyExchangeRequest, setKeyExchangeRequest] = useState(null);
   const [showE2EESettings, setShowE2EESettings] = useState(false);
+  const [e2eeInitialized, setE2eeInitialized] = useState(false);
+  const [e2eeError, setE2eeError] = useState(null);
 
   const { severity, message, open, action, snackbarData } = useSelector(
     (state) => state.app?.snackbar ?? {}
   );
 
-  // 🆕 Setup global notification handlers
+  // 🆕 Get E2EE status
+  const { status: e2eeStatus, isReady: e2eeReady } = useAutoE2EE();
+
+  // 🆕 Setup global notification handlers với E2EE functions
   useEffect(() => {
     setupGlobalNotificationHandlers(dispatch);
+
+    // Set E2EE functions to window
+    window.e2ee.showSettings = () => setShowE2EESettings(true);
+    window.e2ee.regenerateKeys = async () => {
+      const { default: autoEncryptionService } = await import(
+        "./e2ee/services/autoEncryptionService"
+      );
+      return autoEncryptionService.initializeKeyPair();
+    };
+    window.e2ee.status = e2eeStatus;
 
     // Cleanup on unmount
     return () => {
       window.showNotification = null;
       window.showKeyExchangeRequest = null;
+      window.e2ee = {};
     };
-  }, [dispatch]);
+  }, [dispatch, e2eeStatus]);
+
+  // 🆕 INITIALIZE E2EE SYSTEM
+  // Trong App.js, sửa phần E2EE initialization:
+
+  // 🆕 INITIALIZE E2EE SYSTEM
+  useEffect(() => {
+    if (initialized && keycloak.authenticated && !e2eeInitialized) {
+      console.log("🚀 App - Initializing E2EE system...");
+
+      const initE2EE = async () => {
+        try {
+          // 🆕 Chờ socket connection trước
+          const socket = await waitForSocketConnection();
+
+          if (!socket) {
+            console.warn(
+              "⚠️ Socket not available, will retry E2EE initialization"
+            );
+            // Retry sau 2 giây
+            setTimeout(initE2EE, 2000);
+            return;
+          }
+
+          // Option 1: Quick start (recommended)
+          const result = await quickStartE2EE();
+
+          if (result.success) {
+            console.log("✅ App - E2EE system initialized successfully");
+            setE2eeInitialized(true);
+
+            // Show welcome notification
+            dispatch(
+              showSnackbar({
+                severity: "success",
+                message: "End-to-end encryption enabled",
+                autoHideDuration: 3000,
+              })
+            );
+          } else {
+            console.error("❌ App - E2EE quick start failed:", result.error);
+            setE2eeError(result.error);
+
+            // Option 2: Try full setup
+            setupE2EESystem();
+          }
+        } catch (error) {
+          console.error("❌ App - E2EE initialization error:", error);
+          setE2eeError(error.message);
+
+          // Still try to setup
+          setupE2EESystem();
+        }
+      };
+
+      // 🆕 Tăng timeout để đảm bảo các dependency đã sẵn sàng
+      const timer = setTimeout(() => {
+        initE2EE();
+      }, 3000);
+
+      return () => clearTimeout(timer);
+    }
+  }, [initialized, keycloak.authenticated, e2eeInitialized, dispatch]);
+
+  // 🆕 Hàm chờ socket connection (thêm vào App.js)
+  const waitForSocketConnection = () => {
+    return new Promise((resolve) => {
+      const maxAttempts = 30; // 3 seconds
+      let attempts = 0;
+
+      const checkSocket = () => {
+        const socket = window.socket;
+
+        if (socket && socket.connected) {
+          console.log("✅ Socket connected for E2EE");
+          resolve(socket);
+        } else if (attempts >= maxAttempts) {
+          console.warn("⚠️ Socket connection timeout for E2EE");
+          resolve(null);
+        } else {
+          attempts++;
+          setTimeout(checkSocket, 100);
+        }
+      };
+
+      checkSocket();
+    });
+  };
 
   // 🆕 Handle snackbar actions (for key exchange requests)
   useEffect(() => {
@@ -79,9 +388,14 @@ function App() {
       setKeyExchangeRequest(snackbarData);
       setKeyExchangeDialogOpen(true);
     }
-  }, [open, action, snackbarData]);
 
-  // 🆕 HOÀN THIỆN: Sync Redux với Keycloak + UserInfo + E2EE
+    // 🆕 Handle E2EE-related notifications
+    if (message && (message.includes("encrypt") || message.includes("key"))) {
+      console.log("🔐 App - E2EE related notification:", message);
+    }
+  }, [open, action, snackbarData, message]);
+
+  // 🆕 Sync Redux với Keycloak + UserInfo + E2EE
   useEffect(() => {
     if (initialized) {
       console.log("🔑 App - Keycloak initialized:", {
@@ -136,6 +450,38 @@ function App() {
 
           sock.on("connect", () => {
             console.log("✅ Socket connected successfully");
+
+            // Auto-setup E2EE socket integration
+            import("./e2ee/integration/socketIntegration").then(
+              ({ setupSocketE2EEIntegration }) => {
+                setupSocketE2EEIntegration(sock);
+              }
+            );
+          });
+
+          // Listen for E2EE events
+          sock.on("encrypted_message", (data) => {
+            console.log("🔐 App - Received encrypted message:", {
+              from: data.sender?.username,
+              messageId: data.id,
+            });
+          });
+
+          sock.on("key_exchange_request", (data) => {
+            console.log("🤝 App - Key exchange request:", data);
+            window.showKeyExchangeRequest(data);
+          });
+
+          sock.on("key_exchange_confirmed", (data) => {
+            console.log("✅ App - Key exchange confirmed:", data);
+            dispatch(
+              showSnackbar({
+                severity: "success",
+                message: `Encryption established with ${
+                  data.username || "friend"
+                }`,
+              })
+            );
           });
         }
       } else if (!keycloak.authenticated) {
@@ -143,10 +489,19 @@ function App() {
         dispatch(signOut());
 
         // 🆕 Clear E2EE keys from localStorage
-        localStorage.removeItem("e2ee_public_key");
-        localStorage.removeItem("e2ee_private_key");
-        localStorage.removeItem("e2ee_fingerprint");
-        localStorage.removeItem("e2ee_peer_keys");
+        const e2eeKeys = [
+          "e2ee_keypair",
+          "e2ee_peer_keys",
+          "e2ee_encryption_cache",
+          "e2ee_sessions",
+          "e2ee_error_log",
+          "e2ee_master_hash",
+          "auto_encryption_enabled",
+        ];
+
+        e2eeKeys.forEach((key) => localStorage.removeItem(key));
+
+        console.log("🧹 App - Cleared all E2EE data");
       }
     }
   }, [
@@ -171,6 +526,11 @@ function App() {
         if (keyExchangeRequest) {
           setKeyExchangeDialogOpen(true);
         }
+      }
+      // Ctrl+Shift+D to debug E2EE
+      if (e.ctrlKey && e.shiftKey && e.key === "D") {
+        e.preventDefault();
+        debugE2EESystem();
       }
       // ESC to close dialogs
       if (e.key === "Escape") {
@@ -209,6 +569,17 @@ function App() {
     setShowE2EESettings(false);
   };
 
+  // 🆕 Handle debug click
+  const handleDebugClick = () => {
+    debugE2EESystem();
+    dispatch(
+      showSnackbar({
+        severity: "info",
+        message: "E2EE debug info logged to console",
+      })
+    );
+  };
+
   // Hiển thị loading screen khi chưa khởi tạo xong Keycloak
   if (!initialized) {
     return (
@@ -223,6 +594,24 @@ function App() {
       <ThemeProvider>
         <AuthProvider>
           <E2EEProvider>
+            {/* 🆕 Add Redux E2EE Middleware */}
+            {keycloak.authenticated && (
+              <script>
+                {`
+                  // Auto-setup Redux E2EE middleware
+                  (async () => {
+                    try {
+                      const { setupReduxE2EEIntegration } = await import('./e2ee/integration/reduxIntegration');
+                      setupReduxE2EEIntegration();
+                      console.log('✅ Redux E2EE middleware setup');
+                    } catch (error) {
+                      console.error('❌ Redux E2EE middleware setup failed:', error);
+                    }
+                  })();
+                `}
+              </script>
+            )}
+
             <ThemeSettings>
               <Router />
             </ThemeSettings>
@@ -236,7 +625,7 @@ function App() {
               />
             )}
 
-            {/* 🆕 E2EE Settings Dialog - SỬA LẠI DÙNG MUI DIALOG */}
+            {/* 🆕 E2EE Settings Dialog */}
             <Dialog
               open={showE2EESettings}
               onClose={handleE2EESettingsClose}
@@ -250,7 +639,7 @@ function App() {
                 },
               }}
               sx={{
-                zIndex: 1300, // Cao hơn các component khác
+                zIndex: 1300,
                 "& .MuiBackdrop-root": {
                   backgroundColor: "rgba(0, 0, 0, 0.7)",
                 },
@@ -268,8 +657,11 @@ function App() {
                 }}
               >
                 <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  <span style={{ fontSize: "1.5rem" }}>🔒</span>
+                  <SecurityIcon />
                   End-to-End Encryption Settings
+                  {e2eeReady && (
+                    <Badge color="success" variant="dot" sx={{ ml: 1 }} />
+                  )}
                 </Box>
                 <IconButton
                   onClick={handleE2EESettingsClose}
@@ -287,6 +679,14 @@ function App() {
         </AuthProvider>
       </ThemeProvider>
 
+      {/* 🆕 E2EE Status Floating Button */}
+      {keycloak.authenticated && (
+        <E2EEStatusFloatingButton
+          onOpenSettings={() => setShowE2EESettings(true)}
+          onDebug={handleDebugClick}
+        />
+      )}
+
       <Snackbar
         anchorOrigin={{ vertical, horizontal }}
         open={open}
@@ -297,7 +697,7 @@ function App() {
           "&.MuiSnackbar-root": {
             top: "80px",
             marginLeft: "100px",
-            zIndex: 1400, // Cao hơn cả dialog
+            zIndex: 1400,
           },
         }}
       >
@@ -341,67 +741,24 @@ function App() {
         </Alert>
       </Snackbar>
 
-      {/* 🆕 E2EE Status Indicator - DI CHUYỂN LÊN TRÊN */}
-      {keycloak.authenticated && (
-        <div
-          style={{
-            position: "fixed",
-            top: "200px", // Thay bottom thành top
-            right: "20px",
-            zIndex: 1200, // Thấp hơn dialog nhưng cao hơn các element khác
+      {/* 🆕 E2EE Initialization Error Alert */}
+      {e2eeError && (
+        <Snackbar
+          open={true}
+          autoHideDuration={10000}
+          onClose={() => setE2eeError(null)}
+          sx={{
+            top: "150px",
+            zIndex: 1400,
           }}
         >
-          <button
-            onClick={() => setShowE2EESettings(true)}
-            style={{
-              backgroundColor: "#1976d2",
-              color: "white",
-              border: "none",
-              borderRadius: "50%",
-              width: "50px",
-              height: "50px",
-              fontSize: "24px",
-              cursor: "pointer",
-              boxShadow: "0 2px 10px rgba(0,0,0,0.3)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              transition: "all 0.3s ease",
-            }}
-            onMouseEnter={(e) => {
-              e.target.style.transform = "scale(1.1)";
-              e.target.style.boxShadow = "0 4px 15px rgba(0,0,0,0.4)";
-            }}
-            onMouseLeave={(e) => {
-              e.target.style.transform = "scale(1)";
-              e.target.style.boxShadow = "0 2px 10px rgba(0,0,0,0.3)";
-            }}
-            title="E2EE Settings (Ctrl+Shift+E)"
-          >
-            🔒
-          </button>
-
-          {/* Thêm tooltip nhỏ */}
-          <div
-            style={{
-              position: "absolute",
-              top: "55px",
-              right: "0",
-              backgroundColor: "#333",
-              color: "white",
-              padding: "4px 8px",
-              borderRadius: "4px",
-              fontSize: "12px",
-              opacity: 0,
-              transition: "opacity 0.3s",
-              pointerEvents: "none",
-              whiteSpace: "nowrap",
-            }}
-            id="e2ee-tooltip"
-          >
-            E2EE Settings (Ctrl+Shift+E)
-          </div>
-        </div>
+          <Alert severity="warning" onClose={() => setE2eeError(null)}>
+            E2EE Initialization Warning: {e2eeError}
+            <div style={{ marginTop: "8px", fontSize: "0.9rem" }}>
+              Chat will continue with basic encryption.
+            </div>
+          </Alert>
+        </Snackbar>
       )}
     </>
   );

@@ -37,6 +37,7 @@ import {
 import { getSocket } from "../../socket";
 import { showSnackbar } from "../../redux/slices/app";
 import { useE2EE } from "../../contexts/E2EEContext";
+import e2eeService from "../../e2ee/utils/e2ee";
 // 🆕 Custom hook để quản lý pin/unpin messages
 const usePinMessage = () => {
   const dispatch = useDispatch();
@@ -194,41 +195,195 @@ const EncryptedContent = memo(({ el, isOwnMessage }) => {
 
   useEffect(() => {
     const decryptMessageContent = async () => {
+      if (!el.isEncrypted || !el.ciphertext || !el.iv) {
+        console.log("🔍 [EncryptedContent] Not encrypted or missing data:", {
+          isEncrypted: el.isEncrypted,
+          hasCiphertext: !!el.ciphertext,
+          hasIV: !!el.iv,
+          ciphertextType: typeof el.ciphertext,
+          ivType: typeof el.iv,
+        });
+        return;
+      }
+
+      // KIỂM TRA BASE64
+      const isValidCiphertext = window.e2eeService?.isValidBase64?.(
+        el.ciphertext
+      );
+      const isValidIV = window.e2eeService?.isValidBase64?.(el.iv);
+
+      console.log("🔍 [EncryptedContent] Base64 Validation:", {
+        ciphertextValid: isValidCiphertext,
+        ivValid: isValidIV,
+        ciphertextLength: el.ciphertext.length,
+        ivLength: el.iv.length,
+        ciphertextSample: el.ciphertext.substring(0, 30),
+        ivSample: el.iv.substring(0, 20),
+      });
+
+      if (!isValidCiphertext || !isValidIV) {
+        setError("Dữ liệu mã hóa không hợp lệ");
+        setIsDecrypting(false);
+        return;
+      }
+      // Chỉ giải mã nếu tin nhắn được mã hóa và có đủ thông tin
       if (!el.isEncrypted || !el.ciphertext || !el.iv) return;
 
       try {
         setIsDecrypting(true);
         setError(null);
 
-        const senderId = el.sender?.keycloakId;
-        const friendKey = getFriendKey(senderId);
+        const senderId = el.sender?.keycloakId || el.from_user_id;
 
-        if (!friendKey) {
-          throw new Error("No encryption key available for this user");
+        console.log("🔐 Starting decryption...", {
+          messageId: el.message_id,
+          senderId,
+          hasCiphertext: !!el.ciphertext,
+          hasIV: !!el.iv,
+          keyId: el.key_id,
+          algorithm: el.algorithm,
+        });
+
+        // 1. Ưu tiên sử dụng autoEncryptionService
+        if (window.autoEncryptionService) {
+          console.log("🔄 Using window.autoEncryptionService...");
+
+          const autoEncryption = window.autoEncryptionService;
+
+          // Kiểm tra service đã sẵn sàng chưa
+          if (autoEncryption.isReady && !autoEncryption.isReady()) {
+            console.warn("⚠️ Auto encryption service not ready yet");
+            setError("Decryption service initializing...");
+            return;
+          }
+
+          try {
+            const result = await autoEncryption.decryptMessage(
+              el.ciphertext,
+              el.iv,
+              el.key_id || el.sender_fingerprint, // keyId
+              senderId
+            );
+
+            console.log("📥 Decryption result:", {
+              success: result.success,
+              hasContent: !!result.content,
+              error: result.error,
+            });
+
+            if (result.success && result.content) {
+              setDecryptedContent(result.content);
+              return;
+            } else {
+              console.warn("⚠️ Auto encryption service failed:", result.error);
+              setError(result.error || "Decryption failed");
+            }
+          } catch (autoError) {
+            console.error("❌ Auto encryption error:", autoError);
+          }
         }
 
-        const decrypted = await decryptMessage(
-          { ciphertext: el.ciphertext, iv: el.iv },
-          friendKey.publicKey
+        // 2. Fallback: Sử dụng E2EE service từ context
+        if (e2eeService && e2eeService.decryptMessage) {
+          console.log("🔄 Using e2eeService fallback...");
+
+          try {
+            const result = await e2eeService.decryptMessage({
+              ciphertext: el.ciphertext,
+              iv: el.iv,
+              keyId: el.key_id,
+              senderId: senderId,
+            });
+
+            if (result.success) {
+              setDecryptedContent(result.content);
+              return;
+            }
+          } catch (e2eeError) {
+            console.error("❌ E2EE service error:", e2eeError);
+          }
+        }
+
+        // 3. Fallback: Giải mã thủ công
+        console.log("🔄 Using manual decryption...");
+
+        // Lấy private key của chính mình
+        const ownPrivateKeyStr = localStorage.getItem("e2ee_private_key");
+        if (!ownPrivateKeyStr || ownPrivateKeyStr === "{}") {
+          throw new Error("Your private key not found");
+        }
+
+        const ownPrivateKeyJwk = JSON.parse(ownPrivateKeyStr);
+
+        // Lấy public key của người gửi
+        const friendKey = getFriendKey(senderId);
+        if (!friendKey?.publicKey) {
+          throw new Error(`No public key for sender: ${senderId}`);
+        }
+
+        const peerPublicKeyJwk = JSON.parse(friendKey.publicKey);
+
+        // Sử dụng keyUtils
+        const keyUtils = require("../utils/keyUtils").default;
+
+        const sharedSecret = await keyUtils.deriveSharedSecret(
+          ownPrivateKeyJwk,
+          peerPublicKeyJwk
         );
 
-        setDecryptedContent(decrypted);
+        // Helper function để chuyển base64 sang ArrayBuffer
+        const base64ToArrayBuffer = (base64) => {
+          const binary = window.atob(base64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          return bytes.buffer;
+        };
+
+        const decrypted = await window.crypto.subtle.decrypt(
+          {
+            name: "AES-GCM",
+            iv: base64ToArrayBuffer(el.iv),
+          },
+          sharedSecret,
+          base64ToArrayBuffer(el.ciphertext)
+        );
+
+        const decoded = new TextDecoder().decode(decrypted);
+        setDecryptedContent(decoded);
       } catch (err) {
         console.error("❌ Error decrypting message:", err);
-        setError(err.message);
+        setError(err.message || "Decryption failed");
+
+        // Debug thêm
+        console.debug("Message details:", {
+          messageId: el.message_id,
+          sender: el.sender,
+          ciphertextLength: el.ciphertext?.length,
+          ivLength: el.iv?.length,
+          keyId: el.key_id,
+          algorithm: el.algorithm,
+        });
       } finally {
         setIsDecrypting(false);
       }
     };
 
+    // Chỉ chạy giải mã một lần khi component mount
     decryptMessageContent();
   }, [
     el.isEncrypted,
     el.ciphertext,
     el.iv,
+    el.key_id,
+    el.algorithm,
     el.sender,
+    el.message_id,
+    el.from_user_id,
+    el.sender_fingerprint,
     getFriendKey,
-    decryptMessage,
+    e2eeService,
   ]);
 
   if (el.encryptionStatus === "encrypting") {

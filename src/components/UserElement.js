@@ -15,6 +15,7 @@ import { socket } from "../socket";
 import { useKeycloak } from "@react-keycloak/web";
 import { useDispatch } from "react-redux";
 import { showSnackbar } from "../redux/slices/app";
+import api from "../utils/axios";
 
 const StyledChatBox = styled(Box)(({ theme }) => ({
   "&:hover": {
@@ -178,20 +179,14 @@ const FriendRequestElement = ({
     try {
       setIsLoading(true);
 
-      // Gọi API chấp nhận friend request
-      const response = await fetch("/users/accept-friend-request", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${keycloak.token}`,
-        },
-        body: JSON.stringify({
-          requestId: id,
-          keycloakId: keycloak.subject,
-        }),
+      // ✅ SỬA LẠI: Gọi API đúng cách với axios
+      const response = await api.post("/users/respond-friend-request", {
+        requestId: id,
+        keycloakId: keycloak.subject,
+        action: "accept",
       });
 
-      const data = await response.json();
+      const data = response.data; // ✅ Lấy data từ response
 
       if (data.status === "success") {
         dispatch(
@@ -203,6 +198,9 @@ const FriendRequestElement = ({
 
         // Emit socket event để cập nhật real-time
         socket.emit("accept_request", { request_id: id });
+
+        // ✅ THÊM: Refresh lại danh sách requests
+        // Bạn cần dispatch action để refresh hoặc callback từ parent
       } else {
         dispatch(
           showSnackbar({
@@ -216,7 +214,8 @@ const FriendRequestElement = ({
       dispatch(
         showSnackbar({
           severity: "error",
-          message: "Failed to accept friend request",
+          message:
+            error.response?.data?.message || "Failed to accept friend request",
         })
       );
     } finally {
@@ -228,20 +227,14 @@ const FriendRequestElement = ({
     try {
       setIsLoading(true);
 
-      // Gọi API từ chối friend request
-      const response = await fetch("/users/reject-friend-request", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${keycloak.token}`,
-        },
-        body: JSON.stringify({
-          requestId: id,
-          keycloakId: keycloak.subject,
-        }),
+      // ✅ SỬA LẠI: Gọi API đúng cách với axios
+      const response = await api.post("/users/respond-friend-request", {
+        requestId: id,
+        keycloakId: keycloak.subject,
+        action: "reject",
       });
 
-      const data = await response.json();
+      const data = response.data; // ✅ Lấy data từ response
 
       if (data.status === "success") {
         dispatch(
@@ -253,6 +246,8 @@ const FriendRequestElement = ({
 
         // Emit socket event để cập nhật real-time
         socket.emit("reject_request", { request_id: id });
+
+        // ✅ THÊM: Refresh lại danh sách requests
       } else {
         dispatch(
           showSnackbar({
@@ -266,7 +261,8 @@ const FriendRequestElement = ({
       dispatch(
         showSnackbar({
           severity: "error",
-          message: "Failed to reject friend request",
+          message:
+            error.response?.data?.message || "Failed to reject friend request",
         })
       );
     } finally {

@@ -1,4 +1,3 @@
-// contexts/E2EEContext.js
 import React, {
   createContext,
   useContext,
@@ -9,7 +8,12 @@ import React, {
 import { useKeycloak } from "@react-keycloak/web";
 import { useDispatch } from "react-redux";
 import { showSnackbar } from "../redux/slices/app";
-import e2eeService from "../utils/e2ee";
+import e2eeService from "../e2ee/utils/e2ee";
+
+import autoEncryptionService from "../e2ee/services/autoEncryptionService";
+
+// 🆕 Import hàm để set socket cho encryption service
+import { setEncryptionServiceSocket } from "../e2ee/services/autoEncryptionService";
 
 const E2EEContext = createContext({});
 
@@ -30,12 +34,65 @@ export const E2EEProvider = ({ children }) => {
   const [isInitializing, setIsInitializing] = useState(false);
   const [activeKeyExchange, setActiveKeyExchange] = useState(null);
   const [friendKeys, setFriendKeys] = useState({});
+  const [socketReady, setSocketReady] = useState(false);
+  const [autoEncryption, setAutoEncryption] = useState(null);
+  const [isAutoEncryptionReady, setIsAutoEncryptionReady] = useState(false);
 
+  // 🆕 Effect để chờ socket connection
   useEffect(() => {
+    const checkSocket = async () => {
+      await waitForSocketConnection();
+      setSocketReady(true);
+    };
+
     if (initialized && keycloak.authenticated) {
-      initializeE2EE();
+      checkSocket();
     }
   }, [initialized, keycloak.authenticated]);
+
+  // 🆕 Effect để initialize E2EE khi socket ready
+  useEffect(() => {
+    if (socketReady && initialized && keycloak.authenticated) {
+      initializeE2EE();
+    }
+  }, [socketReady, initialized, keycloak.authenticated]);
+
+  useEffect(() => {
+    const initializeAutoEncryption = async () => {
+      if (socketReady && !autoEncryption) {
+        try {
+          console.log(
+            "🔄 [E2EEContext] Initializing auto encryption service..."
+          );
+
+          // Set socket cho service
+          const socket = window.socket;
+          if (socket) {
+            setEncryptionServiceSocket(socket);
+            console.log("✅ [E2EEContext] Socket set for auto encryption");
+          }
+
+          // Initialize service
+          await autoEncryptionService.initialize();
+          console.log("✅ [E2EEContext] Auto encryption service initialized");
+
+          // Check if ready
+          if (autoEncryptionService.isReady()) {
+            setAutoEncryption(autoEncryptionService);
+            setIsAutoEncryptionReady(true);
+            console.log("🎉 [E2EEContext] Auto encryption service ready");
+          }
+        } catch (error) {
+          console.error(
+            "❌ [E2EEContext] Failed to initialize auto encryption:",
+            error
+          );
+        }
+      }
+    };
+
+    initializeAutoEncryption();
+  }, [socketReady, autoEncryption]);
 
   const initializeE2EE = async () => {
     try {
@@ -44,11 +101,15 @@ export const E2EEProvider = ({ children }) => {
 
       console.log("🔐 Initializing E2EE for user:", keycloakId);
 
+      // 🆕 Set socket cho encryption service trước khi initialize
+      const socket = window.socket;
+      if (socket) {
+        setEncryptionServiceSocket(socket);
+        console.log("🔌 Socket set for encryption service");
+      }
+
       // Initialize E2EE service
       e2eeService.initialize(keycloakId);
-
-      // Wait for socket connection
-      await waitForSocketConnection();
 
       // Get E2EE info from server
       const info = await e2eeService.getE2EEInfo();
@@ -92,10 +153,10 @@ export const E2EEProvider = ({ children }) => {
 
         if (socket && socket.connected) {
           console.log("✅ Socket connected");
-          resolve();
+          resolve(socket);
         } else if (attempts >= maxAttempts) {
           console.warn("⚠️ Socket connection timeout");
-          resolve(); // Resolve anyway to continue
+          resolve(null); // Resolve với null nếu timeout
         } else {
           attempts++;
           setTimeout(checkSocket, 100);
@@ -170,10 +231,16 @@ export const E2EEProvider = ({ children }) => {
     // Handle socket disconnect/reconnect
     socket.on("disconnect", () => {
       console.warn("🔌 Socket disconnected");
+      setSocketReady(false);
     });
 
     socket.on("reconnect", () => {
       console.log("🔌 Socket reconnected");
+      setSocketReady(true);
+
+      // Re-set socket cho encryption service
+      setEncryptionServiceSocket(socket);
+
       // Re-fetch E2EE info
       setTimeout(() => {
         if (keycloak.authenticated) {
@@ -316,6 +383,16 @@ export const E2EEProvider = ({ children }) => {
     [friendKeys]
   );
 
+  // 🆕 Function để check socket status
+  const checkSocketStatus = useCallback(() => {
+    const socket = window.socket;
+    return {
+      available: !!socket,
+      connected: socket?.connected || false,
+      ready: socketReady,
+    };
+  }, [socketReady]);
+
   const value = {
     e2eeEnabled,
     toggleE2EE,
@@ -332,6 +409,12 @@ export const E2EEProvider = ({ children }) => {
     getMyPublicKey,
     deleteAllKeys,
     getFriendKey,
+    socketReady,
+    checkSocketStatus,
+
+    // 🆕 THÊM: autoEncryption
+    autoEncryption: autoEncryptionService, // Trực tiếp từ import
+    isAutoEncryptionReady,
   };
 
   return <E2EEContext.Provider value={value}>{children}</E2EEContext.Provider>;

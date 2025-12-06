@@ -1,4 +1,4 @@
-// Footer.js - HOÀN THIỆN VỚI E2EE INTEGRATION
+// Footer.js - PHIÊN BẢN FIXED
 import React, { useRef, useState, useCallback, useEffect } from "react";
 import {
   Box,
@@ -10,6 +10,9 @@ import {
   Tooltip,
   Chip,
   Button,
+  CircularProgress,
+  Alert,
+  Badge,
 } from "@mui/material";
 import {
   Camera,
@@ -23,6 +26,9 @@ import {
   Lock,
   LockOpen,
   Key,
+  Warning,
+  CheckCircle,
+  Shield,
 } from "phosphor-react";
 import { useTheme, styled } from "@mui/material/styles";
 import useResponsive from "../../hooks/useResponsive";
@@ -38,8 +44,12 @@ import {
 } from "../../redux/slices/conversation";
 import { v4 as uuidv4 } from "uuid";
 import { ReplyPreview } from "./ReplyComponents";
-import { useE2EE } from "../../contexts/E2EEContext";
 import { showSnackbar } from "../../redux/slices/app";
+
+// 🆕 IMPORT E2EE HOOKS AND COMPONENTS
+import EncryptionBadge from "../../e2ee/components/EncryptionBadge";
+import useE2EEStatus from "../../e2ee/hooks/useE2EEStatus";
+import { useE2EE } from "../../contexts/E2EEContext";
 
 const StyledInput = styled(TextField)(({ theme }) => ({
   "& .MuiInputBase-input": {
@@ -56,7 +66,7 @@ const Actions = [
   { color: "#013f7f", icon: <User size={24} />, y: 382, title: "Contact" },
 ];
 
-// ----------------------------- CHAT INPUT -----------------------------
+// ----------------------------- CHAT INPUT COMPONENT -----------------------------
 const ChatInput = React.memo(
   ({
     openPicker,
@@ -67,9 +77,15 @@ const ChatInput = React.memo(
     handleSendMessage,
     replyTo,
     onCancelReply,
-    isE2EEEnabled,
-    isFriendE2EEEnabled,
+    // 🆕 E2EE Props
+    isEncrypted,
+    isEncryptionReady,
+    isEncrypting,
+    encryptionStatus,
+    peerName,
     onInitiateKeyExchange,
+    canEncrypt,
+    isKeyExchangeNeeded,
   }) => {
     const [openActions, setOpenActions] = useState(false);
     const theme = useTheme();
@@ -127,6 +143,17 @@ const ChatInput = React.memo(
             ),
             endAdornment: (
               <InputAdornment position="end">
+                {/* 🆕 Encryption Status Badge */}
+                {!isEncryptionReady && encryptionStatus !== "unknown" && (
+                  <Tooltip title="Encryption not ready">
+                    <Box sx={{ mr: 1 }}>
+                      <EncryptionBadge status="unavailable" size="small" />
+                    </Box>
+                  </Tooltip>
+                )}
+
+                {isEncrypting && <CircularProgress size={20} sx={{ mr: 1 }} />}
+
                 <IconButton onClick={() => setOpenPicker(!openPicker)}>
                   <Smiley />
                 </IconButton>
@@ -136,7 +163,7 @@ const ChatInput = React.memo(
           sx={{
             "& .MuiFilledInput-root": {
               backgroundColor:
-                isE2EEEnabled && isFriendE2EEEnabled
+                isEncrypted && isEncryptionReady
                   ? theme.palette.mode === "light"
                     ? "#e8f5e9"
                     : "rgba(76, 175, 80, 0.1)"
@@ -144,22 +171,24 @@ const ChatInput = React.memo(
                   ? "#FFF"
                   : "rgba(255, 255, 255, 0.05)",
               border:
-                isE2EEEnabled && isFriendE2EEEnabled
+                isEncrypted && isEncryptionReady
                   ? `1px solid ${theme.palette.success.main}`
                   : "1px solid transparent",
             },
           }}
+          disabled={isEncrypting}
         />
       </>
     );
   }
 );
 
-// ----------------------------- FOOTER MAIN -----------------------------
+// ----------------------------- FOOTER MAIN COMPONENT -----------------------------
 const Footer = () => {
   const theme = useTheme();
   const dispatch = useDispatch();
   const { keycloak, initialized } = useKeycloak();
+  const { autoEncryption } = useE2EE();
 
   const { current_conversation } = useSelector(
     (state) => state.conversation.direct_chat
@@ -175,22 +204,101 @@ const Footer = () => {
   const [openPicker, setOpenPicker] = useState(false);
   const [value, setValue] = useState("");
   const [replyTo, setReplyTo] = useState(null);
+  const [isEncrypting, setIsEncrypting] = useState(false);
   const inputRef = useRef(null);
 
-  // 🆕 E2EE Context
-  const {
-    e2eeEnabled,
-    friendsE2EEStatus,
-    sendEncryptedMessage,
-    initiateKeyExchange,
-    getFriendKey,
-  } = useE2EE();
-
+  // 🆕 E2EE INTEGRATION HOOKS
   const user_id =
     initialized && keycloak?.authenticated ? keycloak?.subject : null;
 
   const isGroupChat = chat_type === "group";
   const isDirectChat = chat_type === "individual";
+
+  // 🆕 FIXED: Xác định peerId cho direct chat
+  const getPeerId = () => {
+    console.log("🔍 [Footer] getPeerId called:", {
+      isDirectChat,
+      current_conversation_id: current_conversation?.id,
+      room_id,
+      conversation_user_id: current_conversation?.user_id,
+      current_user_id: user_id,
+    });
+
+    if (isDirectChat && current_conversation?.id === room_id) {
+      const peerUserId = current_conversation?.user_id;
+
+      // 🚨 QUAN TRỌNG: peerId phải khác userId của mình
+      if (peerUserId && peerUserId !== user_id) {
+        console.log("✅ [Footer] Valid peerId found:", peerUserId);
+        return peerUserId;
+      } else {
+        console.warn("⚠️ [Footer] Invalid peerId:", {
+          peerUserId,
+          user_id,
+          areSame: peerUserId === user_id,
+        });
+        return null;
+      }
+    }
+
+    console.log("❌ [Footer] No valid peerId found");
+    return null;
+  };
+
+  const peerId = getPeerId();
+
+  // 🆕 Sử dụng useE2EEStatus với peerId đúng
+  const {
+    status: e2eeStatus,
+    isEncrypted,
+    canEncrypt,
+    initiateKeyExchange,
+    isEstablishing,
+    isKeyExchangeNeeded,
+    peerFingerprint,
+    checkEncryptionStatus,
+    hasPeerKey,
+    error: e2eeError,
+    isReady: e2eeStatusReady,
+  } = useE2EEStatus(peerId, room_id);
+
+  // 🆕 Kiểm tra encryption status khi chat thay đổi
+  useEffect(() => {
+    console.log("🔄 [Footer] useEffect - Checking encryption status", {
+      peerId,
+      room_id,
+      e2eeStatusReady,
+      isDirectChat,
+    });
+
+    if (peerId && isDirectChat) {
+      // Đợi một chút để autoEncryption sẵn sàng
+      const timer = setTimeout(() => {
+        console.log("🔐 [Footer] Checking encryption status for peer:", peerId);
+        checkEncryptionStatus();
+      }, 500);
+
+      return () => clearTimeout(timer);
+    }
+  }, [peerId, room_id, isDirectChat, checkEncryptionStatus]);
+
+  // 🆕 Debug: Log tất cả thông tin khi có thay đổi
+  useEffect(() => {
+    console.log("📊 [Footer] State update:", {
+      peerId,
+      isDirectChat,
+      isGroupChat,
+      current_conversation: current_conversation?.name,
+      user_id,
+      room_id,
+      e2eeStatus,
+      isEncrypted,
+      canEncrypt,
+      hasPeerKey,
+      autoEncryptionReady: autoEncryption?.isReady?.(),
+      autoEncryptionHasPeerKey: autoEncryption?.hasPeerKey?.(peerId),
+    });
+  }, [peerId, e2eeStatus, isEncrypted, canEncrypt, hasPeerKey, autoEncryption]);
 
   const getCurrentChat = useCallback(() => {
     if (isGroupChat && current_room?.id === room_id) {
@@ -211,156 +319,6 @@ const Footer = () => {
     }
     return null;
   }, [isGroupChat, isDirectChat, current_room, current_conversation, room_id]);
-
-  // 🆕 Kiểm tra E2EE status
-  const currentChat = getCurrentChat();
-  const friendId = currentChat?.user_id;
-  const isFriendE2EEEnabled = friendsE2EEStatus[friendId] || false;
-  const isBothE2EEEnabled = e2eeEnabled && isFriendE2EEEnabled;
-  const hasFriendKey = getFriendKey ? getFriendKey(friendId) : null;
-
-  // 🆕 THÊM: Socket event listeners cho direct messages
-  useEffect(() => {
-    const socket = getSocket();
-    if (!socket || !user_id) return;
-
-    // Listener cho tin nhắn direct mới
-    const handleNewDirectMessage = (data) => {
-      console.log("📨 Footer: Received new direct message:", data);
-
-      const currentChat = getCurrentChat();
-      if (!currentChat || currentChat.type !== "direct") {
-        console.log("❌ Not in direct chat or no current chat");
-        return;
-      }
-
-      // Kiểm tra xem tin nhắn có thuộc conversation hiện tại không
-      if (data.conversation_id === currentChat.id) {
-        console.log(
-          "✅ Adding realtime direct message to current conversation"
-        );
-
-        const isOwnMessage = data.from === user_id;
-
-        // 🆕 XỬ LÝ replyTo.sender
-        let processedReplyTo = data.replyTo;
-        if (processedReplyTo && typeof processedReplyTo.sender === "string") {
-          processedReplyTo = {
-            ...processedReplyTo,
-            sender: {
-              keycloakId: processedReplyTo.sender,
-              username: "Unknown",
-            },
-          };
-        }
-
-        const messageData = {
-          id: data._id || data.id,
-          _id: data._id || data.id,
-          type: "msg",
-          subtype: data.type || "text",
-          message: data.message || data.content,
-          content: data.message || data.content,
-          incoming: !isOwnMessage,
-          outgoing: isOwnMessage,
-          time: data.time || formatMessageTime(data.createdAt || new Date()),
-          createdAt: data.createdAt || new Date(),
-          attachments: data.attachments || [],
-          sender: data.sender || {
-            keycloakId: data.from,
-            username: data.sender?.username || "Unknown",
-          },
-          replyTo: processedReplyTo,
-          isOptimistic: false,
-          tempId: data.tempId || data.messageId,
-          // 🆕 Thêm E2EE flag
-          isEncrypted: data.isEncrypted || false,
-          ciphertext: data.ciphertext,
-          iv: data.iv,
-          keyId: data.keyId,
-        };
-
-        console.log("🔄 Footer: Processing direct message -", {
-          conversation_id: data.conversation_id,
-          message_id: messageData.id,
-          isOwnMessage,
-          hasReply: !!data.replyTo,
-          isEncrypted: data.isEncrypted,
-        });
-
-        // 🆕 Replace optimistic message với real message từ server
-        if (data.tempId || data.messageId) {
-          console.log("🔄 Replacing optimistic message:", {
-            tempId: data.tempId || data.messageId,
-            realId: messageData.id,
-          });
-
-          // Nếu có action updateDirectMessage, sử dụng nó
-          if (updateDirectMessage) {
-            dispatch(
-              updateDirectMessage({
-                tempId: data.tempId || data.messageId,
-                realMessage: messageData,
-                conversation_id: currentChat.id,
-              })
-            );
-          } else {
-            // Fallback: sử dụng addDirectMessage với replace flag
-            dispatch(
-              addDirectMessage({
-                message: messageData,
-                conversation_id: currentChat.id,
-                currentUserId: user_id,
-                isGroup: false,
-                isOptimistic: false,
-                replaceOptimistic: true,
-              })
-            );
-          }
-        } else {
-          // Tin nhắn mới từ người khác
-          dispatch(
-            addDirectMessage({
-              message: messageData,
-              conversation_id: currentChat.id,
-              currentUserId: user_id,
-              isGroup: false,
-              isOptimistic: false,
-            })
-          );
-        }
-      }
-    };
-
-    // Listener cho direct reply messages
-    const handleDirectReplyMessage = (data) => {
-      console.log("📨 Footer: Received direct reply message:", data);
-      handleNewDirectMessage(data);
-    };
-
-    // 🆕 Listener cho encrypted messages
-    const handleEncryptedMessage = (data) => {
-      console.log("🔐 Footer: Received encrypted message:", data);
-
-      // Xử lý encrypted message tương tự như regular message
-      handleNewDirectMessage({
-        ...data,
-        isEncrypted: true,
-      });
-    };
-
-    socket.on("text_message", handleNewDirectMessage);
-    socket.on("text_message_reply", handleDirectReplyMessage);
-    socket.on("encrypted_message", handleEncryptedMessage);
-    socket.on("encrypted_message_reply", handleEncryptedMessage);
-
-    return () => {
-      socket.off("text_message", handleNewDirectMessage);
-      socket.off("text_message_reply", handleDirectReplyMessage);
-      socket.off("encrypted_message", handleEncryptedMessage);
-      socket.off("encrypted_message_reply", handleEncryptedMessage);
-    };
-  }, [getCurrentChat, user_id, dispatch]);
 
   // 🆕 Setup reply listener từ parent component
   useEffect(() => {
@@ -387,13 +345,23 @@ const Footer = () => {
 
   // 🆕 Handle initiate key exchange
   const handleInitiateKeyExchange = useCallback(async () => {
-    if (!friendId) {
-      console.error("❌ No friend ID available");
+    if (!peerId) {
+      console.error("❌ [Footer] No peer ID available");
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "No peer available for key exchange",
+        })
+      );
       return;
     }
 
     try {
-      const success = await initiateKeyExchange(friendId);
+      setIsEncrypting(true);
+      console.log("🔄 [Footer] Initiating key exchange with:", peerId);
+
+      const success = await initiateKeyExchange();
+
       if (success) {
         dispatch(
           showSnackbar({
@@ -401,20 +369,49 @@ const Footer = () => {
             message: "Key exchange initiated successfully",
           })
         );
+
+        // Kiểm tra lại status sau khi exchange
+        setTimeout(() => {
+          checkEncryptionStatus();
+        }, 1500);
+      } else {
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: "Failed to initiate key exchange",
+          })
+        );
       }
     } catch (error) {
-      console.error("❌ Error initiating key exchange:", error);
+      console.error("❌ [Footer] Error initiating key exchange:", error);
       dispatch(
         showSnackbar({
           severity: "error",
-          message: "Failed to initiate key exchange",
+          message: `Key exchange error: ${error.message}`,
         })
       );
+    } finally {
+      setIsEncrypting(false);
     }
-  }, [friendId, initiateKeyExchange, dispatch]);
+  }, [peerId, initiateKeyExchange, dispatch, checkEncryptionStatus]);
 
-  const handleSendMessage = useCallback(() => {
-    console.log("📤 Attempting to send message...", { replyTo });
+  // 🆕 Enhanced handleSendMessage với E2EE - VERSION FIXED
+  // 🆕 Enhanced handleSendMessage với E2EE - VERSION FIXED
+  const handleSendMessage = useCallback(async () => {
+    console.log("📤 [Footer] Attempting to send message...", {
+      peerId,
+      room_id,
+      isDirectChat,
+      isGroupChat,
+      current_conversation_name: current_conversation?.name,
+      user_id,
+      e2eeStatus,
+      isEncrypted,
+      canEncrypt,
+      hasPeerKey,
+      autoEncryptionReady: autoEncryption?.isReady?.(),
+      valueLength: value.length,
+    });
 
     const currentChat = getCurrentChat();
 
@@ -435,135 +432,109 @@ const Footer = () => {
 
     const msgId = uuidv4();
     const timestamp = new Date().toISOString();
-
     const isReply = !!replyTo;
-    const messageType = isReply
-      ? "reply"
-      : containsUrl(value)
-      ? "link"
-      : "text";
 
-    // 🆕 XÁC ĐỊNH CÓ GỬI ENCRYPTED MESSAGE HAY KHÔNG
+    // 🆕 XÁC ĐỊNH outgoing NGAY TỪ ĐẦU
+    const isOutgoing = true; // Tin nhắn từ chính mình gửi đi
+
+    // 🆕 QUYẾT ĐỊNH CÓ GỬI ENCRYPTED MESSAGE HAY KHÔNG
     const shouldSendEncrypted =
-      !isGroupChat && // Chỉ cho direct messages
-      isBothE2EEEnabled && // Cả hai đều bật E2EE
-      hasFriendKey; // Đã có key của bạn
+      isDirectChat && // Chỉ cho direct messages
+      peerId && // Có peerId hợp lệ
+      peerId !== user_id && // PeerId phải khác userId của mình
+      canEncrypt && // Có thể mã hóa cho peer này
+      hasPeerKey && // Có public key của peer
+      autoEncryption?.isReady?.(); // Auto encryption ready
 
-    if (isGroupChat) {
-      // GROUP MESSAGE - code giữ nguyên
-      const optimisticMessage = {
-        id: msgId,
-        _id: msgId,
-        type: "msg",
-        subtype: messageType,
-        message: value,
-        content: value,
-        incoming: false,
-        outgoing: true,
-        time: formatMessageTime(timestamp),
-        createdAt: timestamp,
-        attachments: [],
-        sender: {
-          keycloakId: user_id,
-          username: keycloak?.tokenParsed?.preferred_username || "You",
-        },
-        isOptimistic: true,
-        tempId: msgId,
-        ...(isReply && {
-          replyTo: {
-            id: replyTo.id || replyTo._id,
-            content: replyTo.content || replyTo.message,
-            sender: replyTo.sender,
-          },
-        }),
-      };
+    console.log("🔐 [Footer] Encryption decision:", {
+      shouldSendEncrypted,
+      isDirectChat,
+      peerId,
+      peerIdValid: peerId && peerId !== user_id,
+      canEncrypt,
+      hasPeerKey,
+      autoEncryptionReady: autoEncryption?.isReady?.(),
+    });
 
-      dispatch(
-        addGroupMessage({
-          message: optimisticMessage,
-          room_id: currentChat.id,
-          isOptimistic: true,
-          tempId: msgId,
-        })
-      );
+    try {
+      setIsEncrypting(true);
 
-      const socketEvent = isReply ? "group_message_reply" : "group_message";
-      const socketData = isReply
-        ? {
-            roomId: currentChat.id,
-            message: value,
-            sender: {
-              keycloakId: user_id,
-              username: keycloak?.tokenParsed?.preferred_username || "Unknown",
-            },
-            type: messageType,
-            timestamp: timestamp,
-            messageId: msgId,
-            replyTo: replyTo.id || replyTo._id,
-            replyContent: replyTo.content || replyTo.message,
-            replySender: (() => {
-              if (typeof replyTo.sender === "string") {
-                return {
-                  keycloakId: replyTo.sender,
-                  username: "Unknown",
-                };
-              }
-              if (replyTo.sender && typeof replyTo.sender === "object") {
-                return {
-                  keycloakId:
-                    replyTo.sender.keycloakId || replyTo.sender.id || "unknown",
-                  username: replyTo.sender.username || "Unknown",
-                  ...replyTo.sender,
-                };
-              }
-              return {
-                keycloakId: "unknown",
-                username: "Unknown",
-              };
-            })(),
-          }
-        : {
-            roomId: currentChat.id,
-            message: value,
-            sender: {
-              keycloakId: user_id,
-              username: keycloak?.tokenParsed?.preferred_username || "Unknown",
-            },
-            type: messageType,
-            timestamp: timestamp,
-            messageId: msgId,
-          };
-
-      const socket = getSocket();
-      socket.emit(socketEvent, socketData);
-      console.log(`✅ Group ${isReply ? "reply " : ""}message sent via socket`);
-    } else {
-      // DIRECT MESSAGE - CÓ/HOẶC KHÔNG REPLY
-      if (!currentChat.user_id) {
-        console.log("❌ No user_id in conversation");
-        return;
-      }
-
-      // 🆕 GỬI ENCRYPTED MESSAGE
       if (shouldSendEncrypted) {
-        console.log("🔐 Sending encrypted message...");
+        console.log("🔐 [Footer] Sending encrypted message...");
 
-        // Tạo optimistic encrypted message
+        // THỬ MÃ HÓA TRƯỚC KHI GỬI
+        let encryptionResult = null;
+        let fallbackToPlaintext = false;
+
+        try {
+          console.log(`🔐 [Footer] Encrypting message for peer ${peerId}...`);
+          encryptionResult = await autoEncryption.encryptMessage(
+            value.trim(),
+            peerId
+          );
+
+          if (!encryptionResult.success) {
+            console.warn(
+              `⚠️ [Footer] Encryption failed, falling back to plaintext:`,
+              encryptionResult.error
+            );
+            fallbackToPlaintext = true;
+          } else {
+            console.log(`✅ [Footer] Message encrypted successfully:`, {
+              ciphertextLength: encryptionResult.ciphertext?.length,
+              keyId: encryptionResult.keyId,
+              algorithm: encryptionResult.algorithm,
+              peerFingerprint: encryptionResult.peerFingerprint,
+            });
+          }
+        } catch (encryptError) {
+          console.error(
+            `❌ [Footer] Encryption error, falling back to plaintext:`,
+            encryptError
+          );
+          fallbackToPlaintext = true;
+        }
+
+        if (fallbackToPlaintext || !encryptionResult) {
+          console.log(`📝 [Footer] Falling back to plaintext message...`);
+          sendNormalMessage();
+          return;
+        }
+
+        // Tạo optimistic encrypted message - THÊM outgoing
         const optimisticEncryptedMessage = {
+          _id: msgId,
           id: msgId,
           type: "msg",
-          subtype: messageType,
+          subtype: isReply ? "reply" : "text",
           message: "🔒 Encrypted message",
           content: "🔒 Encrypted message",
-          incoming: false,
-          outgoing: true,
-          time: formatMessageTime(timestamp),
+          from: user_id,
+          to: peerId,
           createdAt: timestamp,
+          updatedAt: timestamp,
           attachments: [],
           isOptimistic: true,
           tempId: msgId,
           isEncrypted: true,
           encryptionStatus: "encrypting",
+          ciphertext: encryptionResult.ciphertext,
+          iv: encryptionResult.iv,
+          keyId: encryptionResult.keyId,
+          algorithm: encryptionResult.algorithm,
+          peerFingerprint: encryptionResult.peerFingerprint,
+          encryptionData: {
+            ciphertext: encryptionResult.ciphertext,
+            iv: encryptionResult.iv,
+            keyId: encryptionResult.keyId,
+            algorithm: encryptionResult.algorithm,
+          },
+          // 🆕 THÊM outgoing property
+          outgoing: isOutgoing,
+          sender: {
+            keycloakId: user_id,
+            username: keycloak?.tokenParsed?.preferred_username || "You",
+          },
           ...(isReply && {
             replyTo: {
               id: replyTo.id || replyTo._id,
@@ -573,6 +544,7 @@ const Footer = () => {
           }),
         };
 
+        // Thêm vào Redux
         dispatch(
           addDirectMessage({
             message: optimisticEncryptedMessage,
@@ -584,72 +556,115 @@ const Footer = () => {
           })
         );
 
-        // Gửi encrypted message thông qua E2EE service
-        sendEncryptedMessage(
-          currentChat.id,
-          value,
-          currentChat.user_id,
-          replyTo?.id || replyTo?._id
-        )
-          .then((result) => {
-            console.log("✅ Encrypted message sent successfully:", result);
+        // Gửi thông qua socket với dữ liệu đã mã hóa
+        const socket = getSocket();
+        const socketEvent = isReply
+          ? "send_encrypted_message_reply"
+          : "send_encrypted_message";
 
-            // Cập nhật message với real data
-            const realMessage = {
-              ...optimisticEncryptedMessage,
-              isOptimistic: false,
-              encryptionStatus: "encrypted",
-              messageId: result.messageId || result.id,
-            };
+        const socketData = {
+          id: msgId,
+          conversation_id: currentChat.id,
+          from: user_id,
+          to: peerId,
+          ciphertext: encryptionResult.ciphertext,
+          iv: encryptionResult.iv,
+          keyId: encryptionResult.keyId,
+          algorithm: encryptionResult.algorithm,
+          peerFingerprint: encryptionResult.peerFingerprint,
+          timestamp: timestamp,
+          type: "text",
+          isEncrypted: true,
+          ...(isReply && {
+            replyTo: replyTo.id || replyTo._id,
+            replyContent: replyTo.content || replyTo.message,
+            replySender: processReplySender(replyTo.sender),
+          }),
+        };
 
-            if (updateDirectMessage) {
-              dispatch(
-                updateDirectMessage({
-                  tempId: msgId,
-                  realMessage: realMessage,
-                  conversation_id: currentChat.id,
-                })
-              );
-            }
-          })
-          .catch((error) => {
-            console.error("❌ Failed to send encrypted message:", error);
+        console.log(`📤 [Footer] Sending encrypted message via socket:`, {
+          roomId: currentChat.id,
+          event: socketEvent,
+          to: peerId,
+          ciphertextLength: encryptionResult.ciphertext?.length,
+          hasIV: !!encryptionResult.iv,
+          keyId: encryptionResult.keyId,
+        });
 
-            // Fallback to normal message
+        socket.emit(socketEvent, socketData, (response) => {
+          console.log("📥 [Footer] Socket response:", response);
+
+          if (response?.status === "success") {
+            // Update message in Redux với response từ server
             dispatch(
-              showSnackbar({
-                severity: "warning",
-                message: "Failed to encrypt. Sending as regular message.",
+              updateDirectMessage({
+                tempId: msgId,
+                update: {
+                  isOptimistic: false,
+                  _id: response.data?._id || msgId,
+                  encryptionStatus: "encrypted",
+                  delivered: true,
+                  // 🆕 GIỮ LẠI outgoing property
+                  outgoing: isOutgoing,
+                },
+                conversation_id: currentChat.id,
               })
             );
+          }
+        });
 
-            // Gửi tin nhắn thông thường
-            sendNormalMessage();
-          });
+        // Show success notification
+        dispatch(
+          showSnackbar({
+            severity: "success",
+            message: "🔒 Encrypted message sent",
+            autoHideDuration: 2000,
+          })
+        );
       } else {
-        // GỬI NORMAL MESSAGE
+        // GỬI NORMAL MESSAGE (plaintext hoặc group)
+        console.log("📝 [Footer] Sending normal message...");
         sendNormalMessage();
       }
+
+      // Reset state
+      setReplyTo(null);
+      setValue("");
+    } catch (error) {
+      console.error("❌ [Footer] Send message error:", error);
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: `Failed to send message: ${error.message}`,
+        })
+      );
+    } finally {
+      setIsEncrypting(false);
     }
 
-    // Reset state
-    setReplyTo(null);
-    setValue("");
-
-    // 🆕 Hàm gửi tin nhắn thông thường
+    // 🆕 Hàm helper để gửi tin nhắn bình thường - CẬP NHẬT
     function sendNormalMessage() {
       const optimisticMessage = {
+        _id: msgId,
         id: msgId,
         type: "msg",
-        subtype: messageType,
+        subtype: isReply ? "reply" : "text",
         message: value,
-        incoming: false,
-        outgoing: true,
-        time: formatMessageTime(timestamp),
+        content: value,
+        from: user_id,
+        to: isGroupChat ? null : currentChat.user_id,
         createdAt: timestamp,
+        updatedAt: timestamp,
         attachments: [],
         isOptimistic: true,
         tempId: msgId,
+        isEncrypted: false,
+        // 🆕 THÊM outgoing và sender properties
+        outgoing: isOutgoing,
+        sender: {
+          keycloakId: user_id,
+          username: keycloak?.tokenParsed?.preferred_username || "You",
+        },
         ...(isReply && {
           replyTo: {
             id: replyTo.id || replyTo._id,
@@ -659,45 +674,92 @@ const Footer = () => {
         }),
       };
 
-      dispatch(
-        addDirectMessage({
-          message: optimisticMessage,
-          conversation_id: currentChat.id,
-          currentUserId: user_id,
-          isGroup: false,
-          isOptimistic: true,
-          tempId: msgId,
-        })
-      );
-
-      const socketEvent = isReply ? "text_message_reply" : "text_message";
-      const socketData = isReply
-        ? {
-            id: msgId,
-            message: linkify(value),
-            from: user_id,
-            to: currentChat.user_id,
+      // Thêm vào Redux
+      if (isGroupChat) {
+        dispatch(
+          addGroupMessage({
+            message: optimisticMessage,
+            room_id: currentChat.id,
+            isOptimistic: true,
+            tempId: msgId,
+          })
+        );
+      } else {
+        dispatch(
+          addDirectMessage({
+            message: optimisticMessage,
             conversation_id: currentChat.id,
-            type: messageType,
-            replyTo: replyTo.id || replyTo._id,
-            replyContent: replyTo.content || replyTo.message,
-            replySender: replyTo.sender,
-          }
-        : {
-            id: msgId,
-            message: linkify(value),
-            from: user_id,
-            to: currentChat.user_id,
-            conversation_id: currentChat.id,
-            type: messageType,
-          };
+            currentUserId: user_id,
+            isGroup: false,
+            isOptimistic: true,
+            tempId: msgId,
+          })
+        );
+      }
 
+      // Gửi qua socket
       const socket = getSocket();
-      console.log(`🔌 Emitting ${socketEvent}:`, socketData);
-      socket.emit(socketEvent, socketData);
-      console.log(
-        `✅ Direct ${isReply ? "reply " : ""}message sent via socket`
-      );
+      if (isGroupChat) {
+        const socketEvent = isReply ? "group_message_reply" : "group_message";
+        const socketData = isReply
+          ? {
+              roomId: currentChat.id,
+              message: value,
+              sender: {
+                keycloakId: user_id,
+                username:
+                  keycloak?.tokenParsed?.preferred_username || "Unknown",
+              },
+              type: "text",
+              timestamp: timestamp,
+              messageId: msgId,
+              replyTo: replyTo.id || replyTo._id,
+              replyContent: replyTo.content || replyTo.message,
+              replySender: processReplySender(replyTo.sender),
+            }
+          : {
+              roomId: currentChat.id,
+              message: value,
+              sender: {
+                keycloakId: user_id,
+                username:
+                  keycloak?.tokenParsed?.preferred_username || "Unknown",
+              },
+              type: "text",
+              timestamp: timestamp,
+              messageId: msgId,
+            };
+
+        socket.emit(socketEvent, socketData);
+        console.log(`✅ [Footer] Group ${isReply ? "reply " : ""}message sent`);
+      } else {
+        const socketEvent = isReply ? "text_message_reply" : "text_message";
+        const socketData = isReply
+          ? {
+              id: msgId,
+              message: linkify(value),
+              from: user_id,
+              to: currentChat.user_id,
+              conversation_id: currentChat.id,
+              type: "text",
+              replyTo: replyTo.id || replyTo._id,
+              replyContent: replyTo.content || replyTo.message,
+              replySender: processReplySender(replyTo.sender),
+            }
+          : {
+              id: msgId,
+              message: linkify(value),
+              from: user_id,
+              to: currentChat.user_id,
+              conversation_id: currentChat.id,
+              type: "text",
+            };
+
+        socket.emit(socketEvent, socketData);
+        console.log(
+          `✅ [Footer] Direct ${isReply ? "reply " : ""}message sent`
+        );
+      }
     }
   }, [
     value,
@@ -706,10 +768,13 @@ const Footer = () => {
     dispatch,
     user_id,
     isGroupChat,
+    isDirectChat,
     keycloak,
-    isBothE2EEEnabled,
-    hasFriendKey,
-    sendEncryptedMessage,
+    peerId,
+    autoEncryption,
+    canEncrypt,
+    hasPeerKey,
+    current_conversation,
   ]);
 
   const handleEmojiClick = useCallback(
@@ -758,7 +823,27 @@ const Footer = () => {
     );
   };
 
-  if (!currentChat) {
+  const processReplySender = (sender) => {
+    if (typeof sender === "string") {
+      return {
+        keycloakId: sender,
+        username: "Unknown",
+      };
+    }
+    if (sender && typeof sender === "object") {
+      return {
+        keycloakId: sender.keycloakId || sender.id || "unknown",
+        username: sender.username || "Unknown",
+        ...sender,
+      };
+    }
+    return {
+      keycloakId: "unknown",
+      username: "Unknown",
+    };
+  };
+
+  if (!getCurrentChat()) {
     return (
       <Box
         sx={{
@@ -774,61 +859,138 @@ const Footer = () => {
     );
   }
 
-  // 🆕 Render E2EE status indicator
+  const currentChat = getCurrentChat();
+
+  // 🆕 Render E2EE status indicator - UPDATED
   const renderE2EEStatus = () => {
     if (isGroupChat) {
-      return null; // E2EE không hỗ trợ group chat
+      return (
+        <Tooltip title="Group chats use server-side encryption">
+          <Box sx={{ mb: 1 }}>
+            <EncryptionBadge
+              status="unavailable"
+              peerName={currentChat.name}
+              size="small"
+            />
+          </Box>
+        </Tooltip>
+      );
+    }
+
+    // For direct chats
+    if (!peerId || peerId === user_id) {
+      return (
+        <Alert severity="info" sx={{ mb: 1, py: 0 }}>
+          Select a conversation to enable encryption
+        </Alert>
+      );
+    }
+
+    if (isKeyExchangeNeeded) {
+      return (
+        <Alert
+          severity="warning"
+          sx={{ mb: 1, py: 0 }}
+          action={
+            <Button
+              size="small"
+              onClick={handleInitiateKeyExchange}
+              disabled={isEncrypting}
+              startIcon={<Key size={14} />}
+            >
+              {isEncrypting ? "Exchanging..." : "Exchange Keys"}
+            </Button>
+          }
+        >
+          Key exchange needed for end-to-end encryption
+          {e2eeError && (
+            <Box
+              component="span"
+              sx={{
+                fontSize: "0.85em",
+                display: "block",
+                mt: 0.5,
+                color: "warning.dark",
+              }}
+            >
+              {e2eeError}
+            </Box>
+          )}
+        </Alert>
+      );
+    }
+
+    if (isEstablishing) {
+      return (
+        <Alert severity="info" sx={{ mb: 1, py: 0 }}>
+          Establishing secure connection...
+          <CircularProgress size={16} sx={{ ml: 1 }} />
+        </Alert>
+      );
+    }
+
+    if (canEncrypt && isEncrypted) {
+      return (
+        <Tooltip
+          title={`End-to-end encrypted with ${currentChat.name} (${peerFingerprint})`}
+        >
+          <Box sx={{ mb: 1 }}>
+            <EncryptionBadge
+              status="encrypted"
+              peerName={currentChat.name}
+              fingerprint={peerFingerprint}
+              size="small"
+            />
+          </Box>
+        </Tooltip>
+      );
+    }
+
+    if (canEncrypt && !isEncrypted) {
+      return (
+        <Alert severity="info" sx={{ mb: 1, py: 0 }}>
+          Ready to encrypt messages with {currentChat.name}
+          <Button
+            size="small"
+            sx={{ ml: 1 }}
+            onClick={checkEncryptionStatus}
+            startIcon={<Shield size={14} />}
+          >
+            Check Status
+          </Button>
+        </Alert>
+      );
     }
 
     return (
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-        {!e2eeEnabled ? (
-          <Chip
-            icon={<LockOpen size={16} />}
-            label="E2EE Disabled"
-            color="error"
-            size="small"
-            variant="outlined"
-          />
-        ) : !isFriendE2EEEnabled ? (
-          <Chip
-            icon={<LockOpen size={16} />}
-            label="Friend E2EE Disabled"
-            color="warning"
-            size="small"
-            variant="outlined"
-          />
-        ) : !hasFriendKey ? (
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Chip
-              icon={<Key size={16} />}
-              label="Need Key Exchange"
-              color="info"
-              size="small"
-              variant="outlined"
-            />
-            <Button
-              size="small"
-              startIcon={<Key size={14} />}
-              onClick={handleInitiateKeyExchange}
-              variant="contained"
-              sx={{ height: 24 }}
-            >
-              Exchange Keys
-            </Button>
-          </Stack>
-        ) : (
-          <Chip
-            icon={<Lock size={16} />}
-            label="E2EE Active"
-            color="success"
-            size="small"
-            variant="outlined"
-          />
+      <Alert severity="info" sx={{ mb: 1, py: 0 }}>
+        Encryption not available for this chat
+        {e2eeError && (
+          <Box
+            component="span"
+            sx={{ fontSize: "0.85em", display: "block", mt: 0.5 }}
+          >
+            Error: {e2eeError}
+          </Box>
         )}
-      </Stack>
+      </Alert>
     );
   };
+
+  // 🆕 Debug log
+  console.log("🔐 [Footer] E2EE Debug:", {
+    peerId,
+    user_id,
+    areSame: peerId === user_id,
+    isEncrypted,
+    canEncrypt,
+    hasPeerKey,
+    e2eeStatus,
+    isKeyExchangeNeeded,
+    e2eeError,
+    autoEncryptionReady: autoEncryption?.isReady?.(),
+    currentChatName: currentChat?.name,
+  });
 
   return (
     <Box sx={{ position: "relative" }}>
@@ -841,9 +1003,10 @@ const Footer = () => {
               ? "#F8FAFF"
               : theme.palette.background.paper,
           boxShadow: "0px 0px 2px rgba(0, 0, 0, 0.25)",
-          borderTop: isBothE2EEEnabled
-            ? `2px solid ${theme.palette.success.main}`
-            : "none",
+          borderTop:
+            canEncrypt && isEncrypted
+              ? `2px solid ${theme.palette.success.main}`
+              : "none",
         }}
       >
         {/* 🆕 E2EE Status Indicator */}
@@ -877,9 +1040,15 @@ const Footer = () => {
               handleSendMessage={handleSendMessage}
               replyTo={replyTo}
               onCancelReply={handleCancelReply}
-              isE2EEEnabled={e2eeEnabled}
-              isFriendE2EEEnabled={isFriendE2EEEnabled}
+              // 🆕 E2EE Props
+              isEncrypted={isEncrypted}
+              isEncryptionReady={e2eeStatusReady}
+              isEncrypting={isEncrypting}
+              encryptionStatus={e2eeStatus}
+              peerName={currentChat?.name}
               onInitiateKeyExchange={handleInitiateKeyExchange}
+              canEncrypt={canEncrypt}
+              isKeyExchangeNeeded={isKeyExchangeNeeded}
             />
           </Stack>
 
@@ -889,9 +1058,23 @@ const Footer = () => {
               width: 48,
               backgroundColor: theme.palette.primary.main,
               borderRadius: 1.5,
-              opacity: isBothE2EEEnabled && hasFriendKey ? 1 : 0.8,
+              opacity: canEncrypt && isEncrypted ? 1 : 0.8,
+              position: "relative",
             }}
           >
+            {canEncrypt && isEncrypted && (
+              <Badge
+                color="success"
+                variant="dot"
+                sx={{
+                  position: "absolute",
+                  top: -4,
+                  right: -4,
+                  zIndex: 1,
+                }}
+              />
+            )}
+
             <Stack
               sx={{ height: "100%" }}
               alignItems="center"
@@ -899,17 +1082,25 @@ const Footer = () => {
             >
               <Tooltip
                 title={
-                  isBothE2EEEnabled && hasFriendKey
-                    ? "Send encrypted message"
+                  canEncrypt && isEncrypted
+                    ? `Send encrypted message to ${currentChat.name}`
                     : "Send message"
                 }
               >
-                <IconButton
-                  onClick={handleSendMessage}
-                  disabled={!currentChat || !user_id || !value.trim()}
-                >
-                  <PaperPlaneTilt color="#fff" />
-                </IconButton>
+                <span>
+                  <IconButton
+                    onClick={handleSendMessage}
+                    disabled={
+                      !currentChat || !user_id || !value.trim() || isEncrypting
+                    }
+                  >
+                    {isEncrypting ? (
+                      <CircularProgress size={24} color="inherit" />
+                    ) : (
+                      <PaperPlaneTilt color="#fff" />
+                    )}
+                  </IconButton>
+                </span>
               </Tooltip>
             </Stack>
           </Box>
