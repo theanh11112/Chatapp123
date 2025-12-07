@@ -1,149 +1,150 @@
 import { EventEmitter } from "events";
+import e2eeService from "../utils/e2ee";
 import { getSocket } from "../../socket";
 import { store } from "../../redux/store";
 import { showSnackbar } from "../../redux/slices/app";
 
+/**
+ * Key Exchange Protocol Service
+ * Manages key exchange initiation, confirmation, and verification
+ */
+
 class KeyExchangeService extends EventEmitter {
   constructor() {
     super();
-    this.pendingExchanges = new Map(); // exchangeId -> { peerId, timestamp, status }
-    this.completedExchanges = new Map(); // peerId -> { fingerprint, verified, timestamp }
-    this.retryCounts = new Map(); // peerId -> retryCount
+    this.pendingExchanges = new Map(); // exchangeId -> exchange data
+    this.completedExchanges = new Map(); // peerId -> exchange data
+    this.retryAttempts = new Map(); // peerId -> retry count
     this.maxRetries = 3;
-    this.retryDelay = 5000; // 5 seconds
 
-    console.log("🔑 [KeyExchangeService] Initialized");
+    console.log("🤝 [KeyExchangeService] Initialized");
   }
 
-  // Initiate key exchange with a peer
-  async initiate(peerId) {
-    console.log(
-      `🤝 [KeyExchangeService] Initiating key exchange with ${peerId}`
-    );
+  // ======================= KEY EXCHANGE INITIATION =======================
 
-    const socket = getSocket();
-    if (!socket || !socket.connected) {
-      console.error("❌ [KeyExchangeService] Socket not connected");
-      throw new Error("Socket not connected");
-    }
-
+  async initiateExchange(peerId) {
     try {
-      // Check if already exchanging
-      const existingExchange = Array.from(this.pendingExchanges.values()).find(
-        (ex) => ex.peerId === peerId && ex.status === "pending"
+      console.group(
+        `🤝 [KeyExchangeService] Initiating exchange with ${peerId}`
       );
 
-      if (existingExchange) {
-        console.log(
-          `⚠️ [KeyExchangeService] Already exchanging keys with ${peerId}`
-        );
+      // Check if already exchanging
+      if (this.hasPendingExchange(peerId)) {
+        const pending = this.getPendingExchange(peerId);
+        console.log("⚠️ Exchange already pending:", pending.exchangeId);
         return {
           success: false,
-          error: "Key exchange already in progress",
-          exchangeId: existingExchange.exchangeId,
+          error: "Exchange already in progress",
+          exchangeId: pending.exchangeId,
         };
       }
 
-      // Check retry count
-      const retryCount = this.retryCounts.get(peerId) || 0;
+      // Check retry limit
+      const retryCount = this.retryAttempts.get(peerId) || 0;
       if (retryCount >= this.maxRetries) {
-        console.error(
-          `❌ [KeyExchangeService] Max retries reached for ${peerId}`
-        );
         throw new Error(`Max retry attempts (${this.maxRetries}) reached`);
       }
 
-      // Emit initiate event
-      const response = await new Promise((resolve) => {
-        socket.emit("initiate_key_exchange", { peerId }, (res) => {
-          console.log("📨 [KeyExchangeService] Initiate response:", res);
-          resolve(res);
-        });
+      // Get socket
+      const socket = getSocket();
+      if (!socket || !socket.connected) {
+        throw new Error("Socket not connected");
+      }
+
+      // Send initiation request
+      const response = await new Promise((resolve, reject) => {
+        socket.emit(
+          "initiate_key_exchange",
+          {
+            peerId,
+            timestamp: Date.now(),
+            initiatorFingerprint: async () =>
+              await e2eeService.getMyFingerprint(),
+          },
+          (response) => {
+            if (response?.success) {
+              resolve(response);
+            } else {
+              reject(new Error(response?.error || "Initiation failed"));
+            }
+          }
+        );
       });
 
-      if (response?.success) {
-        const { exchangeId, fingerprint } = response.data;
+      const { exchangeId, peerFingerprint } = response.data;
 
-        // Store pending exchange
-        this.pendingExchanges.set(exchangeId, {
-          peerId,
-          fingerprint,
-          timestamp: new Date(),
-          status: "pending",
-        });
+      // Store pending exchange
+      this.pendingExchanges.set(exchangeId, {
+        exchangeId,
+        peerId,
+        peerFingerprint,
+        status: "pending",
+        initiatedAt: new Date(),
+        initiator: true,
+      });
 
-        // Update retry count
-        this.retryCounts.set(peerId, retryCount + 1);
+      // Update retry count
+      this.retryAttempts.set(peerId, retryCount + 1);
 
-        // Emit event
-        this.emit("exchangeInitiated", {
-          exchangeId,
-          peerId,
-          fingerprint,
-          timestamp: new Date(),
-        });
+      console.log("✅ Exchange initiated:", {
+        exchangeId,
+        peerId,
+        peerFingerprint,
+      });
 
-        console.log(`✅ [KeyExchangeService] Key exchange initiated:`, {
-          exchangeId,
-          peerId,
-          fingerprint,
-        });
+      // Show notification
+      store.dispatch(
+        showSnackbar({
+          severity: "info",
+          message: `Initiating key exchange`,
+          autoHideDuration: 3000,
+        })
+      );
 
-        // Show notification
-        store.dispatch(
-          showSnackbar({
-            severity: "info",
-            message: `Initiating key exchange with user`,
-            autoHideDuration: 3000,
-          })
-        );
+      this.emit("exchangeInitiated", {
+        exchangeId,
+        peerId,
+        peerFingerprint,
+        timestamp: new Date(),
+      });
 
-        return {
-          success: true,
-          exchangeId,
-          fingerprint,
-          data: response.data,
-        };
-      } else {
-        console.error(
-          `❌ [KeyExchangeService] Initiate failed:`,
-          response?.error
-        );
-        throw new Error(response?.error || "Key exchange initiation failed");
-      }
+      console.groupEnd();
+      return {
+        success: true,
+        exchangeId,
+        peerFingerprint,
+        data: response.data,
+      };
     } catch (error) {
-      console.error(`❌ [KeyExchangeService] Initiate exception:`, error);
+      console.error(
+        `❌ [KeyExchangeService] Initiation failed for ${peerId}:`,
+        error
+      );
 
-      // Auto-retry if not max retries
-      const retryCount = this.retryCounts.get(peerId) || 0;
+      // Auto-retry if under limit
+      const retryCount = this.retryAttempts.get(peerId) || 0;
       if (retryCount < this.maxRetries) {
-        console.log(
-          `🔄 [KeyExchangeService] Scheduling retry ${
-            retryCount + 1
-          } for ${peerId}`
-        );
-        setTimeout(
-          () => this.retryInitiate(peerId),
-          this.retryDelay * (retryCount + 1)
-        );
+        console.log(`🔄 Scheduling retry ${retryCount + 1} for ${peerId}`);
+        setTimeout(() => this.retryInitiate(peerId), 5000 * (retryCount + 1));
       }
 
+      console.groupEnd();
       throw error;
     }
   }
 
-  // Retry initiate
   async retryInitiate(peerId) {
-    console.log(`🔄 [KeyExchangeService] Retrying key exchange with ${peerId}`);
-
     try {
-      return await this.initiate(peerId);
+      console.log(`🔄 [KeyExchangeService] Retrying exchange with ${peerId}`);
+      return await this.initiateExchange(peerId);
     } catch (error) {
-      console.error(`❌ [KeyExchangeService] Retry failed:`, error);
+      console.error(
+        `❌ [KeyExchangeService] Retry failed for ${peerId}:`,
+        error
+      );
 
-      const retryCount = this.retryCounts.get(peerId) || 0;
+      const retryCount = this.retryAttempts.get(peerId) || 0;
       if (retryCount >= this.maxRetries) {
-        // Notify user about max retries
         store.dispatch(
           showSnackbar({
             severity: "error",
@@ -157,240 +158,290 @@ class KeyExchangeService extends EventEmitter {
     }
   }
 
-  // Handle incoming key exchange request
-  async handleRequest(request) {
-    console.log(
-      `📨 [KeyExchangeService] Handling key exchange request:`,
-      request
-    );
+  // ======================= KEY EXCHANGE HANDLING =======================
 
-    const { from: peerId, exchangeId, fingerprint, username } = request;
-
+  async handleExchangeRequest(request) {
     try {
-      // Auto-accept if friend
-      const isFriend = await this.isFriend(peerId);
+      console.group(
+        `📨 [KeyExchangeService] Handling exchange request:`,
+        request
+      );
 
-      if (isFriend) {
-        console.log(
-          `✅ [KeyExchangeService] Auto-accepting key exchange from friend ${
-            username || peerId
-          }`
-        );
+      const { from: peerId, exchangeId, fingerprint, username } = request;
 
-        // Confirm the exchange
+      // Check if we already have this peer's key
+      const existingKey = await e2eeService
+        .getPeerPublicKey(peerId)
+        .catch(() => null);
+      if (existingKey?.publicKey) {
+        console.log("✅ Already have key for this peer, auto-confirming");
         await this.confirmExchange(exchangeId, peerId, fingerprint, true);
 
+        console.groupEnd();
+        return {
+          success: true,
+          autoConfirmed: true,
+          peerId,
+          fingerprint,
+        };
+      }
+
+      // Check if peer is a friend (auto-accept friends)
+      const isFriend = await this.isFriend(peerId);
+      if (isFriend) {
+        console.log(
+          `✅ Auto-accepting exchange from friend ${username || peerId}`
+        );
+
+        await this.confirmExchange(exchangeId, peerId, fingerprint, true);
+
+        console.groupEnd();
         return {
           success: true,
           autoAccepted: true,
           peerId,
           fingerprint,
         };
-      } else {
-        console.log(
-          `⚠️ [KeyExchangeService] Key exchange from non-friend ${peerId}, awaiting user confirmation`
-        );
-
-        // Store for manual confirmation
-        this.pendingExchanges.set(exchangeId, {
-          peerId,
-          fingerprint,
-          timestamp: new Date(),
-          status: "awaiting_confirmation",
-          username,
-        });
-
-        // Show notification for user to confirm
-        store.dispatch(
-          showSnackbar({
-            severity: "info",
-            message: `Key exchange request from ${username || "unknown user"}`,
-            autoHideDuration: 8000,
-            action: "CONFIRM",
-            onAction: () =>
-              this.confirmExchange(exchangeId, peerId, fingerprint, true),
-          })
-        );
-
-        return {
-          success: true,
-          awaitingConfirmation: true,
-          peerId,
-          fingerprint,
-          username,
-        };
       }
+
+      // Store for manual confirmation
+      this.pendingExchanges.set(exchangeId, {
+        exchangeId,
+        peerId,
+        peerFingerprint: fingerprint,
+        status: "awaiting_confirmation",
+        requestedAt: new Date(),
+        username,
+        initiator: false,
+      });
+
+      // Show notification for user confirmation
+      store.dispatch(
+        showSnackbar({
+          severity: "info",
+          message: `Key exchange request from ${username || "unknown user"}`,
+          autoHideDuration: 8000,
+          action: "CONFIRM",
+          onAction: () =>
+            this.confirmExchange(exchangeId, peerId, fingerprint, true),
+        })
+      );
+
+      console.log("⏳ Awaiting user confirmation");
+      this.emit("exchangeRequestReceived", {
+        exchangeId,
+        peerId,
+        fingerprint,
+        username,
+        timestamp: new Date(),
+      });
+
+      console.groupEnd();
+      return {
+        success: true,
+        awaitingConfirmation: true,
+        peerId,
+        fingerprint,
+        username,
+      };
     } catch (error) {
-      console.error(`❌ [KeyExchangeService] Handle request error:`, error);
+      console.error(`❌ [KeyExchangeService] Error handling request:`, error);
+      console.groupEnd();
       throw error;
     }
   }
 
-  // Confirm key exchange
   async confirmExchange(exchangeId, peerId, fingerprint, verified = false) {
-    console.log(`✅ [KeyExchangeService] Confirming key exchange:`, {
-      exchangeId,
-      peerId,
-      fingerprint,
-      verified,
-    });
-
-    const socket = getSocket();
-    if (!socket) {
-      throw new Error("Socket not connected");
-    }
-
     try {
-      // Get public key from pending exchange or request from server
-      let publicKey;
-      const pendingExchange = this.pendingExchanges.get(exchangeId);
+      console.group(`✅ [KeyExchangeService] Confirming exchange:`, {
+        exchangeId,
+        peerId,
+        fingerprint,
+        verified,
+      });
 
-      if (pendingExchange?.publicKey) {
-        publicKey = pendingExchange.publicKey;
-      } else {
-        // Request peer's public key
-        const keyResponse = await new Promise((resolve) => {
-          socket.emit("request_e2ee_key", { userId: peerId }, resolve);
-        });
-
-        if (keyResponse?.success) {
-          publicKey = keyResponse.data.publicKey;
-        } else {
-          throw new Error("Failed to get peer public key");
-        }
+      const socket = getSocket();
+      if (!socket || !socket.connected) {
+        throw new Error("Socket not connected");
       }
 
-      // Send confirmation
-      const response = await new Promise((resolve) => {
+      // Get our public key
+      const publicKey = await e2eeService.getMyPublicKey();
+      const ownFingerprint = await e2eeService.getMyFingerprint();
+
+      // Send confirmation to server
+      const response = await new Promise((resolve, reject) => {
         socket.emit(
           "confirm_key_exchange",
           {
             exchangeId,
             peerId,
             publicKey,
-            fingerprint,
+            fingerprint: ownFingerprint,
+            peerFingerprint: fingerprint,
             verified,
+            timestamp: Date.now(),
           },
-          resolve
+          (response) => {
+            if (response?.success) {
+              resolve(response);
+            } else {
+              reject(new Error(response?.error || "Confirmation failed"));
+            }
+          }
         );
       });
 
-      if (response?.success) {
-        // Mark as completed
-        this.pendingExchanges.delete(exchangeId);
-        this.completedExchanges.set(peerId, {
-          fingerprint,
-          verified,
-          timestamp: new Date(),
-          publicKey,
-        });
+      // Mark as completed
+      this.pendingExchanges.delete(exchangeId);
+      this.completedExchanges.set(peerId, {
+        exchangeId,
+        peerId,
+        fingerprint,
+        verified,
+        confirmedAt: new Date(),
+        publicKey: response.data?.peerPublicKey,
+      });
 
-        // Reset retry count
-        this.retryCounts.delete(peerId);
+      // Reset retry count
+      this.retryAttempts.delete(peerId);
 
-        // Save to localStorage
-        this.savePeerKey(peerId, {
-          publicKey,
-          fingerprint,
-          verified,
-          lastUpdated: new Date(),
-        });
-
-        // Emit event
-        this.emit("exchangeCompleted", {
+      // Save peer key if provided
+      if (response.data?.peerPublicKey) {
+        await e2eeService.savePeerPublicKey(
           peerId,
-          fingerprint,
-          verified,
-          timestamp: new Date(),
-        });
-
-        console.log(
-          `🎉 [KeyExchangeService] Key exchange completed with ${peerId}`
+          response.data.peerPublicKey,
+          fingerprint
         );
-
-        // Show success notification
-        store.dispatch(
-          showSnackbar({
-            severity: "success",
-            message: `End-to-end encryption established ${
-              verified ? "and verified" : ""
-            }`,
-            autoHideDuration: 3000,
-          })
-        );
-
-        return {
-          success: true,
-          peerId,
-          fingerprint,
-          verified,
-        };
-      } else {
-        console.error(
-          `❌ [KeyExchangeService] Confirm failed:`,
-          response?.error
-        );
-        throw new Error(response?.error || "Confirmation failed");
       }
+
+      console.log(`🎉 Exchange confirmed with ${peerId}`);
+
+      // Show success notification
+      store.dispatch(
+        showSnackbar({
+          severity: "success",
+          message: `End-to-end encryption established${
+            verified ? " and verified" : ""
+          }`,
+          autoHideDuration: 3000,
+        })
+      );
+
+      this.emit("exchangeConfirmed", {
+        exchangeId,
+        peerId,
+        fingerprint,
+        verified,
+        timestamp: new Date(),
+      });
+
+      console.groupEnd();
+      return {
+        success: true,
+        peerId,
+        fingerprint,
+        verified,
+        data: response.data,
+      };
     } catch (error) {
-      console.error(`❌ [KeyExchangeService] Confirm exception:`, error);
+      console.error(`❌ [KeyExchangeService] Confirmation failed:`, error);
+      console.groupEnd();
       throw error;
     }
   }
 
-  // Verify key fingerprint
-  async verifyKey(publicKey, expectedFingerprint) {
-    console.log(`🔍 [KeyExchangeService] Verifying key fingerprint`);
-
+  async rejectExchange(exchangeId) {
     try {
+      const exchange = this.pendingExchanges.get(exchangeId);
+      if (!exchange) {
+        throw new Error("Exchange not found");
+      }
+
+      this.pendingExchanges.delete(exchangeId);
+
+      console.log(`❌ [KeyExchangeService] Exchange rejected: ${exchangeId}`);
+      this.emit("exchangeRejected", { exchangeId, peerId: exchange.peerId });
+
+      return { success: true, exchangeId };
+    } catch (error) {
+      console.error(`❌ [KeyExchangeService] Rejection failed:`, error);
+      throw error;
+    }
+  }
+
+  // ======================= VERIFICATION =======================
+
+  async verifyFingerprint(peerId, expectedFingerprint) {
+    try {
+      console.log(
+        `🔍 [KeyExchangeService] Verifying fingerprint for ${peerId}`
+      );
+
       const socket = getSocket();
-      if (!socket) {
+      if (!socket || !socket.connected) {
         throw new Error("Socket not connected");
       }
 
-      const response = await new Promise((resolve) => {
+      const response = await new Promise((resolve, reject) => {
         socket.emit(
           "verify_fingerprint",
           {
-            publicKey,
+            peerId,
             expectedFingerprint,
+            timestamp: Date.now(),
           },
-          resolve
+          (response) => {
+            if (response?.success) {
+              resolve(response);
+            } else {
+              reject(new Error(response?.error || "Verification failed"));
+            }
+          }
         );
       });
 
-      if (response?.success) {
-        const { matches, calculatedFingerprint } = response.data;
+      const { matches, calculatedFingerprint } = response.data;
 
-        console.log(`🔐 [KeyExchangeService] Fingerprint verification:`, {
-          matches,
-          expected: expectedFingerprint,
-          calculated: calculatedFingerprint,
-        });
+      console.log(`🔐 Fingerprint verification:`, {
+        matches,
+        expected: expectedFingerprint,
+        calculated: calculatedFingerprint,
+      });
 
-        return {
-          success: true,
-          matches,
-          calculatedFingerprint,
-          expectedFingerprint,
-        };
-      } else {
-        console.error(
-          `❌ [KeyExchangeService] Verification failed:`,
-          response?.error
-        );
-        throw new Error(response?.error || "Verification failed");
+      // Update verification status if matches
+      if (matches) {
+        const completed = this.completedExchanges.get(peerId);
+        if (completed) {
+          completed.verified = true;
+          this.completedExchanges.set(peerId, completed);
+        }
       }
+
+      this.emit("fingerprintVerified", {
+        peerId,
+        matches,
+        expectedFingerprint,
+        calculatedFingerprint,
+        timestamp: new Date(),
+      });
+
+      return {
+        success: true,
+        matches,
+        calculatedFingerprint,
+        expectedFingerprint,
+      };
     } catch (error) {
-      console.error(`❌ [KeyExchangeService] Verify exception:`, error);
+      console.error(`❌ [KeyExchangeService] Verification failed:`, error);
       throw error;
     }
   }
 
-  // Check if user is friend
+  // ======================= UTILITY METHODS =======================
+
   async isFriend(peerId) {
     try {
-      // Get friends from Redux store
       const state = store.getState();
       const friends = state.conversation?.friends || [];
 
@@ -398,49 +449,30 @@ class KeyExchangeService extends EventEmitter {
         (friend) => friend.keycloakId === peerId || friend.id === peerId
       );
     } catch (error) {
-      console.error(
-        `❌ [KeyExchangeService] Error checking friend status:`,
-        error
-      );
+      console.error(`❌ Error checking friend status:`, error);
       return false;
     }
   }
 
-  // Save peer key to localStorage
-  savePeerKey(peerId, keyInfo) {
-    try {
-      const existing = JSON.parse(
-        localStorage.getItem("e2ee_peer_keys") || "[]"
-      );
-      const updated = existing.filter((k) => k.peerId !== peerId);
-      updated.push({ peerId, ...keyInfo });
-      localStorage.setItem("e2ee_peer_keys", JSON.stringify(updated));
-
-      console.log(`💾 [KeyExchangeService] Saved peer key for ${peerId}`);
-    } catch (error) {
-      console.error(`❌ [KeyExchangeService] Error saving peer key:`, error);
-    }
+  hasPendingExchange(peerId) {
+    return Array.from(this.pendingExchanges.values()).some(
+      (ex) => ex.peerId === peerId && ex.status === "pending"
+    );
   }
 
-  // Load peer key from localStorage
-  loadPeerKey(peerId) {
-    try {
-      const keys = JSON.parse(localStorage.getItem("e2ee_peer_keys") || "[]");
-      return keys.find((k) => k.peerId === peerId);
-    } catch (error) {
-      console.error(`❌ [KeyExchangeService] Error loading peer key:`, error);
-      return null;
-    }
+  getPendingExchange(peerId) {
+    return Array.from(this.pendingExchanges.values()).find(
+      (ex) => ex.peerId === peerId && ex.status === "pending"
+    );
   }
 
-  // Get exchange status for a peer
   getExchangeStatus(peerId) {
     const completed = this.completedExchanges.get(peerId);
     if (completed) {
       return {
         status: "completed",
         verified: completed.verified,
-        timestamp: completed.timestamp,
+        timestamp: completed.confirmedAt,
         fingerprint: completed.fingerprint,
       };
     }
@@ -452,40 +484,84 @@ class KeyExchangeService extends EventEmitter {
     if (pending) {
       return {
         status: pending.status,
-        timestamp: pending.timestamp,
-        fingerprint: pending.fingerprint,
+        timestamp: pending.initiatedAt || pending.requestedAt,
+        fingerprint: pending.peerFingerprint,
       };
     }
 
     return { status: "not_started" };
   }
 
-  // Cleanup old pending exchanges
   cleanupOldExchanges(maxAge = 24 * 60 * 60 * 1000) {
     // 24 hours
     const now = Date.now();
 
     for (const [exchangeId, exchange] of this.pendingExchanges.entries()) {
-      const age = now - exchange.timestamp.getTime();
+      const timestamp = exchange.initiatedAt || exchange.requestedAt;
+      const age = now - timestamp.getTime();
+
       if (age > maxAge) {
-        console.log(
-          `🗑️ [KeyExchangeService] Cleaning up old exchange: ${exchangeId}`
-        );
+        console.log(`🗑️ Cleaning up old exchange: ${exchangeId}`);
         this.pendingExchanges.delete(exchangeId);
       }
     }
   }
 
-  // Get stats
   getStats() {
     return {
       pendingExchanges: this.pendingExchanges.size,
       completedExchanges: this.completedExchanges.size,
-      retryCounts: Object.fromEntries(this.retryCounts.entries()),
+      retryAttempts: Object.fromEntries(this.retryAttempts.entries()),
     };
+  }
+
+  // ======================= DEBUG =======================
+
+  debugInfo() {
+    console.group("🔍 [KeyExchangeService] Debug Info");
+    console.log("📊 Stats:", this.getStats());
+
+    console.log("⏳ Pending exchanges:");
+    this.pendingExchanges.forEach((exchange, id) => {
+      console.log(`   ${id}:`, {
+        peerId: exchange.peerId,
+        status: exchange.status,
+        age:
+          Math.round(
+            (Date.now() -
+              (exchange.initiatedAt || exchange.requestedAt).getTime()) /
+              1000
+          ) + "s",
+      });
+    });
+
+    console.log("✅ Completed exchanges:");
+    this.completedExchanges.forEach((exchange, peerId) => {
+      console.log(`   ${peerId}:`, {
+        verified: exchange.verified,
+        age:
+          Math.round((Date.now() - exchange.confirmedAt.getTime()) / 1000) +
+          "s",
+      });
+    });
+
+    console.groupEnd();
   }
 }
 
 // Singleton instance
 const keyExchangeService = new KeyExchangeService();
+
+// Export helper functions
+export const initiateKeyExchange = (peerId) =>
+  keyExchangeService.initiateExchange(peerId);
+export const confirmKeyExchange = (exchangeId, peerId, fingerprint, verified) =>
+  keyExchangeService.confirmExchange(exchangeId, peerId, fingerprint, verified);
+export const handleKeyExchangeRequest = (request) =>
+  keyExchangeService.handleExchangeRequest(request);
+export const verifyFingerprint = (peerId, fingerprint) =>
+  keyExchangeService.verifyFingerprint(peerId, fingerprint);
+export const getExchangeStatus = (peerId) =>
+  keyExchangeService.getExchangeStatus(peerId);
+
 export default keyExchangeService;

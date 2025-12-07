@@ -1,612 +1,440 @@
-// e2ee/hooks/useE2EEStatus.js
-import { useState, useEffect, useCallback } from "react";
-import { useE2EE } from "../../contexts/E2EEContext";
+// useE2EEStatus.js - FIXED VERSION
+import { useState, useEffect, useCallback, useRef } from "react";
+import useAutoE2EE from "./useAutoE2EE";
 
-export const useE2EEStatus = (peerId = null, roomId = null) => {
+/**
+ * Hook for checking E2EE status with a specific peer
+ */
+const useE2EEStatus = (peerId, options = {}) => {
   const {
-    e2eeEnabled,
-    getFriendKey,
-    initiateKeyExchange: contextInitiateKeyExchange,
-    friendsE2EEStatus = {},
-    e2eeService,
-    socketReady,
-    autoEncryption,
-  } = useE2EE();
+    autoCheck = true,
+    checkInterval = 30000, // 30 seconds
+    maxDerivationAttempts = 3,
+  } = options;
+
+  const {
+    isReady: autoServiceReady,
+    canEncryptTo,
+    getService,
+    encryptMessage,
+    syncKeys,
+  } = useAutoE2EE(); // ✅ Thêm các method cần thiết
 
   const [status, setStatus] = useState("checking");
   const [isEncrypted, setIsEncrypted] = useState(false);
-  const [canEncrypt, setCanEncrypt] = useState(false);
-  const [isEstablishing, setIsEstablishing] = useState(false);
-  const [isKeyExchangeNeeded, setIsKeyExchangeNeeded] = useState(false);
-  const [peerFingerprint, setPeerFingerprint] = useState(null);
   const [hasPeerKey, setHasPeerKey] = useState(false);
+  const [peerFingerprint, setPeerFingerprint] = useState(null);
+  const [derivationAttempts, setDerivationAttempts] = useState(0);
+  const [lastChecked, setLastChecked] = useState(null);
+  const [error, setError] = useState(null);
 
-  // 🆕 QUAN TRỌNG: Kiểm tra xem bạn có E2EE enabled không từ server
-  // 🆕 CẢI THIỆN: Kiểm tra friend E2EE status
-  const checkFriendE2EEStatus = useCallback(async () => {
-    if (!peerId || !autoEncryption) {
-      console.log(
-        `🔍 [checkFriendE2EEStatus] Missing peerId or autoEncryption`
-      );
-      return false;
-    }
+  const checkRef = useRef(null);
 
+  // Load KeyStorageService for direct access
+  const loadKeyStorage = useCallback(async () => {
     try {
-      console.log(`🔍 [checkFriendE2EEStatus] Checking for peer: ${peerId}`);
-
-      // 1. Kiểm tra trong localStorage
-      const peerKeysStr = localStorage.getItem("e2ee_peer_keys") || "[]";
-      const peerKeys = JSON.parse(peerKeysStr);
-      const peerKey = peerKeys.find((k) => k.peerId === peerId);
-
-      if (peerKey) {
-        console.log(`✅ [checkFriendE2EEStatus] Found in localStorage:`, {
-          fingerprint: peerKey.fingerprint,
-          hasPublicKey: !!peerKey.publicKey,
-        });
-        return true;
-      }
-
-      // 2. Kiểm tra từ context
-      if (friendsE2EEStatus[peerId] !== undefined) {
-        console.log(
-          `✅ [checkFriendE2EEStatus] From context:`,
-          friendsE2EEStatus[peerId]
-        );
-        return friendsE2EEStatus[peerId];
-      }
-
-      // 3. Kiểm tra từ autoEncryption
-      if (autoEncryption.hasPeerKey) {
-        try {
-          const hasKey = await autoEncryption.hasPeerKey(peerId);
-          console.log(
-            `✅ [checkFriendE2EEStatus] From autoEncryption: ${hasKey}`
-          );
-          return hasKey;
-        } catch (error) {
-          console.warn(
-            `⚠️ [checkFriendE2EEStatus] autoEncryption.hasPeerKey error:`,
-            error
-          );
-        }
-      }
-
-      // 4. Kiểm tra từ server qua socket
-      if (autoEncryption.requestFriendKey) {
-        try {
-          console.log(`🔄 [checkFriendE2EEStatus] Requesting from server...`);
-          const result = await autoEncryption.requestFriendKey(peerId);
-          if (result.success && result.key) {
-            console.log(`✅ [checkFriendE2EEStatus] Got key from server`);
-            return true;
-          }
-        } catch (error) {
-          console.warn(
-            `⚠️ [checkFriendE2EEStatus] Server request error:`,
-            error
-          );
-        }
-      }
-
-      console.log(`❌ [checkFriendE2EEStatus] No key found for peer ${peerId}`);
-      return false;
+      const { default: keyStorageService } = await import(
+        "../services/keyStorageService"
+      );
+      return keyStorageService;
     } catch (error) {
-      console.error(`❌ [checkFriendE2EEStatus] Error:`, error);
-      return false;
-    }
-  }, [peerId, autoEncryption, friendsE2EEStatus]);
-
-  // 🆕 THÊM: Function để tự động derive shared secret
-  // Sửa hàm deriveSharedSecretIfNeeded trong useE2EEStatus.js
-  const deriveSharedSecretIfNeeded = useCallback(async () => {
-    if (!peerId || !autoEncryption) {
-      console.log(
-        `❌ [deriveSharedSecretIfNeeded] Missing peerId or autoEncryption`
+      console.warn(
+        "⚠️ [useE2EEStatus] Failed to load KeyStorageService:",
+        error
       );
-      return false;
+      return null;
+    }
+  }, []);
+
+  // Check if peer has E2EE enabled - FIXED VERSION
+  const checkPeerE2EEStatus = useCallback(async () => {
+    if (!peerId) {
+      return { hasE2EE: false, reason: "No peerId" };
     }
 
     try {
-      console.log(
-        `🔐 [deriveSharedSecretIfNeeded] Checking for peer: ${peerId}`
-      );
-
-      // 1. Kiểm tra đã có shared secret chưa
-      let hasSecret = false;
-      if (autoEncryption.hasSharedSecret) {
-        hasSecret = await autoEncryption.hasSharedSecret(peerId);
-      } else {
-        // Fallback: check localStorage
-        const sessionKey = localStorage.getItem(`e2ee_session_${peerId}`);
-        hasSecret = !!sessionKey;
+      // Method 1: Use canEncryptTo từ useAutoE2EE
+      if (typeof canEncryptTo === "function") {
+        const result = await canEncryptTo(peerId);
+        return {
+          hasE2EE: result.canEncrypt || result.hasKey,
+          hasKey: result.hasKey,
+          fingerprint: result.fingerprint,
+          reason: result.reason,
+          canEncrypt: result.canEncrypt,
+        };
       }
 
-      if (hasSecret) {
-        console.log(
-          `✅ [deriveSharedSecretIfNeeded] Already has shared secret`
-        );
-        return true;
+      // Method 2: Check via service
+      const service = await getService();
+      if (service?.canEncryptTo) {
+        const result = await service.canEncryptTo(peerId);
+        return {
+          hasE2EE: result.canEncrypt || result.hasKey,
+          hasKey: result.hasKey,
+          fingerprint: result.fingerprint,
+          reason: result.reason,
+          canEncrypt: result.canEncrypt,
+        };
       }
 
-      // 2. Kiểm tra có public key của peer không
-      const hasPeerKey = await checkFriendE2EEStatus();
-      if (!hasPeerKey) {
-        console.log(`❌ [deriveSharedSecretIfNeeded] No peer key available`);
-        return false;
-      }
-
-      // 3. Tự động derive shared secret - SỬA LẠI PHẦN NÀY
-      console.log(`🔄 [deriveSharedSecretIfNeeded] Deriving shared secret...`);
-
-      // Option A: Sử dụng autoEncryption.deriveSharedSecret nếu có
-      if (autoEncryption.deriveSharedSecret) {
-        const result = await autoEncryption.deriveSharedSecret(peerId);
-        if (result.success) {
-          console.log(
-            `✅ [deriveSharedSecretIfNeeded] Shared secret derived via autoEncryption`
-          );
-          return true;
-        }
-      }
-
-      // Option B: Sử dụng keyUtils trực tiếp
+      // Method 3: Check localStorage fallback
       try {
-        const keyUtils = require("../utils/keyUtils").default;
-        if (keyUtils && keyUtils.deriveSharedSecret) {
-          // Lấy keys từ localStorage
-          const ownPrivateKeyStr = localStorage.getItem("e2ee_private_key");
-          if (!ownPrivateKeyStr || ownPrivateKeyStr === "{}") {
-            throw new Error("No private key found");
-          }
-
-          const ownPrivateKeyJwk = JSON.parse(ownPrivateKeyStr);
-
-          // Lấy peer public key từ localStorage
-          const peerKeysStr = localStorage.getItem("e2ee_peer_keys") || "[]";
-          const peerKeys = JSON.parse(peerKeysStr);
-          const peerKeyInfo = peerKeys.find((k) => k.peerId === peerId);
-
-          if (!peerKeyInfo?.publicKey) {
-            throw new Error("No peer public key found");
-          }
-
-          const peerPublicKeyJwk = JSON.parse(peerKeyInfo.publicKey);
-
-          // Derive shared secret
-          const sharedSecret = await keyUtils.deriveSharedSecret(
-            ownPrivateKeyJwk,
-            peerPublicKeyJwk
-          );
-
-          // Lưu vào localStorage
-          localStorage.setItem(
-            `e2ee_session_${peerId}`,
-            JSON.stringify({
-              derivedAt: Date.now(),
-              peerId: peerId,
-              source: "keyUtils-direct",
-            })
-          );
-
-          console.log(
-            `✅ [deriveSharedSecretIfNeeded] Shared secret derived via keyUtils`
-          );
-          return true;
-        }
-      } catch (keyUtilsError) {
-        console.warn(
-          `⚠️ [deriveSharedSecretIfNeeded] keyUtils direct failed:`,
-          keyUtilsError
-        );
-      }
-
-      // Option C: Fallback - Chỉ cần có public key là đủ để mã hóa
-      // AutoEncryptionService.encryptMessage sẽ tự động derive khi cần
-      if (hasPeerKey) {
-        console.log(
-          `ℹ️ [deriveSharedSecretIfNeeded] Has peer key, encryption will derive on demand`
-        );
-
-        // Lưu vào localStorage để đánh dấu đã sẵn sàng
-        localStorage.setItem(
-          `e2ee_ready_${peerId}`,
-          JSON.stringify({
-            timestamp: Date.now(),
-            hasKey: true,
-          })
-        );
-
-        return true;
-      }
-
-      console.log(
-        `❌ [deriveSharedSecretIfNeeded] No derivation method available`
-      );
-      return false;
-    } catch (error) {
-      console.error(`❌ [deriveSharedSecretIfNeeded] Error:`, error);
-      return false;
-    }
-  }, [peerId, autoEncryption, checkFriendE2EEStatus]);
-
-  // 🆕 QUAN TRỌNG: checkEncryptionStatus - FIXED
-  // 🆕 CẬP NHẬT HOÀN CHỈNH: checkEncryptionStatus
-  const checkEncryptionStatus = useCallback(async () => {
-    try {
-      console.log("🔐 [useE2EEStatus] checkEncryptionStatus called for:", {
-        peerId,
-        e2eeEnabled,
-      });
-
-      // 1. Kiểm tra điều kiện cơ bản
-      if (!e2eeEnabled) {
-        console.log("🔓 [checkEncryptionStatus] E2EE is disabled");
-        setStatus("disabled");
-        setIsEncrypted(false);
-        setCanEncrypt(false);
-        setIsKeyExchangeNeeded(false);
-        return { canEncrypt: false, isEncrypted: false, status: "disabled" };
-      }
-
-      if (!peerId) {
-        console.log("🔓 [checkEncryptionStatus] No peerId provided");
-        setStatus("no_peer");
-        setIsEncrypted(false);
-        setCanEncrypt(false);
-        setIsKeyExchangeNeeded(false);
-        return { canEncrypt: false, isEncrypted: false, status: "no_peer" };
-      }
-
-      // 2. Kiểm tra autoEncryption service
-      if (!autoEncryption) {
-        console.log(
-          "❌ [checkEncryptionStatus] Auto encryption service not available"
-        );
-        setStatus("error");
-        setCanEncrypt(false);
-        setIsEncrypted(false);
-        return { canEncrypt: false, isEncrypted: false, status: "error" };
-      }
-
-      // 3. Đảm bảo autoEncryption đã sẵn sàng
-      let isReady = false;
-      try {
-        isReady = await autoEncryption.isReady();
-        console.log(
-          `🔐 [checkEncryptionStatus] Auto encryption ready: ${isReady}`
-        );
-      } catch (error) {
-        console.warn(`⚠️ [checkEncryptionStatus] isReady check failed:`, error);
-      }
-
-      if (!isReady) {
-        console.log("⏳ [checkEncryptionStatus] Auto encryption not ready");
-        setStatus("establishing");
-        setIsEstablishing(true);
-        setCanEncrypt(false);
-        setIsEncrypted(false);
-
-        // Thử lại sau 1 giây
-        setTimeout(() => {
-          checkEncryptionStatus();
-        }, 1000);
-
-        return {
-          canEncrypt: false,
-          isEncrypted: false,
-          status: "establishing",
-        };
-      }
-
-      setIsEstablishing(false);
-
-      // 4. Kiểm tra có public key của peer không
-      const friendHasE2EE = await checkFriendE2EEStatus();
-      console.log(
-        `🔑 [checkEncryptionStatus] Friend has E2EE/key: ${friendHasE2EE}`
-      );
-      setHasPeerKey(friendHasE2EE);
-
-      if (!friendHasE2EE) {
-        console.log(`🔑 [checkEncryptionStatus] No peer key, needs exchange`);
-        setStatus("key_exchange_pending");
-        setIsEncrypted(false);
-        setCanEncrypt(false);
-        setIsKeyExchangeNeeded(true);
-        return {
-          canEncrypt: false,
-          isEncrypted: false,
-          status: "key_exchange_pending",
-          needsKeyExchange: true,
-        };
-      }
-
-      // 5. 🆕 QUAN TRỌNG: Tự động derive shared secret nếu cần
-      const hasDerivedSecret = await deriveSharedSecretIfNeeded();
-
-      if (!hasDerivedSecret) {
-        console.log(
-          `⚠️ [checkEncryptionStatus] Could not derive shared secret`
-        );
-        setStatus("needs_derivation");
-        setIsEncrypted(false);
-        setCanEncrypt(true); // Có thể mã hóa sau khi derive
-        setIsKeyExchangeNeeded(false);
-        return {
-          canEncrypt: true,
-          isEncrypted: false,
-          status: "needs_derivation",
-          needsDerivation: true,
-        };
-      }
-
-      // 6. Kiểm tra có thể mã hóa không
-      let canEncryptForPeer = false;
-      if (autoEncryption.canEncryptFor) {
-        canEncryptForPeer = await autoEncryption.canEncryptFor(peerId);
-      } else {
-        // Fallback: nếu có shared secret thì có thể mã hóa
-        const hasSecret = await deriveSharedSecretIfNeeded();
-        canEncryptForPeer = hasSecret;
-      }
-
-      console.log(
-        `🔐 [checkEncryptionStatus] Can encrypt for peer: ${canEncryptForPeer}`
-      );
-      setCanEncrypt(canEncryptForPeer);
-
-      // 7. Lấy fingerprint
-      let fingerprint = null;
-      if (autoEncryption.getPeerFingerprint) {
-        fingerprint = await autoEncryption.getPeerFingerprint(peerId);
-      } else {
-        // Lấy từ localStorage
         const peerKeysStr = localStorage.getItem("e2ee_peer_keys") || "[]";
         const peerKeys = JSON.parse(peerKeysStr);
         const peerKey = peerKeys.find((k) => k.peerId === peerId);
-        fingerprint = peerKey?.fingerprint || null;
+
+        if (peerKey?.publicKey) {
+          return {
+            hasE2EE: true,
+            hasKey: true,
+            fingerprint: peerKey.fingerprint,
+            reason: "Found in localStorage",
+            canEncrypt: false, // Need derivation
+          };
+        }
+      } catch (parseError) {
+        console.warn("⚠️ Failed to parse localStorage keys:", parseError);
       }
 
-      setPeerFingerprint(fingerprint);
-      console.log(
-        `🔐 [checkEncryptionStatus] Peer fingerprint: ${fingerprint}`
-      );
-
-      // 8. Xác định trạng thái cuối cùng
-      if (canEncryptForPeer) {
-        console.log(
-          `✅ [checkEncryptionStatus] Encryption READY for ${peerId}`
-        );
-        setStatus("encrypted");
-        setIsEncrypted(true);
-        setIsKeyExchangeNeeded(false);
-        return {
-          canEncrypt: true,
-          isEncrypted: true,
-          status: "encrypted",
-          fingerprint: fingerprint,
-          ready: true,
-        };
-      } else {
-        console.log(`⚠️ [checkEncryptionStatus] Encryption not ready`);
-        setStatus("establishing");
-        setIsEncrypted(false);
-        return {
-          canEncrypt: false,
-          isEncrypted: false,
-          status: "establishing",
-        };
-      }
-    } catch (error) {
-      console.error("❌ [checkEncryptionStatus] Error:", error);
-      setStatus("error");
-      setIsEncrypted(false);
-      setCanEncrypt(false);
-      setIsKeyExchangeNeeded(false);
       return {
+        hasE2EE: false,
+        hasKey: false,
+        reason: "No key found",
         canEncrypt: false,
-        isEncrypted: false,
-        status: "error",
-        error: error.message,
+      };
+    } catch (checkError) {
+      console.error(`❌ [useE2EEStatus] Peer check failed:`, checkError);
+      return {
+        hasE2EE: false,
+        hasKey: false,
+        reason: checkError.message,
+        error: checkError,
+        canEncrypt: false,
       };
     }
-  }, [
-    peerId,
-    e2eeEnabled,
-    autoEncryption,
-    checkFriendE2EEStatus,
-    deriveSharedSecretIfNeeded,
-  ]);
+  }, [peerId, canEncryptTo, getService]);
 
-  // 🆕 Hàm initiateKeyExchange - IMPROVED
-  // 🆕 CẬP NHẬT: initiateKeyExchange với tự động derive
-  const initiateKeyExchange = useCallback(async () => {
-    if (!peerId || !contextInitiateKeyExchange) {
-      console.error(
-        "❌ [initiateKeyExchange] Missing peerId or context function"
-      );
-      return false;
+  // Check if shared secret exists
+  const checkSharedSecret = useCallback(async () => {
+    if (!peerId) {
+      return { hasSecret: false };
     }
 
     try {
-      setIsEstablishing(true);
-      console.log("🔄 [initiateKeyExchange] Starting for peer:", peerId);
+      const keyStorage = await loadKeyStorage();
 
-      // 1. Kiểm tra trạng thái hiện tại
-      const currentStatus = await checkEncryptionStatus();
-      console.log(`📊 [initiateKeyExchange] Current status:`, currentStatus);
-
-      // 2. Nếu đã có key, chỉ cần derive shared secret
-      if (currentStatus.hasPeerKey || currentStatus.canEncrypt) {
-        console.log(`✅ [initiateKeyExchange] Already has peer key`);
-
-        if (!currentStatus.isEncrypted) {
-          console.log(`🔄 [initiateKeyExchange] Deriving shared secret...`);
-          const derived = await deriveSharedSecretIfNeeded();
-
-          if (derived) {
-            console.log(`✅ [initiateKeyExchange] Shared secret derived`);
-            await checkEncryptionStatus();
-            setIsEstablishing(false);
-            return true;
-          }
-        } else {
-          console.log(`✅ [initiateKeyExchange] Already encrypted`);
-          setIsEstablishing(false);
-          return true;
-        }
+      if (keyStorage) {
+        const hasSecret = await keyStorage.hasSharedSecret(peerId);
+        return { hasSecret };
       }
 
-      // 3. Thực hiện key exchange
-      console.log(`🔄 [initiateKeyExchange] Initiating key exchange...`);
-      const result = await contextInitiateKeyExchange(peerId);
-
-      if (!result) {
-        console.error(`❌ [initiateKeyExchange] Key exchange failed`);
-        setIsEstablishing(false);
-        return false;
-      }
-
-      console.log(`✅ [initiateKeyExchange] Key exchange initiated`);
-
-      // 4. Đợi 2 giây rồi kiểm tra lại và derive shared secret
-      setTimeout(async () => {
-        try {
-          console.log(
-            `🔍 [initiateKeyExchange] Checking status after exchange...`
-          );
-          await checkEncryptionStatus();
-
-          // Tự động derive shared secret nếu có key mới
-          await deriveSharedSecretIfNeeded();
-
-          // Kiểm tra lại lần nữa
-          await checkEncryptionStatus();
-        } catch (error) {
-          console.error(
-            `❌ [initiateKeyExchange] Post-exchange check error:`,
-            error
-          );
-        }
-      }, 2000);
-
-      setIsEstablishing(false);
-      return true;
+      // Fallback: check localStorage
+      const sessionKey = localStorage.getItem(`e2ee_session_${peerId}`);
+      return { hasSecret: !!sessionKey };
     } catch (error) {
-      console.error("❌ [initiateKeyExchange] Error:", error);
-      setIsEstablishing(false);
-      return false;
+      console.warn(`⚠️ [useE2EEStatus] Secret check failed:`, error);
+      return { hasSecret: false, error: error.message };
+    }
+  }, [peerId, loadKeyStorage]);
+
+  // Derive shared secret if needed - FIXED VERSION
+  const deriveSharedSecret = useCallback(async () => {
+    if (!peerId || derivationAttempts >= maxDerivationAttempts) {
+      return { success: false, reason: "Max attempts reached" };
+    }
+
+    try {
+      console.group(`🔐 [useE2EEStatus] Deriving shared secret for ${peerId}`);
+
+      // Check if we already have a secret
+      const secretCheck = await checkSharedSecret();
+      if (secretCheck.hasSecret) {
+        console.log("✅ Already has shared secret");
+        console.groupEnd();
+        return { success: true, alreadyExists: true };
+      }
+
+      // Check if we have peer key
+      const peerCheck = await checkPeerE2EEStatus();
+      if (!peerCheck.hasKey) {
+        console.log("❌ No peer key available");
+        console.groupEnd();
+        return { success: false, reason: "No peer key" };
+      }
+
+      // Get E2EE service
+      const service = await getService();
+      if (!service) {
+        console.log("❌ Service not available");
+        console.groupEnd();
+        return { success: false, reason: "Service not available" };
+      }
+
+      // Use encryptMessage từ useAutoE2EE hook nếu có
+      if (typeof encryptMessage === "function") {
+        console.log("🔄 Deriving via encryptMessage...");
+
+        const testResult = await encryptMessage("test_derivation", peerId);
+
+        if (testResult.success) {
+          console.log("✅ Derivation successful via encryptMessage");
+          setDerivationAttempts(0);
+          console.groupEnd();
+          return { success: true };
+        }
+      }
+
+      // Fallback: Try via service
+      if (service.encryptMessage) {
+        console.log("🔄 Deriving via service.encryptMessage...");
+
+        const testResult = await service.encryptMessage(
+          "test_derivation",
+          peerId
+        );
+
+        if (testResult.success) {
+          console.log("✅ Derivation successful via service");
+          setDerivationAttempts(0);
+          console.groupEnd();
+          return { success: true };
+        }
+      }
+
+      console.warn("⚠️ No derivation method available");
+      setDerivationAttempts((prev) => prev + 1);
+      console.groupEnd();
+      return { success: false, reason: "No derivation method available" };
+    } catch (error) {
+      console.error(`❌ [useE2EEStatus] Derivation error:`, error);
+      setDerivationAttempts((prev) => prev + 1);
+      console.groupEnd();
+      return { success: false, error: error.message };
     }
   }, [
     peerId,
-    contextInitiateKeyExchange,
-    checkEncryptionStatus,
-    deriveSharedSecretIfNeeded,
+    derivationAttempts,
+    maxDerivationAttempts,
+    checkSharedSecret,
+    checkPeerE2EEStatus,
+    getService,
+    encryptMessage, // ✅ Thêm dependency
   ]);
 
-  // Auto-check khi peerId thay đổi
-  // Auto-check khi peerId thay đổi - CẬP NHẬT
-  useEffect(() => {
-    if (!peerId || !e2eeEnabled) return;
+  // Main status check function
+  const checkStatus = useCallback(
+    async (force = false) => {
+      if (!peerId) {
+        setStatus("no_peer");
+        setIsEncrypted(false);
+        setHasPeerKey(false);
+        return;
+      }
 
-    console.log(`🔄 [useE2EEStatus] useEffect triggered for peer: ${peerId}`);
-
-    let mounted = true;
-
-    const checkWithRetry = async () => {
-      if (!mounted) return;
+      // Skip if recently checked (unless forced)
+      if (!force && lastChecked && Date.now() - lastChecked < 5000) {
+        return;
+      }
 
       try {
-        // Đợi 500ms cho các service khởi tạo
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        setStatus("checking");
+        setError(null);
 
-        if (!mounted) return;
-
-        // Kiểm tra encryption status
-        await checkEncryptionStatus();
-
-        // Nếu không encrypted, thử derive shared secret sau 1 giây
-        if (mounted && !isEncrypted && hasPeerKey) {
-          setTimeout(async () => {
-            if (mounted) {
-              console.log(`🔄 [useE2EEStatus] Auto-deriving shared secret...`);
-              await deriveSharedSecretIfNeeded();
-              await checkEncryptionStatus();
-            }
-          }, 1000);
+        // Step 1: Check auto service readiness
+        if (!autoServiceReady) {
+          setStatus("service_not_ready");
+          setIsEncrypted(false);
+          setLastChecked(new Date());
+          return;
         }
-      } catch (error) {
-        console.error(`❌ [useE2EEStatus] Auto-check error:`, error);
+
+        // Step 2: Check peer E2EE status
+        const peerCheck = await checkPeerE2EEStatus();
+
+        setHasPeerKey(peerCheck.hasKey);
+        setPeerFingerprint(peerCheck.fingerprint || null);
+
+        if (!peerCheck.hasE2EE) {
+          setStatus("peer_no_e2ee");
+          setIsEncrypted(false);
+          setLastChecked(new Date());
+          return;
+        }
+
+        if (!peerCheck.hasKey) {
+          setStatus("no_peer_key");
+          setIsEncrypted(false);
+          setLastChecked(new Date());
+          return;
+        }
+
+        // Step 3: Check shared secret
+
+        const secretCheck = await checkSharedSecret();
+
+        if (secretCheck.hasSecret) {
+          setStatus("encrypted");
+          setIsEncrypted(true);
+          setDerivationAttempts(0);
+        } else {
+          setStatus("needs_derivation");
+          setIsEncrypted(false);
+
+          // Auto-derive if we have peer key
+          if (peerCheck.hasKey && autoCheck) {
+            setTimeout(() => {
+              deriveSharedSecret();
+            }, 1000);
+          }
+        }
+
+        setLastChecked(new Date());
+      } catch (checkError) {
+        console.error(`❌ [useE2EEStatus] Status check failed:`, checkError);
+        setStatus("error");
+        setError(checkError.message);
+        setIsEncrypted(false);
+        setLastChecked(new Date());
       }
-    };
+    },
+    [
+      peerId,
+      autoServiceReady,
+      lastChecked,
+      autoCheck,
+      checkPeerE2EEStatus,
+      checkSharedSecret,
+      deriveSharedSecret,
+    ]
+  );
 
-    checkWithRetry();
+  // Manual status check
+  const manualCheck = useCallback(() => {
+    return checkStatus(true);
+  }, [checkStatus]);
 
-    return () => {
-      mounted = false;
-    };
-  }, [
-    peerId,
-    e2eeEnabled,
-    checkEncryptionStatus,
-    isEncrypted,
-    hasPeerKey,
-    deriveSharedSecretIfNeeded,
-  ]);
-  // Lắng nghe socket events
-  useEffect(() => {
-    if (!socketReady || !autoEncryption) return;
-
-    const handleFriendKeyUpdated = (data) => {
-      console.log(`🔄 Friend key updated event received:`, data);
-      if (data.userId === peerId || data.friendId === peerId) {
-        setTimeout(() => checkEncryptionStatus(), 300);
-      }
-    };
-
-    const handleKeysSyncCompleted = () => {
-      console.log(`🔄 Keys sync completed, re-checking...`);
-      setTimeout(() => checkEncryptionStatus(), 500);
-    };
-
-    // Lắng nghe events
-    if (autoEncryption.on) {
-      autoEncryption.on("friendKeyUpdated", handleFriendKeyUpdated);
-      autoEncryption.on("keysSyncCompleted", handleKeysSyncCompleted);
+  // Manual derivation
+  const manualDerive = useCallback(async () => {
+    if (!peerId) {
+      return { success: false, error: "No peerId" };
     }
 
+    return await deriveSharedSecret();
+  }, [peerId, deriveSharedSecret]);
+
+  // Reset attempts
+  const resetAttempts = useCallback(() => {
+    setDerivationAttempts(0);
+  }, []);
+
+  // Auto-check effect
+  useEffect(() => {
+    if (!peerId || !autoCheck) return;
+
+    checkStatus();
+
+    // Set up interval for periodic checks
+    const intervalId = setInterval(() => {
+      checkStatus();
+    }, checkInterval);
+
     return () => {
-      if (autoEncryption.off) {
-        autoEncryption.off("friendKeyUpdated", handleFriendKeyUpdated);
-        autoEncryption.off("keysSyncCompleted", handleKeysSyncCompleted);
+      clearInterval(intervalId);
+    };
+  }, [peerId, autoCheck, checkInterval, checkStatus]);
+
+  // Listen for service readiness changes
+  useEffect(() => {
+    if (autoServiceReady && peerId) {
+      // Re-check when service becomes ready
+      setTimeout(() => {
+        checkStatus(true);
+      }, 1000);
+    }
+  }, [autoServiceReady, peerId, checkStatus]);
+
+  // Listen for key updates - FIXED VERSION
+  useEffect(() => {
+    if (!peerId) return;
+
+    const handleKeyUpdate = async (data) => {
+      if (data.userId === peerId || data.friendId === peerId) {
+        console.log(
+          `🔄 [useE2EEStatus] Key update for ${peerId}, re-checking...`
+        );
+        setTimeout(() => checkStatus(true), 500);
       }
     };
-  }, [socketReady, peerId, autoEncryption, checkEncryptionStatus]);
+
+    // Setup listener
+    const setupListener = async () => {
+      try {
+        // Listen to window events
+        const handleStorageChange = (e) => {
+          if (e.key?.includes("e2ee") && e.key?.includes(peerId)) {
+            setTimeout(() => checkStatus(true), 300);
+          }
+        };
+
+        window.addEventListener("storage", handleStorageChange);
+
+        return () => {
+          window.removeEventListener("storage", handleStorageChange);
+        };
+      } catch (error) {
+        console.warn("⚠️ [useE2EEStatus] Failed to setup listeners:", error);
+      }
+    };
+
+    const cleanup = setupListener();
+
+    return () => {
+      if (cleanup && typeof cleanup.then === "function") {
+        cleanup.then((cleanupFn) => cleanupFn?.());
+      }
+    };
+  }, [peerId, checkStatus]);
 
   return {
     // State
     status,
     isEncrypted,
-    canEncrypt,
-    isEstablishing,
-    isKeyExchangeNeeded,
-    peerFingerprint,
     hasPeerKey,
+    peerFingerprint,
+    derivationAttempts,
+    lastChecked,
+    error,
 
     // Methods
-    initiateKeyExchange,
-    checkEncryptionStatus,
+    checkStatus: manualCheck,
+    deriveSecret: manualDerive,
+    resetAttempts,
 
-    // 🆕 THÊM: Helper methods
-    isReady: status === "encrypted" || status === "ready",
-    needsKeyExchange: isKeyExchangeNeeded || status === "key_exchange_pending",
+    // Status helpers
+    isReady: status === "encrypted",
     needsDerivation: status === "needs_derivation",
+    needsKeyExchange: status === "no_peer_key" || status === "peer_no_e2ee",
+    isChecking: status === "checking",
     isError: status === "error",
-    isDisabled: status === "disabled",
 
-    // 🆕 THÊM: Derived secret helper
-    deriveSharedSecret: deriveSharedSecretIfNeeded,
+    // Detailed info
+    canEncrypt: isEncrypted && hasPeerKey,
+    maxAttemptsReached: derivationAttempts >= maxDerivationAttempts,
+
+    // Sync keys method
+    syncKeys: syncKeys || (() => Promise.resolve({ success: false })),
+
+    // Debug info
+    debugInfo: {
+      peerId,
+      status,
+      hasPeerKey,
+      peerFingerprint,
+      derivationAttempts,
+      lastChecked: lastChecked?.toISOString(),
+      error,
+    },
   };
 };
 

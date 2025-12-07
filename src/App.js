@@ -30,9 +30,6 @@ import Router from "./routes";
 import { closeSnackBar } from "./redux/slices/app";
 import { setKeycloakUser, signOut, setUserInfo } from "./redux/slices/auth";
 import { AuthProvider } from "./contexts/AuthContext";
-import { E2EEProvider } from "./contexts/E2EEContext";
-import KeyExchangeDialog from "./pages/roles/components/dialogs/KeyExchangeDialog";
-import E2EESettings from "./sections/dashboard/Settings/E2EESettings";
 import { showSnackbar } from "./redux/slices/app";
 import { getSocket } from "./socket";
 import LoadingScreen from "./components/LoadingScreen";
@@ -299,6 +296,9 @@ function App() {
   // Trong App.js, sửa phần E2EE initialization:
 
   // 🆕 INITIALIZE E2EE SYSTEM
+  // App.js - Sửa phần E2EE initialization
+
+  // 🆕 INITIALIZE E2EE SYSTEM
   useEffect(() => {
     if (initialized && keycloak.authenticated && !e2eeInitialized) {
       console.log("🚀 App - Initializing E2EE system...");
@@ -337,21 +337,27 @@ function App() {
             setE2eeError(result.error);
 
             // Option 2: Try full setup
-            setupE2EESystem();
+            await setupE2EESystem();
+
+            // Set initialized anyway
+            setE2eeInitialized(true);
           }
         } catch (error) {
           console.error("❌ App - E2EE initialization error:", error);
           setE2eeError(error.message);
 
-          // Still try to setup
-          setupE2EESystem();
+          // Still mark as initialized to avoid infinite retry
+          setE2eeInitialized(true);
+
+          // Setup anyway in degraded mode
+          await setupE2EESystem();
         }
       };
 
-      // 🆕 Tăng timeout để đảm bảo các dependency đã sẵn sàng
+      // 🆕 Giảm timeout để bắt đầu sớm hơn
       const timer = setTimeout(() => {
         initE2EE();
-      }, 3000);
+      }, 1000);
 
       return () => clearTimeout(timer);
     }
@@ -593,11 +599,10 @@ function App() {
     <>
       <ThemeProvider>
         <AuthProvider>
-          <E2EEProvider>
-            {/* 🆕 Add Redux E2EE Middleware */}
-            {keycloak.authenticated && (
-              <script>
-                {`
+          {/* 🆕 Add Redux E2EE Middleware */}
+          {keycloak.authenticated && (
+            <script>
+              {`
                   // Auto-setup Redux E2EE middleware
                   (async () => {
                     try {
@@ -609,73 +614,62 @@ function App() {
                     }
                   })();
                 `}
-              </script>
-            )}
+            </script>
+          )}
 
-            <ThemeSettings>
-              <Router />
-            </ThemeSettings>
+          <ThemeSettings>
+            <Router />
+          </ThemeSettings>
 
-            {/* 🆕 Key Exchange Dialog */}
-            {keyExchangeRequest && (
-              <KeyExchangeDialog
-                open={keyExchangeDialogOpen}
-                onClose={handleKeyExchangeDialogClose}
-                exchangeRequest={keyExchangeRequest}
-              />
-            )}
+          {/* 🆕 Key Exchange Dialog */}
 
-            {/* 🆕 E2EE Settings Dialog */}
-            <Dialog
-              open={showE2EESettings}
-              onClose={handleE2EESettingsClose}
-              maxWidth="md"
-              fullWidth
-              PaperProps={{
-                sx: {
-                  maxHeight: "90vh",
-                  borderRadius: 2,
-                  boxShadow: 24,
-                },
-              }}
+          {/* 🆕 E2EE Settings Dialog */}
+          <Dialog
+            open={showE2EESettings}
+            onClose={handleE2EESettingsClose}
+            maxWidth="md"
+            fullWidth
+            PaperProps={{
+              sx: {
+                maxHeight: "90vh",
+                borderRadius: 2,
+                boxShadow: 24,
+              },
+            }}
+            sx={{
+              zIndex: 1300,
+              "& .MuiBackdrop-root": {
+                backgroundColor: "rgba(0, 0, 0, 0.7)",
+              },
+            }}
+          >
+            <DialogTitle
               sx={{
-                zIndex: 1300,
-                "& .MuiBackdrop-root": {
-                  backgroundColor: "rgba(0, 0, 0, 0.7)",
-                },
+                bgcolor: "primary.main",
+                color: "white",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                py: 2,
+                px: 3,
               }}
             >
-              <DialogTitle
-                sx={{
-                  bgcolor: "primary.main",
-                  color: "white",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  py: 2,
-                  px: 3,
-                }}
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <SecurityIcon />
+                End-to-End Encryption Settings
+                {e2eeReady && (
+                  <Badge color="success" variant="dot" sx={{ ml: 1 }} />
+                )}
+              </Box>
+              <IconButton
+                onClick={handleE2EESettingsClose}
+                sx={{ color: "white" }}
+                size="small"
               >
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  <SecurityIcon />
-                  End-to-End Encryption Settings
-                  {e2eeReady && (
-                    <Badge color="success" variant="dot" sx={{ ml: 1 }} />
-                  )}
-                </Box>
-                <IconButton
-                  onClick={handleE2EESettingsClose}
-                  sx={{ color: "white" }}
-                  size="small"
-                >
-                  <Close />
-                </IconButton>
-              </DialogTitle>
-              <DialogContent sx={{ p: 0 }}>
-                <E2EESettings />
-              </DialogContent>
-            </Dialog>
-          </E2EEProvider>
+                <Close />
+              </IconButton>
+            </DialogTitle>
+          </Dialog>
         </AuthProvider>
       </ThemeProvider>
 

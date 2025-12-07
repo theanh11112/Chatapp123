@@ -1,14 +1,22 @@
+/**
+ * Encryption Utility Functions
+ * Message processing, error handling, session management, and formatting
+ */
+
 class EncryptionHelpers {
   constructor() {
-    console.log("🔐 [EncryptionHelpers] Initialized");
+    this.messageCache = new Map();
+    this.sessionCache = new Map();
+    this.errorLog = [];
+    this.maxErrorLogSize = 100;
+
+    console.log("🛠️ [EncryptionHelpers] Initialized");
   }
 
-  // 📨 MESSAGE PROCESSING
+  // ======================= MESSAGE PROCESSING =======================
 
   prepareMessageForEncryption(content, metadata = {}) {
     try {
-      console.log("📨 [EncryptionHelpers] Preparing message for encryption...");
-
       const messagePackage = {
         version: "1.0",
         timestamp: new Date().toISOString(),
@@ -18,29 +26,32 @@ class EncryptionHelpers {
           contentType: typeof content === "string" ? "text" : "binary",
           contentLength:
             typeof content === "string" ? content.length : content.byteLength,
+          messageId: this.generateMessageId(),
         },
       };
 
-      // Stringify if not already a string
       const messageString =
         typeof content === "string" ? JSON.stringify(messagePackage) : content;
 
-      console.log("✅ [EncryptionHelpers] Message prepared:", {
-        contentType: messagePackage.metadata.contentType,
-        contentLength: messagePackage.metadata.contentLength,
+      // Cache for reference
+      const cacheKey = `msg_${messagePackage.metadata.messageId}`;
+      this.messageCache.set(cacheKey, {
+        data: messagePackage,
+        timestamp: Date.now(),
+        ttl: 5 * 60 * 1000, // 5 minutes
       });
 
       return messageString;
     } catch (error) {
-      console.error("❌ [EncryptionHelpers] Error preparing message:", error);
+      this.handleError(error, "prepareMessageForEncryption", {
+        contentLength: content?.length,
+      });
       throw error;
     }
   }
 
   parseEncryptedMessage(encryptedData, isString = true) {
     try {
-      console.log("📨 [EncryptionHelpers] Parsing encrypted message...");
-
       if (!encryptedData) {
         throw new Error("No encrypted data provided");
       }
@@ -48,7 +59,6 @@ class EncryptionHelpers {
       let parsedData;
 
       if (isString) {
-        // Try to parse as JSON
         try {
           parsedData = JSON.parse(encryptedData);
         } catch (e) {
@@ -60,11 +70,11 @@ class EncryptionHelpers {
             metadata: {
               contentType: "text",
               contentLength: encryptedData.length,
+              messageId: this.generateMessageId(),
             },
           };
         }
       } else {
-        // Binary data
         parsedData = {
           version: "1.0",
           timestamp: new Date().toISOString(),
@@ -72,32 +82,24 @@ class EncryptionHelpers {
           metadata: {
             contentType: "binary",
             contentLength: encryptedData.byteLength,
+            messageId: this.generateMessageId(),
           },
         };
       }
 
-      // Validate structure
       if (!parsedData.content) {
         throw new Error("Invalid message structure: missing content");
       }
 
-      console.log("✅ [EncryptionHelpers] Message parsed:", {
-        version: parsedData.version,
-        contentType: parsedData.metadata?.contentType,
-        contentLength: parsedData.metadata?.contentLength,
-      });
-
       return parsedData;
     } catch (error) {
-      console.error("❌ [EncryptionHelpers] Error parsing message:", error);
+      this.handleError(error, "parseEncryptedMessage", { isString });
       throw error;
     }
   }
 
   extractEncryptionMetadata(encryptedMessage) {
     try {
-      console.log("🔍 [EncryptionHelpers] Extracting encryption metadata...");
-
       const metadata = {
         algorithm: encryptedMessage.algorithm || "unknown",
         keyId: encryptedMessage.keyId || null,
@@ -107,7 +109,6 @@ class EncryptionHelpers {
         timestamp: encryptedMessage.timestamp || new Date().toISOString(),
       };
 
-      // Calculate size
       if (encryptedMessage.ciphertext) {
         metadata.encryptedSize =
           typeof encryptedMessage.ciphertext === "string"
@@ -115,10 +116,9 @@ class EncryptionHelpers {
             : encryptedMessage.ciphertext.byteLength;
       }
 
-      console.log("✅ [EncryptionHelpers] Metadata extracted:", metadata);
       return metadata;
     } catch (error) {
-      console.error("❌ [EncryptionHelpers] Error extracting metadata:", error);
+      this.handleError(error, "extractEncryptionMetadata");
       return {
         algorithm: "unknown",
         isEncrypted: false,
@@ -127,14 +127,10 @@ class EncryptionHelpers {
     }
   }
 
-  // 🎭 SESSION MANAGEMENT
+  // ======================= SESSION MANAGEMENT =======================
 
-  createEncryptionSession(peerId, sessionKey, algorithm = "AES-GCM") {
+  createEncryptionSession(peerId, sessionData) {
     try {
-      console.log(
-        `🎭 [EncryptionHelpers] Creating encryption session for ${peerId}...`
-      );
-
       const sessionId = `session_${peerId}_${Date.now()}_${Math.random()
         .toString(36)
         .substr(2, 9)}`;
@@ -142,290 +138,150 @@ class EncryptionHelpers {
       const session = {
         sessionId,
         peerId,
-        algorithm,
-        sessionKey:
-          sessionKey instanceof CryptoKey ? "CryptoKey" : typeof sessionKey,
+        algorithm: sessionData.algorithm || "AES-GCM",
+        keyType: sessionData.keyType || "shared",
         createdAt: new Date().toISOString(),
         messageCount: 0,
         lastUsed: new Date().toISOString(),
         isActive: true,
+        metadata: sessionData.metadata || {},
       };
 
-      // Store in localStorage
-      const existingSessions = this.getActiveSessions();
-      existingSessions[sessionId] = session;
-      localStorage.setItem("e2ee_sessions", JSON.stringify(existingSessions));
+      this.sessionCache.set(sessionId, session);
 
-      console.log(`✅ [EncryptionHelpers] Session created: ${sessionId}`);
+      // Persist to localStorage
+      this.persistSession(session);
+
       return session;
     } catch (error) {
-      console.error("❌ [EncryptionHelpers] Error creating session:", error);
+      this.handleError(error, "createEncryptionSession", { peerId });
       throw error;
     }
   }
 
-  closeEncryptionSession(sessionId) {
-    try {
-      console.log(`🎭 [EncryptionHelpers] Closing session: ${sessionId}`);
-
-      const sessions = this.getActiveSessions();
-      if (sessions[sessionId]) {
-        sessions[sessionId].isActive = false;
-        sessions[sessionId].closedAt = new Date().toISOString();
-        localStorage.setItem("e2ee_sessions", JSON.stringify(sessions));
-
-        console.log(`✅ [EncryptionHelpers] Session closed: ${sessionId}`);
-        return true;
-      }
-
-      console.warn(`⚠️ [EncryptionHelpers] Session not found: ${sessionId}`);
-      return false;
-    } catch (error) {
-      console.error("❌ [EncryptionHelpers] Error closing session:", error);
-      return false;
-    }
+  getSession(sessionId) {
+    return this.sessionCache.get(sessionId);
   }
 
   getActiveSessions() {
-    try {
-      const stored = localStorage.getItem("e2ee_sessions");
-      if (!stored) return {};
+    const activeSessions = {};
 
-      const sessions = JSON.parse(stored);
-
-      // Filter active sessions
-      const activeSessions = {};
-      for (const [sessionId, session] of Object.entries(sessions)) {
-        if (session.isActive) {
-          activeSessions[sessionId] = session;
-        }
+    for (const [sessionId, session] of this.sessionCache.entries()) {
+      if (session.isActive) {
+        activeSessions[sessionId] = session;
       }
-
-      return activeSessions;
-    } catch (error) {
-      console.error("❌ [EncryptionHelpers] Error getting sessions:", error);
-      return {};
     }
+
+    return activeSessions;
   }
 
   updateSessionUsage(sessionId) {
     try {
-      const sessions = this.getActiveSessions();
-      if (sessions[sessionId]) {
-        sessions[sessionId].lastUsed = new Date().toISOString();
-        sessions[sessionId].messageCount =
-          (sessions[sessionId].messageCount || 0) + 1;
-        localStorage.setItem("e2ee_sessions", JSON.stringify(sessions));
+      const session = this.sessionCache.get(sessionId);
+      if (session) {
+        session.lastUsed = new Date().toISOString();
+        session.messageCount = (session.messageCount || 0) + 1;
+
+        this.sessionCache.set(sessionId, session);
+        this.persistSession(session);
+
         return true;
       }
       return false;
     } catch (error) {
-      console.error("❌ [EncryptionHelpers] Error updating session:", error);
+      this.handleError(error, "updateSessionUsage", { sessionId });
+      return false;
+    }
+  }
+
+  closeSession(sessionId) {
+    try {
+      const session = this.sessionCache.get(sessionId);
+      if (session) {
+        session.isActive = false;
+        session.closedAt = new Date().toISOString();
+
+        this.sessionCache.set(sessionId, session);
+        this.persistSession(session);
+
+        return true;
+      }
+      return false;
+    } catch (error) {
+      this.handleError(error, "closeSession", { sessionId });
       return false;
     }
   }
 
   cleanupOldSessions(maxAgeHours = 24) {
     try {
-      console.log(
-        `🧹 [EncryptionHelpers] Cleaning up old sessions (>${maxAgeHours}h)...`
-      );
-
-      const sessions = JSON.parse(
-        localStorage.getItem("e2ee_sessions") || "{}"
-      );
       const now = new Date();
       let cleanedCount = 0;
 
-      for (const [sessionId, session] of Object.entries(sessions)) {
+      for (const [sessionId, session] of this.sessionCache.entries()) {
         const lastUsed = new Date(session.lastUsed);
         const hoursSinceLastUse = (now - lastUsed) / (1000 * 60 * 60);
 
         if (hoursSinceLastUse > maxAgeHours) {
-          delete sessions[sessionId];
+          this.sessionCache.delete(sessionId);
           cleanedCount++;
         }
       }
 
-      localStorage.setItem("e2ee_sessions", JSON.stringify(sessions));
-      console.log(
-        `✅ [EncryptionHelpers] Cleaned up ${cleanedCount} old sessions`
-      );
+      // Cleanup persisted sessions
+      this.cleanupPersistedSessions(maxAgeHours);
+
       return cleanedCount;
     } catch (error) {
-      console.error(
-        "❌ [EncryptionHelpers] Error cleaning up sessions:",
-        error
-      );
+      this.handleError(error, "cleanupOldSessions", { maxAgeHours });
       return 0;
     }
   }
 
-  // ⚡ PERFORMANCE OPTIMIZATION
+  // ======================= ERROR HANDLING =======================
 
-  cacheEncryptionResult(cacheKey, result, ttl = 5 * 60 * 1000) {
+  handleError(error, context = {}, additionalData = {}) {
     try {
-      console.log(
-        `⚡ [EncryptionHelpers] Caching encryption result: ${cacheKey}`
-      );
-
-      const cacheData = {
-        result,
-        timestamp: Date.now(),
-        ttl,
-      };
-
-      const existingCache = JSON.parse(
-        localStorage.getItem("e2ee_encryption_cache") || "{}"
-      );
-      existingCache[cacheKey] = cacheData;
-
-      // Clean old cache entries
-      const now = Date.now();
-      const cleanedCache = {};
-      for (const [key, data] of Object.entries(existingCache)) {
-        if (now - data.timestamp < data.ttl) {
-          cleanedCache[key] = data;
-        }
-      }
-
-      localStorage.setItem(
-        "e2ee_encryption_cache",
-        JSON.stringify(cleanedCache)
-      );
-
-      console.log(`✅ [EncryptionHelpers] Result cached: ${cacheKey}`);
-      return true;
-    } catch (error) {
-      console.error("❌ [EncryptionHelpers] Error caching result:", error);
-      return false;
-    }
-  }
-
-  getCachedKey(cacheKey) {
-    try {
-      console.log(`⚡ [EncryptionHelpers] Getting cached key: ${cacheKey}`);
-
-      const cache = JSON.parse(
-        localStorage.getItem("e2ee_encryption_cache") || "{}"
-      );
-      const cached = cache[cacheKey];
-
-      if (!cached) {
-        console.log(`⚠️ [EncryptionHelpers] Cache miss: ${cacheKey}`);
-        return null;
-      }
-
-      const now = Date.now();
-      if (now - cached.timestamp > cached.ttl) {
-        console.log(`⚠️ [EncryptionHelpers] Cache expired: ${cacheKey}`);
-        delete cache[cacheKey];
-        localStorage.setItem("e2ee_encryption_cache", JSON.stringify(cache));
-        return null;
-      }
-
-      console.log(`✅ [EncryptionHelpers] Cache hit: ${cacheKey}`);
-      return cached.result;
-    } catch (error) {
-      console.error("❌ [EncryptionHelpers] Error getting cached key:", error);
-      return null;
-    }
-  }
-
-  clearEncryptionCache() {
-    try {
-      console.log("🧹 [EncryptionHelpers] Clearing encryption cache...");
-      localStorage.removeItem("e2ee_encryption_cache");
-      console.log("✅ [EncryptionHelpers] Encryption cache cleared");
-      return true;
-    } catch (error) {
-      console.error("❌ [EncryptionHelpers] Error clearing cache:", error);
-      return false;
-    }
-  }
-
-  getCacheStats() {
-    try {
-      const cache = JSON.parse(
-        localStorage.getItem("e2ee_encryption_cache") || "{}"
-      );
-      const now = Date.now();
-
-      let validCount = 0;
-      let expiredCount = 0;
-      let totalSize = 0;
-
-      for (const [key, data] of Object.entries(cache)) {
-        totalSize += JSON.stringify(data).length;
-
-        if (now - data.timestamp < data.ttl) {
-          validCount++;
-        } else {
-          expiredCount++;
-        }
-      }
-
-      return {
-        totalEntries: Object.keys(cache).length,
-        validEntries: validCount,
-        expiredEntries: expiredCount,
-        estimatedSizeKB: (totalSize / 1024).toFixed(2),
-      };
-    } catch (error) {
-      console.error("❌ [EncryptionHelpers] Error getting cache stats:", error);
-      return {
-        totalEntries: 0,
-        validEntries: 0,
-        expiredEntries: 0,
-        estimatedSizeKB: "0.00",
-      };
-    }
-  }
-
-  // 🚨 ERROR HANDLING
-
-  handleEncryptionError(error, context = {}) {
-    try {
-      console.error(`🚨 [EncryptionHelpers] Handling encryption error:`, {
-        error: error.message,
-        stack: error.stack,
-        context,
-      });
-
       const errorInfo = {
         timestamp: new Date().toISOString(),
         errorType: error.name,
         errorMessage: error.message,
         context,
+        additionalData,
         userAgent: navigator.userAgent,
         platform: navigator.platform,
+        stack: error.stack?.substring(0, 500), // Limit stack trace size
       };
 
-      // Log to localStorage for debugging
-      const errorLog = JSON.parse(
-        localStorage.getItem("e2ee_error_log") || "[]"
-      );
-      errorLog.unshift(errorInfo);
-
-      // Keep only last 100 errors
-      if (errorLog.length > 100) {
-        errorLog.length = 100;
+      // Add to memory log
+      this.errorLog.unshift(errorInfo);
+      if (this.errorLog.length > this.maxErrorLogSize) {
+        this.errorLog.length = this.maxErrorLogSize;
       }
 
-      localStorage.setItem("e2ee_error_log", JSON.stringify(errorLog));
+      // Persist to localStorage
+      this.persistError(errorInfo);
 
       // Categorize error
-      const category = this.categorizeEncryptionError(error);
+      const category = this.categorizeError(error);
 
-      console.log(`📋 [EncryptionHelpers] Error categorized as: ${category}`);
-      return category;
+      console.error(`🚨 [EncryptionHelpers] ${category}:`, {
+        context,
+        error: error.message,
+      });
+
+      return {
+        category,
+        errorId: this.generateErrorId(errorInfo),
+        timestamp: errorInfo.timestamp,
+      };
     } catch (logError) {
-      console.error("❌ [EncryptionHelpers] Error logging failed:", logError);
-      return "unknown";
+      console.error("❌ Error logging failed:", logError);
+      return { category: "logging_failed" };
     }
   }
 
-  categorizeEncryptionError(error) {
+  categorizeError(error) {
     const message = error.message.toLowerCase();
 
     if (message.includes("key") || message.includes("cryptokey")) {
@@ -437,94 +293,58 @@ class EncryptionHelpers {
       message.includes("unsupported")
     ) {
       return "algorithm_error";
-    } else if (
-      message.includes("network") ||
-      message.includes("socket") ||
-      message.includes("connection")
-    ) {
+    } else if (message.includes("network") || message.includes("socket")) {
       return "network_error";
     } else if (
       message.includes("storage") ||
-      message.includes("localstorage") ||
-      message.includes("quota")
+      message.includes("localstorage")
     ) {
       return "storage_error";
-    } else if (
-      message.includes("type") ||
-      message.includes("format") ||
-      message.includes("json")
-    ) {
+    } else if (message.includes("type") || message.includes("format")) {
       return "data_format_error";
     } else if (message.includes("timeout") || message.includes("expired")) {
       return "timeout_error";
-    } else if (
-      message.includes("permission") ||
-      message.includes("security") ||
-      message.includes("origin")
-    ) {
+    } else if (message.includes("permission") || message.includes("security")) {
       return "security_error";
     } else {
       return "unknown_error";
     }
   }
 
-  getEncryptionErrorReason(category) {
-    const reasons = {
-      key_error: "Encryption key issue. Try regenerating your keys.",
-      authentication_error: "Authentication failed. Check your password.",
-      algorithm_error: "Unsupported encryption algorithm.",
-      network_error: "Network connection issue. Check your internet.",
-      storage_error: "Storage limit reached. Clear some data.",
-      data_format_error: "Invalid data format. Try again.",
-      timeout_error: "Operation timed out. Please retry.",
-      security_error: "Security restriction. Check browser permissions.",
-      unknown_error: "Unknown error occurred. Please try again.",
-    };
-
-    return reasons[category] || reasons.unknown_error;
-  }
-
-  suggestEncryptionFix(category) {
+  getErrorSuggestions(category) {
     const suggestions = {
       key_error: [
-        "Regenerate your encryption keys in Settings",
+        "Regenerate your encryption keys",
         "Clear browser cache and reload",
-        "Make sure you have the correct key for this chat",
+        "Check if the recipient has E2EE enabled",
       ],
       authentication_error: [
         "Re-enter your encryption password",
         "Reset your encryption keys if password is lost",
-        "Check if Caps Lock is on",
       ],
       algorithm_error: [
         "Update your browser to the latest version",
         "Try using a different browser",
-        "Contact support for compatibility issues",
       ],
       network_error: [
         "Check your internet connection",
         "Try switching between WiFi and mobile data",
-        "Restart your router",
       ],
       storage_error: [
         "Clear browser storage for this site",
-        "Delete old encrypted messages",
         "Use incognito mode temporarily",
       ],
       data_format_error: [
         "Refresh the page and try again",
         "Clear browser cache",
-        "Send a shorter message",
       ],
       timeout_error: [
         "Wait a moment and try again",
-        "Check your device performance",
         "Close other tabs/applications",
       ],
       security_error: [
         "Check browser security settings",
         "Enable cookies and local storage",
-        "Try in a regular browser window (not incognito)",
       ],
       unknown_error: [
         "Refresh the application",
@@ -537,32 +357,23 @@ class EncryptionHelpers {
   }
 
   getErrorLog(limit = 20) {
-    try {
-      const errorLog = JSON.parse(
-        localStorage.getItem("e2ee_error_log") || "[]"
-      );
-      return errorLog.slice(0, limit);
-    } catch (error) {
-      console.error("❌ [EncryptionHelpers] Error getting error log:", error);
-      return [];
-    }
+    return this.errorLog.slice(0, limit);
   }
 
   clearErrorLog() {
-    try {
-      localStorage.removeItem("e2ee_error_log");
-      console.log("✅ [EncryptionHelpers] Error log cleared");
-      return true;
-    } catch (error) {
-      console.error("❌ [EncryptionHelpers] Error clearing error log:", error);
-      return false;
-    }
+    this.errorLog = [];
+    localStorage.removeItem("e2ee_error_log");
+    return true;
   }
 
-  // 🛠️ UTILITY FUNCTIONS
+  // ======================= UTILITY FUNCTIONS =======================
 
   generateMessageId() {
     return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  generateErrorId(errorInfo) {
+    return `err_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
   }
 
   validateMessageStructure(message) {
@@ -574,13 +385,11 @@ class EncryptionHelpers {
         throw new Error(`Missing required fields: ${missingFields.join(", ")}`);
       }
 
-      // Validate timestamp
       const timestamp = new Date(message.timestamp);
       if (isNaN(timestamp.getTime())) {
         throw new Error("Invalid timestamp");
       }
 
-      // Validate content (basic checks)
       if (
         typeof message.content !== "string" &&
         !(message.content instanceof ArrayBuffer)
@@ -597,7 +406,7 @@ class EncryptionHelpers {
             : message.content.byteLength,
       };
     } catch (error) {
-      console.error("❌ [EncryptionHelpers] Message validation failed:", error);
+      this.handleError(error, "validateMessageStructure");
       return {
         isValid: false,
         error: error.message,
@@ -610,10 +419,10 @@ class EncryptionHelpers {
       return {
         algorithm: encryptionData.algorithm || "AES-GCM",
         keyId: encryptionData.keyId
-          ? encryptionData.keyId.substring(0, 8) + "..."
+          ? `${encryptionData.keyId.substring(0, 8)}...`
           : "unknown",
         iv: encryptionData.iv
-          ? encryptionData.iv.substring(0, 8) + "..."
+          ? `${encryptionData.iv.substring(0, 8)}...`
           : "none",
         timestamp: encryptionData.timestamp || new Date().toISOString(),
         size: encryptionData.ciphertext
@@ -621,12 +430,10 @@ class EncryptionHelpers {
             ? encryptionData.ciphertext.length
             : encryptionData.ciphertext.byteLength
           : 0,
+        peerId: encryptionData.peerId || "unknown",
       };
     } catch (error) {
-      console.error(
-        "❌ [EncryptionHelpers] Error formatting encryption info:",
-        error
-      );
+      this.handleError(error, "formatEncryptionInfo");
       return {
         algorithm: "unknown",
         keyId: "error",
@@ -636,8 +443,101 @@ class EncryptionHelpers {
       };
     }
   }
+
+  // ======================= PERSISTENCE HELPERS =======================
+
+  persistSession(session) {
+    try {
+      const sessions = JSON.parse(
+        localStorage.getItem("e2ee_sessions") || "{}"
+      );
+      sessions[session.sessionId] = session;
+      localStorage.setItem("e2ee_sessions", JSON.stringify(sessions));
+    } catch (error) {
+      console.warn("⚠️ Failed to persist session:", error);
+    }
+  }
+
+  cleanupPersistedSessions(maxAgeHours) {
+    try {
+      const sessions = JSON.parse(
+        localStorage.getItem("e2ee_sessions") || "{}"
+      );
+      const now = new Date();
+      const cleanedSessions = {};
+
+      for (const [sessionId, session] of Object.entries(sessions)) {
+        const lastUsed = new Date(session.lastUsed);
+        const hoursSinceLastUse = (now - lastUsed) / (1000 * 60 * 60);
+
+        if (hoursSinceLastUse <= maxAgeHours && session.isActive !== false) {
+          cleanedSessions[sessionId] = session;
+        }
+      }
+
+      localStorage.setItem("e2ee_sessions", JSON.stringify(cleanedSessions));
+    } catch (error) {
+      console.warn("⚠️ Failed to cleanup persisted sessions:", error);
+    }
+  }
+
+  persistError(errorInfo) {
+    try {
+      const errorLog = JSON.parse(
+        localStorage.getItem("e2ee_error_log") || "[]"
+      );
+      errorLog.unshift(errorInfo);
+
+      if (errorLog.length > this.maxErrorLogSize) {
+        errorLog.length = this.maxErrorLogSize;
+      }
+
+      localStorage.setItem("e2ee_error_log", JSON.stringify(errorLog));
+    } catch (error) {
+      console.warn("⚠️ Failed to persist error:", error);
+    }
+  }
+
+  // ======================= DEBUG =======================
+
+  debugInfo() {
+    console.group("🔍 [EncryptionHelpers] Debug Info");
+    console.log("📊 Message cache size:", this.messageCache.size);
+    console.log("📊 Session cache size:", this.sessionCache.size);
+    console.log("📊 Error log size:", this.errorLog.length);
+
+    console.log("🔄 Active sessions:");
+    const activeSessions = this.getActiveSessions();
+    Object.keys(activeSessions).forEach((sessionId) => {
+      const session = activeSessions[sessionId];
+      console.log(`   ${sessionId}:`, {
+        peerId: session.peerId,
+        messageCount: session.messageCount,
+        lastUsed: session.lastUsed,
+      });
+    });
+
+    console.groupEnd();
+  }
 }
 
 // Singleton instance
 const encryptionHelpers = new EncryptionHelpers();
+
+// Export helper functions
+export const prepareMessage = (content, metadata) =>
+  encryptionHelpers.prepareMessageForEncryption(content, metadata);
+export const parseMessage = (encryptedData, isString) =>
+  encryptionHelpers.parseEncryptedMessage(encryptedData, isString);
+export const extractMetadata = (encryptedMessage) =>
+  encryptionHelpers.extractEncryptionMetadata(encryptedMessage);
+export const handleEncryptionError = (error, context, data) =>
+  encryptionHelpers.handleError(error, context, data);
+export const getErrorSuggestions = (category) =>
+  encryptionHelpers.getErrorSuggestions(category);
+export const validateMessage = (message) =>
+  encryptionHelpers.validateMessageStructure(message);
+export const formatEncryptionData = (encryptionData) =>
+  encryptionHelpers.formatEncryptionInfo(encryptionData);
+
 export default encryptionHelpers;

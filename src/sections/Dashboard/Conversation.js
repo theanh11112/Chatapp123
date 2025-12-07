@@ -1,5 +1,5 @@
 // src/sections/dashboard/Conversation/index.js
-// HOÀN CHỈNH VỚI E2EE INTEGRATION
+// VERSION MỚI KHÔNG DÙNG E2EE CONTEXT
 import React, { memo, useCallback, useRef, useState, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -15,6 +15,7 @@ import {
   Tooltip,
   Chip,
   CircularProgress,
+  Button,
 } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
 import {
@@ -25,6 +26,7 @@ import {
   LockOpen,
   Key,
   WarningCircle,
+  ArrowClockwise,
 } from "phosphor-react";
 import { Message_options } from "../../data";
 import Embed from "react-embed";
@@ -36,8 +38,11 @@ import {
 } from "../../redux/slices/conversation";
 import { getSocket } from "../../socket";
 import { showSnackbar } from "../../redux/slices/app";
-import { useE2EE } from "../../contexts/E2EEContext";
-import e2eeService from "../../e2ee/utils/e2ee";
+
+// 🆕 IMPORT HOOKS THAY THẾ CONTEXT
+import { useAutoE2EE } from "../../e2ee";
+import { decryptFromPeer } from "../../e2ee/services/autoEncryptionService";
+
 // 🆕 Custom hook để quản lý pin/unpin messages
 const usePinMessage = () => {
   const dispatch = useDispatch();
@@ -185,206 +190,160 @@ const useMessageSnackbar = () => {
   return { snackbar, showSnackbar, hideSnackbar };
 };
 
-// 🆕 Component để hiển thị encrypted message content
-const EncryptedContent = memo(({ el, isOwnMessage }) => {
+// 🆕 Component để hiển thị encrypted message content (VERSION MỚI)
+const EncryptedContent = memo(({ el, isOwnMessage, onDecryptSuccess }) => {
   const theme = useTheme();
-  const { decryptMessage, getFriendKey } = useE2EE();
   const [decryptedContent, setDecryptedContent] = useState(null);
   const [isDecrypting, setIsDecrypting] = useState(false);
   const [error, setError] = useState(null);
+  const [decryptAttempted, setDecryptAttempted] = useState(false);
 
-  useEffect(() => {
-    const decryptMessageContent = async () => {
-      if (!el.isEncrypted || !el.ciphertext || !el.iv) {
-        console.log("🔍 [EncryptedContent] Not encrypted or missing data:", {
-          isEncrypted: el.isEncrypted,
-          hasCiphertext: !!el.ciphertext,
-          hasIV: !!el.iv,
-          ciphertextType: typeof el.ciphertext,
-          ivType: typeof el.iv,
-        });
-        return;
-      }
+  // 🆕 Sử dụng hook auto E2EE
+  const { isReady: e2eeReady, decryptMessage: decryptWithHook } = useAutoE2EE();
 
-      // KIỂM TRA BASE64
-      const isValidCiphertext = window.e2eeService?.isValidBase64?.(
-        el.ciphertext
-      );
-      const isValidIV = window.e2eeService?.isValidBase64?.(el.iv);
+  // Helper function để kiểm tra base64
+  const isValidBase64 = (str) => {
+    if (typeof str !== "string") return false;
+    try {
+      return btoa(atob(str)) === str;
+    } catch (err) {
+      return false;
+    }
+  };
 
-      console.log("🔍 [EncryptedContent] Base64 Validation:", {
-        ciphertextValid: isValidCiphertext,
-        ivValid: isValidIV,
-        ciphertextLength: el.ciphertext.length,
-        ivLength: el.iv.length,
-        ciphertextSample: el.ciphertext.substring(0, 30),
-        ivSample: el.iv.substring(0, 20),
+  // Trong component EncryptedContent, sửa phần decrypt logic:
+  const performDecryption = useCallback(async () => {
+    if (
+      !el.isEncrypted ||
+      !el.encryptionData?.ciphertext ||
+      !el.encryptionData?.iv
+    ) {
+      console.log("🔍 [EncryptedContent] Not encrypted or missing data:", {
+        isEncrypted: el.isEncrypted,
+        hasEncryptionData: !!el.encryptionData,
+        ciphertext: !!el.encryptionData?.ciphertext,
+        iv: !!el.encryptionData?.iv,
+      });
+      return;
+    }
+
+    // Kiểm tra sender
+    const senderId = el.sender?.keycloakId || el.senderId || el.from_user_id;
+    if (!senderId) {
+      setError("Cannot identify sender");
+      return;
+    }
+
+    try {
+      setIsDecrypting(true);
+      setError(null);
+      setDecryptAttempted(true);
+
+      console.log("🔐 Starting decryption...", {
+        messageId: el.id || el._id,
+        senderId,
+        hasCiphertext: !!el.encryptionData.ciphertext,
+        hasIV: !!el.encryptionData.iv,
+        keyId: el.encryptionData.keyId,
+        algorithm: el.encryptionData.algorithm,
       });
 
-      if (!isValidCiphertext || !isValidIV) {
-        setError("Dữ liệu mã hóa không hợp lệ");
-        setIsDecrypting(false);
-        return;
+      // Kiểm tra base64
+      const ciphertextValid = isValidBase64(el.encryptionData.ciphertext);
+      const ivValid = isValidBase64(el.encryptionData.iv);
+
+      if (!ciphertextValid || !ivValid) {
+        throw new Error("Invalid encryption data format");
       }
-      // Chỉ giải mã nếu tin nhắn được mã hóa và có đủ thông tin
-      if (!el.isEncrypted || !el.ciphertext || !el.iv) return;
 
-      try {
-        setIsDecrypting(true);
-        setError(null);
+      let result;
 
-        const senderId = el.sender?.keycloakId || el.from_user_id;
+      // Phương thức 1: Sử dụng hook decryptMessage
+      if (e2eeReady && decryptWithHook) {
+        console.log("🔄 Using hook decryptMessage...");
 
-        console.log("🔐 Starting decryption...", {
-          messageId: el.message_id,
-          senderId,
-          hasCiphertext: !!el.ciphertext,
-          hasIV: !!el.iv,
-          keyId: el.key_id,
-          algorithm: el.algorithm,
-        });
-
-        // 1. Ưu tiên sử dụng autoEncryptionService
-        if (window.autoEncryptionService) {
-          console.log("🔄 Using window.autoEncryptionService...");
-
-          const autoEncryption = window.autoEncryptionService;
-
-          // Kiểm tra service đã sẵn sàng chưa
-          if (autoEncryption.isReady && !autoEncryption.isReady()) {
-            console.warn("⚠️ Auto encryption service not ready yet");
-            setError("Decryption service initializing...");
-            return;
-          }
-
-          try {
-            const result = await autoEncryption.decryptMessage(
-              el.ciphertext,
-              el.iv,
-              el.key_id || el.sender_fingerprint, // keyId
-              senderId
-            );
-
-            console.log("📥 Decryption result:", {
-              success: result.success,
-              hasContent: !!result.content,
-              error: result.error,
-            });
-
-            if (result.success && result.content) {
-              setDecryptedContent(result.content);
-              return;
-            } else {
-              console.warn("⚠️ Auto encryption service failed:", result.error);
-              setError(result.error || "Decryption failed");
-            }
-          } catch (autoError) {
-            console.error("❌ Auto encryption error:", autoError);
-          }
-        }
-
-        // 2. Fallback: Sử dụng E2EE service từ context
-        if (e2eeService && e2eeService.decryptMessage) {
-          console.log("🔄 Using e2eeService fallback...");
-
-          try {
-            const result = await e2eeService.decryptMessage({
-              ciphertext: el.ciphertext,
-              iv: el.iv,
-              keyId: el.key_id,
-              senderId: senderId,
-            });
-
-            if (result.success) {
-              setDecryptedContent(result.content);
-              return;
-            }
-          } catch (e2eeError) {
-            console.error("❌ E2EE service error:", e2eeError);
-          }
-        }
-
-        // 3. Fallback: Giải mã thủ công
-        console.log("🔄 Using manual decryption...");
-
-        // Lấy private key của chính mình
-        const ownPrivateKeyStr = localStorage.getItem("e2ee_private_key");
-        if (!ownPrivateKeyStr || ownPrivateKeyStr === "{}") {
-          throw new Error("Your private key not found");
-        }
-
-        const ownPrivateKeyJwk = JSON.parse(ownPrivateKeyStr);
-
-        // Lấy public key của người gửi
-        const friendKey = getFriendKey(senderId);
-        if (!friendKey?.publicKey) {
-          throw new Error(`No public key for sender: ${senderId}`);
-        }
-
-        const peerPublicKeyJwk = JSON.parse(friendKey.publicKey);
-
-        // Sử dụng keyUtils
-        const keyUtils = require("../utils/keyUtils").default;
-
-        const sharedSecret = await keyUtils.deriveSharedSecret(
-          ownPrivateKeyJwk,
-          peerPublicKeyJwk
-        );
-
-        // Helper function để chuyển base64 sang ArrayBuffer
-        const base64ToArrayBuffer = (base64) => {
-          const binary = window.atob(base64);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
-          }
-          return bytes.buffer;
+        // Chuẩn bị dữ liệu theo định dạng hook mong đợi
+        const encryptedData = {
+          ciphertext: el.encryptionData.ciphertext,
+          iv: el.encryptionData.iv,
+          keyId: el.encryptionData.keyId,
+          algorithm: el.encryptionData.algorithm,
+          metadata: el.encryptionData.metadata,
         };
 
-        const decrypted = await window.crypto.subtle.decrypt(
-          {
-            name: "AES-GCM",
-            iv: base64ToArrayBuffer(el.iv),
-          },
-          sharedSecret,
-          base64ToArrayBuffer(el.ciphertext)
-        );
-
-        const decoded = new TextDecoder().decode(decrypted);
-        setDecryptedContent(decoded);
-      } catch (err) {
-        console.error("❌ Error decrypting message:", err);
-        setError(err.message || "Decryption failed");
-
-        // Debug thêm
-        console.debug("Message details:", {
-          messageId: el.message_id,
-          sender: el.sender,
-          ciphertextLength: el.ciphertext?.length,
-          ivLength: el.iv?.length,
-          keyId: el.key_id,
-          algorithm: el.algorithm,
-        });
-      } finally {
-        setIsDecrypting(false);
+        result = await decryptWithHook(encryptedData, senderId);
       }
-    };
+      // Phương thức 2: Sử dụng autoEncryptionService từ window
+      else if (
+        window.autoEncryptionService &&
+        window.autoEncryptionService.isReady?.()
+      ) {
+        console.log("🔄 Using window.autoEncryptionService...");
 
-    // Chỉ chạy giải mã một lần khi component mount
-    decryptMessageContent();
-  }, [
-    el.isEncrypted,
-    el.ciphertext,
-    el.iv,
-    el.key_id,
-    el.algorithm,
-    el.sender,
-    el.message_id,
-    el.from_user_id,
-    el.sender_fingerprint,
-    getFriendKey,
-    e2eeService,
-  ]);
+        // Chuẩn bị dữ liệu
+        const encryptedData = {
+          ciphertext: el.encryptionData.ciphertext,
+          iv: el.encryptionData.iv,
+          keyId: el.encryptionData.keyId,
+          algorithm: el.encryptionData.algorithm,
+          metadata: el.encryptionData.metadata,
+        };
+
+        result = await window.autoEncryptionService.decryptMessage(
+          encryptedData,
+          senderId
+        );
+      }
+      // Phương thức 3: Sử dụng decryptFromPeer từ service
+      else {
+        console.log("🔄 Using service decryptFromPeer...");
+
+        // Chuẩn bị dữ liệu
+        const encryptedData = {
+          ciphertext: el.encryptionData.ciphertext,
+          iv: el.encryptionData.iv,
+          keyId: el.encryptionData.keyId,
+          algorithm: el.encryptionData.algorithm,
+          metadata: el.encryptionData.metadata,
+        };
+
+        result = await decryptFromPeer(encryptedData, senderId);
+      }
+
+      console.log("📥 Decryption result:", {
+        success: result.success,
+        hasContent: !!result.content,
+        error: result.error,
+      });
+
+      if (result.success && result.content) {
+        setDecryptedContent(result.content);
+        onDecryptSuccess?.(result.content);
+      } else {
+        throw new Error(result.error || "Decryption failed");
+      }
+    } catch (err) {
+      console.error("❌ Error decrypting message:", err);
+      setError(err.message || "Decryption failed");
+    } finally {
+      setIsDecrypting(false);
+    }
+  }, [el, e2eeReady, decryptWithHook, onDecryptSuccess]);
+
+  // Auto decrypt khi component mount (chỉ một lần)
+  useEffect(() => {
+    if (el.isEncrypted && !decryptAttempted && !isOwnMessage) {
+      // Chờ một chút để đảm bảo mọi thứ đã sẵn sàng
+      const timer = setTimeout(() => {
+        performDecryption();
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [el.isEncrypted, decryptAttempted, isOwnMessage, performDecryption]);
+
+  const handleManualDecrypt = useCallback(() => {
+    performDecryption();
+  }, [performDecryption]);
 
   if (el.encryptionStatus === "encrypting") {
     return (
@@ -443,21 +402,37 @@ const EncryptedContent = memo(({ el, isOwnMessage }) => {
       <Box
         sx={{
           display: "flex",
-          alignItems: "center",
+          flexDirection: "column",
           gap: 1,
           py: 0.5,
         }}
       >
-        <WarningCircle size={14} color={theme.palette.error.main} />
-        <Typography
-          variant="caption"
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <WarningCircle size={14} color={theme.palette.error.main} />
+          <Typography
+            variant="caption"
+            sx={{
+              color: theme.palette.error.main,
+              fontStyle: "italic",
+            }}
+          >
+            Decryption failed
+          </Typography>
+        </Box>
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={<ArrowClockwise size={12} />}
+          onClick={handleManualDecrypt}
           sx={{
-            color: theme.palette.error.main,
-            fontStyle: "italic",
+            fontSize: "0.7rem",
+            py: 0.25,
+            px: 1,
+            alignSelf: "flex-start",
           }}
         >
-          Decryption failed
-        </Typography>
+          Retry Decryption
+        </Button>
       </Box>
     );
   }
@@ -476,34 +451,52 @@ const EncryptedContent = memo(({ el, isOwnMessage }) => {
     );
   }
 
-  // Default encrypted placeholder
+  // Default encrypted placeholder với nút decrypt
   return (
     <Box
       sx={{
         display: "flex",
-        alignItems: "center",
+        flexDirection: "column",
         gap: 1,
         py: 0.5,
       }}
     >
-      <Lock size={14} color={theme.palette.warning.main} />
-      <Typography
-        variant="body2"
-        sx={{
-          fontStyle: "italic",
-          color: isOwnMessage
-            ? "rgba(255,255,255,0.7)"
-            : theme.palette.text.secondary,
-        }}
-      >
-        🔒 Encrypted message
-      </Typography>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <Lock size={14} color={theme.palette.warning.main} />
+        <Typography
+          variant="body2"
+          sx={{
+            fontStyle: "italic",
+            color: isOwnMessage
+              ? "rgba(255,255,255,0.7)"
+              : theme.palette.text.secondary,
+          }}
+        >
+          🔒 Encrypted message
+        </Typography>
+      </Box>
+      {!isOwnMessage && (
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={<LockOpen size={12} />}
+          onClick={handleManualDecrypt}
+          sx={{
+            fontSize: "0.7rem",
+            py: 0.25,
+            px: 1,
+            alignSelf: "flex-start",
+          }}
+        >
+          Decrypt Message
+        </Button>
+      )}
     </Box>
   );
 });
 
 // =======================
-//  MESSAGE OPTION MENU - HOÀN CHỈNH VỚI PIN/UNPIN VÀ E2EE
+//  MESSAGE OPTION MENU - VERSION MỚI KHÔNG CONTEXT
 // =======================
 const MessageOption = memo(({ onAction, messageId, isEncrypted = false }) => {
   const [anchorEl, setAnchorEl] = React.useState(null);
@@ -547,7 +540,7 @@ const MessageOption = memo(({ onAction, messageId, isEncrypted = false }) => {
     [handleClose]
   );
 
-  // 🆕 CẬP NHẬT: Message options với pin/unpin dynamic và E2EE options
+  // 🆕 Message options với pin/unpin dynamic và E2EE options
   const getMessageOptions = useCallback(() => {
     const baseOptions = Message_options.filter(
       (opt) => opt.action !== "pin" && opt.action !== "unpin"
@@ -664,7 +657,7 @@ const MessageOption = memo(({ onAction, messageId, isEncrypted = false }) => {
 });
 
 // =======================
-//  MESSAGE CONTAINER - HOÀN CHỈNH VỚI E2EE SUPPORT
+//  MESSAGE CONTAINER - VERSION MỚI KHÔNG CONTEXT
 // =======================
 const MessageContainer = memo(
   ({
@@ -696,7 +689,9 @@ const MessageContainer = memo(
           if (window.showNotification) {
             window.showNotification({
               severity: "info",
-              message: `Encrypted message\nKey ID: ${el.keyId || "Unknown"}`,
+              message: `Encrypted message\nKey ID: ${
+                el.encryptionData?.keyId || "Unknown"
+              }`,
             });
           }
         } else if (onMenuAction) {
@@ -804,7 +799,7 @@ const MessageContainer = memo(
 );
 
 // =======================
-//  TEXT MESSAGE - HOÀN CHỈNH VỚI E2EE SUPPORT
+//  TEXT MESSAGE - VERSION MỚI KHÔNG CONTEXT
 // =======================
 const TextMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
@@ -879,10 +874,22 @@ const TextMsg = memo(
       }
     }, [el.replyTo]);
 
+    // 🆕 Handle decryption success
+    const handleDecryptSuccess = useCallback((decryptedContent) => {
+      console.log("✅ Message decrypted successfully:", decryptedContent);
+      // Có thể dispatch action để cập nhật message trong store nếu cần
+    }, []);
+
     // 🆕 Get message content based on encryption status
     const getMessageContent = () => {
       if (isEncrypted) {
-        return <EncryptedContent el={el} isOwnMessage={isOwnMessage} />;
+        return (
+          <EncryptedContent
+            el={el}
+            isOwnMessage={isOwnMessage}
+            onDecryptSuccess={handleDecryptSuccess}
+          />
+        );
       }
 
       // Regular message
@@ -968,7 +975,7 @@ const TextMsg = memo(
 );
 
 // =======================
-//  MEDIA MESSAGE - HOÀN CHỈNH VỚI E2EE SUPPORT
+//  MEDIA MESSAGE - VERSION MỚI KHÔNG CONTEXT
 // =======================
 const MediaMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
@@ -1166,7 +1173,7 @@ const MediaMsg = memo(
 );
 
 // =======================
-//  DOCUMENT MESSAGE - HOÀN CHỈNH VỚI E2EE SUPPORT
+//  DOCUMENT MESSAGE - VERSION MỚI KHÔNG CONTEXT
 // =======================
 const DocMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
@@ -1352,7 +1359,7 @@ const DocMsg = memo(
 );
 
 // =======================
-//  LINK MESSAGE - HOÀN CHỈNH VỚI E2EE SUPPORT
+//  LINK MESSAGE - VERSION MỚI KHÔNG CONTEXT
 // =======================
 const LinkMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
@@ -1550,7 +1557,7 @@ const LinkMsg = memo(
 );
 
 // =======================
-//  REPLY MESSAGE - HOÀN CHỈNH VỚI E2EE SUPPORT
+//  REPLY MESSAGE - VERSION MỚI KHÔNG CONTEXT
 // =======================
 const ReplyMsg = memo(
   ({ el, menu, onDelete, isGroup = false, roomId = null }) => {
@@ -1669,6 +1676,11 @@ const ReplyMsg = memo(
     // 🆕 Check if reply is encrypted
     const isReplyEncrypted = replyData?.isEncrypted || false;
 
+    // 🆕 Handle decryption success
+    const handleDecryptSuccess = useCallback((decryptedContent) => {
+      console.log("✅ Reply message decrypted successfully:", decryptedContent);
+    }, []);
+
     if (!replyData) {
       return (
         <>
@@ -1699,13 +1711,21 @@ const ReplyMsg = memo(
                   : "none",
               }}
             >
-              <Typography
-                variant="body2"
-                color={isOwnMessage ? "#fff" : theme.palette.text.primary}
-                sx={{ wordBreak: "break-word" }}
-              >
-                {el.content || el.message}
-              </Typography>
+              {isEncrypted ? (
+                <EncryptedContent
+                  el={el}
+                  isOwnMessage={isOwnMessage}
+                  onDecryptSuccess={handleDecryptSuccess}
+                />
+              ) : (
+                <Typography
+                  variant="body2"
+                  color={isOwnMessage ? "#fff" : theme.palette.text.primary}
+                  sx={{ wordBreak: "break-word" }}
+                >
+                  {el.content || el.message}
+                </Typography>
+              )}
 
               <Typography
                 variant="caption"
@@ -1834,7 +1854,11 @@ const ReplyMsg = memo(
 
             {/* MAIN REPLY CONTENT */}
             {isEncrypted ? (
-              <EncryptedContent el={el} isOwnMessage={isOwnMessage} />
+              <EncryptedContent
+                el={el}
+                isOwnMessage={isOwnMessage}
+                onDecryptSuccess={handleDecryptSuccess}
+              />
             ) : (
               <Typography
                 variant="body2"
@@ -1907,4 +1931,5 @@ export {
   MessageContainer,
   usePinMessage,
   useMessageSnackbar,
+  EncryptedContent,
 };

@@ -1,8 +1,8 @@
 import CryptoJS from "crypto-js";
 
 /**
- * Utility functions for cryptographic operations
- * Fallback khi Web Crypto API không khả dụng
+ * Basic cryptographic utilities and fallback functions
+ * Only contains operations that don't require Web Crypto API
  */
 
 export class CryptoUtils {
@@ -47,14 +47,18 @@ export class CryptoUtils {
   }
 
   // Symmetric encryption (fallback)
-  static encryptSymmetric(plaintext, key) {
+  static encryptSymmetric(plaintext, key, iv) {
     try {
-      const iv = CryptoJS.lib.WordArray.random(16);
-      const encrypted = CryptoJS.AES.encrypt(plaintext, key, { iv });
+      const ivWordArray = iv
+        ? CryptoJS.enc.Hex.parse(iv)
+        : CryptoJS.lib.WordArray.random(16);
+      const encrypted = CryptoJS.AES.encrypt(plaintext, key, {
+        iv: ivWordArray,
+      });
 
       return {
         ciphertext: encrypted.ciphertext.toString(CryptoJS.enc.Base64),
-        iv: iv.toString(),
+        iv: ivWordArray.toString(),
         algorithm: "AES-CBC",
       };
     } catch (error) {
@@ -107,5 +111,63 @@ export class CryptoUtils {
     const hash = CryptoJS.SHA256(key).toString(CryptoJS.enc.Hex);
     return hash.substring(0, 8).toUpperCase();
   }
+
+  // Password-based encryption
+  static encryptWithPassword(data, password) {
+    try {
+      const salt = CryptoJS.lib.WordArray.random(128 / 8);
+      const key = CryptoJS.PBKDF2(password, salt, {
+        keySize: 256 / 32,
+        iterations: 10000,
+      });
+
+      const iv = CryptoJS.lib.WordArray.random(128 / 8);
+      const encrypted = CryptoJS.AES.encrypt(data, key, {
+        iv: iv,
+        padding: CryptoJS.pad.Pkcs7,
+        mode: CryptoJS.mode.CBC,
+      });
+
+      return {
+        ciphertext: encrypted.ciphertext.toString(CryptoJS.enc.Base64),
+        salt: salt.toString(CryptoJS.enc.Hex),
+        iv: iv.toString(CryptoJS.enc.Hex),
+        algorithm: "AES-CBC-256",
+      };
+    } catch (error) {
+      console.error("Password encryption error:", error);
+      throw error;
+    }
+  }
+
+  // Password-based decryption
+  static decryptWithPassword(encryptedData, password) {
+    try {
+      const { ciphertext, salt, iv, algorithm } = encryptedData;
+
+      if (algorithm !== "AES-CBC-256") {
+        throw new Error(`Unsupported algorithm: ${algorithm}`);
+      }
+
+      const saltWordArray = CryptoJS.enc.Hex.parse(salt);
+      const key = CryptoJS.PBKDF2(password, saltWordArray, {
+        keySize: 256 / 32,
+        iterations: 10000,
+      });
+
+      const ivWordArray = CryptoJS.enc.Hex.parse(iv);
+      const decrypted = CryptoJS.AES.decrypt(ciphertext, key, {
+        iv: ivWordArray,
+        padding: CryptoJS.pad.Pkcs7,
+        mode: CryptoJS.mode.CBC,
+      });
+
+      return decrypted.toString(CryptoJS.enc.Utf8);
+    } catch (error) {
+      console.error("Password decryption error:", error);
+      throw error;
+    }
+  }
 }
+
 export default CryptoUtils;

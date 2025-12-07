@@ -1,17 +1,18 @@
-import CryptoJS from "crypto-js";
+/**
+ * Advanced key utilities - only key operations and format conversions
+ * Uses Web Crypto API when available
+ */
 
 class KeyUtils {
   constructor() {
     console.log("🔑 [KeyUtils] Initialized");
   }
 
-  // 🔄 KEY GENERATION
+  // ======================= KEY GENERATION =======================
 
   async generateECDHKeyPair() {
     try {
-      console.log("🔄 [KeyUtils] Generating ECDH key pair...");
-
-      if (!window.crypto || !window.crypto.subtle) {
+      if (!window.crypto?.subtle) {
         throw new Error("Web Crypto API not supported");
       }
 
@@ -20,7 +21,7 @@ class KeyUtils {
           name: "ECDH",
           namedCurve: "P-256",
         },
-        true, // extractable
+        true,
         ["deriveKey", "deriveBits"]
       );
 
@@ -34,16 +35,14 @@ class KeyUtils {
 
   async generateRSAKeyPair() {
     try {
-      console.log("🔄 [KeyUtils] Generating RSA key pair...");
-
       const keyPair = await window.crypto.subtle.generateKey(
         {
           name: "RSA-OAEP",
           modulusLength: 2048,
-          publicExponent: new Uint8Array([1, 0, 1]), // 65537
+          publicExponent: new Uint8Array([1, 0, 1]),
           hash: "SHA-256",
         },
-        true, // extractable
+        true,
         ["encrypt", "decrypt"]
       );
 
@@ -57,24 +56,16 @@ class KeyUtils {
 
   generateSymmetricKey(length = 256) {
     try {
-      console.log(`🔄 [KeyUtils] Generating symmetric key (${length} bits)...`);
-
-      if (window.crypto && window.crypto.getRandomValues) {
+      if (window.crypto?.getRandomValues) {
         const keyBytes = length / 8;
         const key = new Uint8Array(keyBytes);
         window.crypto.getRandomValues(key);
 
-        const keyHex = Array.from(key)
+        return Array.from(key)
           .map((b) => b.toString(16).padStart(2, "0"))
           .join("");
-
-        console.log("✅ [KeyUtils] Symmetric key generated");
-        return keyHex;
       } else {
-        // Fallback
-        const key = CryptoJS.lib.WordArray.random(length / 8);
-        console.log("✅ [KeyUtils] Symmetric key generated (fallback)");
-        return key.toString();
+        throw new Error("Web Crypto API not available");
       }
     } catch (error) {
       console.error("❌ [KeyUtils] Error generating symmetric key:", error);
@@ -82,14 +73,11 @@ class KeyUtils {
     }
   }
 
-  // 📝 KEY FORMATTING
+  // ======================= KEY FORMAT CONVERSION =======================
 
   async exportKeyToJWK(key) {
     try {
-      console.log("📝 [KeyUtils] Exporting key to JWK...");
-
       const jwk = await window.crypto.subtle.exportKey("jwk", key);
-      console.log("✅ [KeyUtils] Key exported to JWK");
       return jwk;
     } catch (error) {
       console.error("❌ [KeyUtils] Error exporting key to JWK:", error);
@@ -99,8 +87,6 @@ class KeyUtils {
 
   async importKeyFromJWK(jwk, keyUsages) {
     try {
-      console.log("📝 [KeyUtils] Importing key from JWK...");
-
       const key = await window.crypto.subtle.importKey(
         "jwk",
         jwk,
@@ -113,7 +99,6 @@ class KeyUtils {
         keyUsages
       );
 
-      console.log("✅ [KeyUtils] Key imported from JWK");
       return key;
     } catch (error) {
       console.error("❌ [KeyUtils] Error importing key from JWK:", error);
@@ -123,8 +108,6 @@ class KeyUtils {
 
   async exportKeyToPEM(key, isPrivate = false) {
     try {
-      console.log("📝 [KeyUtils] Exporting key to PEM...");
-
       const format = isPrivate ? "pkcs8" : "spki";
       const exported = await window.crypto.subtle.exportKey(format, key);
 
@@ -142,7 +125,6 @@ class KeyUtils {
         `-----END ${type} KEY-----`,
       ].join("\n");
 
-      console.log("✅ [KeyUtils] Key exported to PEM");
       return pem;
     } catch (error) {
       console.error("❌ [KeyUtils] Error exporting key to PEM:", error);
@@ -152,8 +134,6 @@ class KeyUtils {
 
   async importKeyFromPEM(pem, keyUsages, isPrivate = false) {
     try {
-      console.log("📝 [KeyUtils] Importing key from PEM...");
-
       // Extract base64 from PEM
       const base64 = pem
         .replace(/-----BEGIN (?:RSA )?(?:PUBLIC|PRIVATE) KEY-----/, "")
@@ -185,7 +165,6 @@ class KeyUtils {
         keyUsages
       );
 
-      console.log("✅ [KeyUtils] Key imported from PEM");
       return key;
     } catch (error) {
       console.error("❌ [KeyUtils] Error importing key from PEM:", error);
@@ -193,96 +172,13 @@ class KeyUtils {
     }
   }
 
-  // ✅ KEY VALIDATION
+  // ======================= KEY DERIVATION =======================
 
-  validateKeyFormat(key, expectedType = "ecdh") {
-    try {
-      console.log(`✅ [KeyUtils] Validating ${expectedType} key format...`);
-
-      if (!key) {
-        throw new Error("Key is empty");
-      }
-
-      // Check if it's a JWK
-      if (typeof key === "string" && key.startsWith("{")) {
-        try {
-          const jwk = JSON.parse(key);
-
-          if (expectedType === "ecdh") {
-            return jwk.kty === "EC" && jwk.crv === "P-256";
-          } else if (expectedType === "rsa") {
-            return jwk.kty === "RSA" && jwk.e && jwk.n;
-          }
-        } catch (e) {
-          // Not a valid JSON
-          return false;
-        }
-      }
-
-      // Check if it's PEM format
-      if (typeof key === "string" && key.includes("-----BEGIN")) {
-        return key.includes("PUBLIC KEY") || key.includes("PRIVATE KEY");
-      }
-
-      // Check if it's a CryptoKey object
-      if (key instanceof CryptoKey) {
-        return true;
-      }
-
-      // Check if it's a hex string (for symmetric keys)
-      if (typeof key === "string" && /^[0-9a-fA-F]+$/.test(key)) {
-        return key.length >= 32; // At least 128-bit key
-      }
-
-      console.warn("⚠️ [KeyUtils] Unknown key format");
-      return false;
-    } catch (error) {
-      console.error("❌ [KeyUtils] Error validating key format:", error);
-      return false;
-    }
-  }
-
-  checkKeyExpiration(keyTimestamp, maxAgeDays = 30) {
-    try {
-      const now = Date.now();
-      const keyAge = now - keyTimestamp;
-      const maxAge = maxAgeDays * 24 * 60 * 60 * 1000;
-
-      const isExpired = keyAge > maxAge;
-      const daysLeft = Math.ceil((maxAge - keyAge) / (24 * 60 * 60 * 1000));
-
-      console.log(
-        `📅 [KeyUtils] Key age: ${Math.floor(
-          keyAge / (24 * 60 * 60 * 1000)
-        )} days, Expired: ${isExpired}`
-      );
-
-      return {
-        isExpired,
-        daysLeft: isExpired ? 0 : daysLeft,
-        keyAgeDays: Math.floor(keyAge / (24 * 60 * 60 * 1000)),
-      };
-    } catch (error) {
-      console.error("❌ [KeyUtils] Error checking key expiration:", error);
-      return { isExpired: false, daysLeft: 0, keyAgeDays: 0 };
-    }
-  }
-
-  verifyKeyOwnership(publicKey, signature, data) {
-    // This would verify that the key owner signed the data
-    // For now, return a placeholder implementation
-    console.log("🔐 [KeyUtils] Verifying key ownership (placeholder)");
-    return { verified: true, reason: "Placeholder implementation" };
-  }
-
-  // 🔗 KEY DERIVATION
-
-  // Sửa hàm deriveSharedSecret trong keyUtils.js
   async deriveSharedSecret(ownPrivateKeyJwk, peerPublicKeyJwk) {
     try {
-      console.log("🔗 [KeyUtils] Deriving shared secret...");
+      console.group("🔗 [KeyUtils] Deriving shared secret - FIXED VERSION");
 
-      // Đảm bảo đây là JWK objects, không phải strings
+      // Parse JWKs
       const ownPrivateKey =
         typeof ownPrivateKeyJwk === "string"
           ? JSON.parse(ownPrivateKeyJwk)
@@ -293,14 +189,14 @@ class KeyUtils {
           ? JSON.parse(peerPublicKeyJwk)
           : peerPublicKeyJwk;
 
-      console.log("🔑 Importing keys...", {
-        ownKeyType: typeof ownPrivateKey,
-        peerKeyType: typeof peerPublicKey,
-        ownHasKty: !!ownPrivateKey.kty,
-        peerHasKty: !!peerPublicKey.kty,
+      console.log("JWKs:", {
+        ownKeyType: ownPrivateKey.kty,
+        ownHasPrivateKey: !!ownPrivateKey.d,
+        peerKeyType: peerPublicKey.kty,
+        peerHasPublicKey: !!peerPublicKey.x,
       });
 
-      // 1. Import own private key as CryptoKey
+      // Import keys
       const ownPrivateCryptoKey = await window.crypto.subtle.importKey(
         "jwk",
         ownPrivateKey,
@@ -308,11 +204,10 @@ class KeyUtils {
           name: "ECDH",
           namedCurve: "P-256",
         },
-        false,
+        false, // Không extractable cho private key
         ["deriveKey", "deriveBits"]
       );
 
-      // 2. Import peer public key as CryptoKey
       const peerPublicCryptoKey = await window.crypto.subtle.importKey(
         "jwk",
         peerPublicKey,
@@ -320,13 +215,11 @@ class KeyUtils {
           name: "ECDH",
           namedCurve: "P-256",
         },
-        true,
+        true, // Extractable cho public key
         []
       );
 
-      console.log("✅ Keys imported successfully");
-
-      // 3. Derive bits (raw shared secret)
+      // Derive raw shared secret
       const rawSharedSecret = await window.crypto.subtle.deriveBits(
         {
           name: "ECDH",
@@ -336,9 +229,14 @@ class KeyUtils {
         256
       );
 
-      console.log("🔄 Converting to CryptoKey...");
+      console.log("Raw shared secret derived:", {
+        byteLength: rawSharedSecret.byteLength,
+        hexPreview: Array.from(new Uint8Array(rawSharedSecret.slice(0, 8)))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join(" "),
+      });
 
-      // 4. Convert raw bits to CryptoKey for AES-GCM
+      // ⭐⭐ QUAN TRỌNG: Tạo CryptoKey với extractable = true
       const derivedKey = await window.crypto.subtle.importKey(
         "raw",
         rawSharedSecret,
@@ -346,22 +244,28 @@ class KeyUtils {
           name: "AES-GCM",
           length: 256,
         },
-        false,
+        true, // ⭐⭐ EXTRACTABLE = TRUE
         ["encrypt", "decrypt"]
       );
 
-      console.log("✅ [KeyUtils] Shared secret derived successfully");
+      console.log("✅ Shared secret derived successfully!");
+      console.log("Key properties:", {
+        extractable: derivedKey.extractable, // Phải là TRUE
+        algorithm: derivedKey.algorithm.name,
+        type: derivedKey.type,
+        usages: derivedKey.usages,
+      });
+
+      console.groupEnd();
       return derivedKey;
     } catch (error) {
       console.error("❌ [KeyUtils] Error deriving shared secret:", error);
+      console.groupEnd();
       throw error;
     }
   }
-
   async deriveSessionKey(sharedSecret, salt = null) {
     try {
-      console.log("🔗 [KeyUtils] Deriving session key...");
-
       if (!salt) {
         salt = window.crypto.getRandomValues(new Uint8Array(16));
       }
@@ -382,7 +286,6 @@ class KeyUtils {
         ["encrypt", "decrypt"]
       );
 
-      console.log("✅ [KeyUtils] Session key derived");
       return {
         key: sessionKey,
         salt: Array.from(salt),
@@ -393,80 +296,106 @@ class KeyUtils {
     }
   }
 
-  // 🏷️ FINGERPRINT CALCULATION
+  // ======================= KEY VALIDATION =======================
 
-  calculateFingerprint(key, algorithm = "sha256") {
+  validateKeyFormat(key, expectedType = "ecdh") {
     try {
-      console.log(`🏷️ [KeyUtils] Calculating fingerprint (${algorithm})...`);
-
-      let keyString;
-
-      if (typeof key === "string") {
-        keyString = key;
-      } else if (key instanceof CryptoKey) {
-        // For CryptoKey objects, we need to export first
-        keyString = JSON.stringify(key.algorithm);
-      } else if (key && typeof key === "object") {
-        keyString = JSON.stringify(key);
-      } else {
-        throw new Error("Unsupported key type for fingerprint calculation");
+      if (!key) {
+        return false;
       }
 
-      let fingerprint;
-
-      if (algorithm === "sha256") {
-        const hash = CryptoJS.SHA256(keyString).toString(CryptoJS.enc.Hex);
-        fingerprint = hash.substring(0, 16).toUpperCase();
-        fingerprint = fingerprint.match(/.{1,4}/g).join(" ");
-      } else if (algorithm === "sha1") {
-        const hash = CryptoJS.SHA1(keyString).toString(CryptoJS.enc.Hex);
-        fingerprint = hash.substring(0, 20).toUpperCase();
-        fingerprint = fingerprint.match(/.{1,4}/g).join(" ");
-      } else {
-        throw new Error(`Unsupported algorithm: ${algorithm}`);
+      // Check if it's a JWK
+      if (typeof key === "string" && key.startsWith("{")) {
+        try {
+          const jwk = JSON.parse(key);
+          if (expectedType === "ecdh") {
+            return jwk.kty === "EC" && jwk.crv === "P-256";
+          } else if (expectedType === "rsa") {
+            return jwk.kty === "RSA" && jwk.e && jwk.n;
+          }
+        } catch (e) {
+          return false;
+        }
       }
 
-      console.log(`✅ [KeyUtils] Fingerprint calculated: ${fingerprint}`);
-      return fingerprint;
+      // Check if it's PEM format
+      if (typeof key === "string" && key.includes("-----BEGIN")) {
+        return key.includes("PUBLIC KEY") || key.includes("PRIVATE KEY");
+      }
+
+      // Check if it's a CryptoKey object
+      if (key instanceof CryptoKey) {
+        return true;
+      }
+
+      // Check if it's a hex string (for symmetric keys)
+      if (typeof key === "string" && /^[0-9a-fA-F]+$/.test(key)) {
+        return key.length >= 32;
+      }
+
+      return false;
     } catch (error) {
-      console.error("❌ [KeyUtils] Error calculating fingerprint:", error);
+      console.error("❌ [KeyUtils] Error validating key format:", error);
+      return false;
+    }
+  }
+
+  // ======================= UTILITY FUNCTIONS =======================
+
+  arrayBufferToBase64(buffer) {
+    try {
+      let binary = "";
+      const bytes = new Uint8Array(buffer);
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return window.btoa(binary);
+    } catch (error) {
+      console.error(
+        "❌ [KeyUtils] Error converting ArrayBuffer to Base64:",
+        error
+      );
       throw error;
     }
   }
 
-  compareFingerprints(fingerprint1, fingerprint2) {
+  base64ToArrayBuffer(base64) {
     try {
-      // Normalize fingerprints (remove spaces, convert to uppercase)
-      const normalized1 = fingerprint1.replace(/\s+/g, "").toUpperCase();
-      const normalized2 = fingerprint2.replace(/\s+/g, "").toUpperCase();
+      if (!base64) {
+        throw new Error("Base64 string is empty");
+      }
 
-      const matches = normalized1 === normalized2;
+      let cleaned = base64.replace(/\s+/g, "");
+      cleaned = cleaned.replace(/[^A-Za-z0-9+/=]/g, "");
 
-      console.log(
-        `🔍 [KeyUtils] Fingerprint comparison: ${
-          matches ? "✅ MATCH" : "❌ MISMATCH"
-        }`
-      );
-      console.log(`   Expected: ${fingerprint1}`);
-      console.log(`   Received: ${fingerprint2}`);
+      while (cleaned.length % 4 !== 0) {
+        cleaned += "=";
+      }
 
-      return {
-        matches,
-        normalized1,
-        normalized2,
-      };
+      if (!/^[A-Za-z0-9+/=]+$/.test(cleaned)) {
+        throw new Error("Invalid base64 format");
+      }
+
+      const binary = window.atob(cleaned);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+
+      return bytes.buffer;
     } catch (error) {
-      console.error("❌ [KeyUtils] Error comparing fingerprints:", error);
-      return { matches: false, normalized1: "", normalized2: "" };
+      console.error(
+        "❌ [KeyUtils] Error converting Base64 to ArrayBuffer:",
+        error
+      );
+      throw error;
     }
   }
 
-  // 📊 KEY ANALYSIS
+  // ======================= KEY ANALYSIS =======================
 
   analyzeKey(key) {
     try {
-      console.log("📊 [KeyUtils] Analyzing key...");
-
       const analysis = {
         type: "unknown",
         size: 0,
@@ -490,7 +419,7 @@ class KeyUtils {
             analysis.isSymmetric = jwk.kty === "oct";
             analysis.isPublic = !jwk.d;
             analysis.isPrivate = !!jwk.d;
-            analysis.size = jwk.n ? jwk.n.length * 4 : 0; // Rough estimate for RSA
+            analysis.size = jwk.n ? jwk.n.length * 4 : 0;
 
             if (jwk.kty === "EC" && jwk.crv === "P-256") {
               analysis.size = 256;
@@ -506,7 +435,7 @@ class KeyUtils {
         if (/^[0-9a-fA-F]+$/.test(key)) {
           analysis.type = "symmetric";
           analysis.isSymmetric = true;
-          analysis.size = key.length * 4; // Hex chars to bits
+          analysis.size = key.length * 4;
           analysis.isValid = true;
         }
       } else if (key instanceof CryptoKey) {
@@ -520,7 +449,6 @@ class KeyUtils {
         analysis.isValid = true;
       }
 
-      console.log("✅ [KeyUtils] Key analysis complete:", analysis);
       return analysis;
     } catch (error) {
       console.error("❌ [KeyUtils] Error analyzing key:", error);
@@ -528,78 +456,6 @@ class KeyUtils {
         type: "error",
         isValid: false,
         error: error.message,
-      };
-    }
-  }
-
-  // 🧪 KEY TESTING
-
-  async testKeyEncryption(key, testData = "Test encryption") {
-    try {
-      console.log("🧪 [KeyUtils] Testing key encryption...");
-
-      const encoder = new TextEncoder();
-      const data = encoder.encode(testData);
-
-      let encrypted;
-      let decrypted;
-
-      if (key.algorithm?.name === "AES-GCM") {
-        // Symmetric key test
-        const iv = window.crypto.getRandomValues(new Uint8Array(12));
-
-        encrypted = await window.crypto.subtle.encrypt(
-          { name: "AES-GCM", iv },
-          key,
-          data
-        );
-
-        decrypted = await window.crypto.subtle.decrypt(
-          { name: "AES-GCM", iv },
-          key,
-          encrypted
-        );
-      } else if (key.algorithm?.name === "RSA-OAEP") {
-        // RSA key test (encrypt with public, decrypt with private)
-        if (key.type === "public") {
-          encrypted = await window.crypto.subtle.encrypt(
-            { name: "RSA-OAEP" },
-            key,
-            data
-          );
-          // Can't decrypt with public key
-          decrypted = null;
-        } else {
-          // This would require the corresponding public key
-          decrypted = null;
-        }
-      } else if (key.algorithm?.name === "ECDH") {
-        // ECDH key - can't encrypt directly
-        encrypted = null;
-        decrypted = null;
-      }
-
-      const success = decrypted
-        ? new TextDecoder().decode(decrypted) === testData
-        : encrypted !== null;
-
-      console.log(
-        `✅ [KeyUtils] Key encryption test: ${success ? "PASSED" : "FAILED"}`
-      );
-      return {
-        success,
-        encrypted: !!encrypted,
-        decrypted: !!decrypted,
-        canEncrypt: !!encrypted,
-        canDecrypt: !!decrypted,
-      };
-    } catch (error) {
-      console.error("❌ [KeyUtils] Error testing key encryption:", error);
-      return {
-        success: false,
-        error: error.message,
-        canEncrypt: false,
-        canDecrypt: false,
       };
     }
   }

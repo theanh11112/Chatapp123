@@ -1,4 +1,4 @@
-// 📦 MAIN EXPORT FILE FOR E2EE MODULE
+// 📦 MAIN EXPORT FILE FOR E2EE MODULE - FIXED VERSION
 
 // 🎯 Services
 export { default as autoEncryptionService } from "./services/autoEncryptionService";
@@ -12,10 +12,7 @@ export { default as useE2EEStatus } from "./hooks/useE2EEStatus";
 
 // 🎯 Components
 export { default as E2EEStatusIndicator } from "./components/E2EEStatusIndicator";
-export {
-  default as EncryptionBadge,
-  MessageEncryptionBadge,
-} from "./components/EncryptionBadge";
+export { default as EncryptionBadge } from "./components/EncryptionBadge";
 export { default as KeyManagementPanel } from "./components/KeyManagementPanel";
 export { default as AutoEncryptionToggle } from "./components/AutoEncryptionToggle";
 
@@ -31,76 +28,89 @@ export {
   ENCRYPTION_STATUS,
 } from "./constants/e2eeConfig";
 
-// 🚀 SETUP FUNCTION
-export const setupE2EESystem = () => {
+// 🚀 SETUP FUNCTIONS - FIXED VERSION
+
+/**
+ * Setup E2EE system
+ * @returns {Object} Setup result
+ */
+export const setupE2EESystem = async () => {
   console.log("🚀 [E2EE] Setting up end-to-end encryption system...");
 
-  // Setup with error handling
   try {
-    // Import and setup auto encryption service
-    import("./services/autoEncryptionService")
-      .then((module) => {
-        console.log("✅ Auto encryption service loaded");
-      })
-      .catch((error) => {
-        console.error("❌ Failed to load auto encryption service:", error);
-      });
-
-    // Import socket integration if socket is available
-    if (typeof getSocket === "function") {
-      import("./integration/socketIntegration")
-        .then((module) => {
-          if (module.setupSocketE2EEIntegration) {
-            module.setupSocketE2EEIntegration();
-          }
-        })
-        .catch((error) => {
-          console.warn("⚠️ Socket integration not available:", error.message);
-        });
-    }
-  } catch (error) {
-    console.error("❌ [E2EE] Setup error:", error);
-  }
-
-  console.log("✅ [E2EE] System setup initiated");
-
-  return {
-    version: "1.0",
-    timestamp: new Date().toISOString(),
-    status: "initializing",
-  };
-};
-
-// 🎯 QUICK START
-export const quickStartE2EE = async () => {
-  try {
-    console.log("⚡ [E2EE] Quick starting E2EE...");
-
     // Load auto encryption service
     const { default: autoEncryptionService } = await import(
       "./services/autoEncryptionService"
     );
 
-    // Initialize
+    // Initialize service
+    await autoEncryptionService.initialize();
+
+    console.log("✅ [E2EE] System setup completed");
+
+    return {
+      success: true,
+      message: "E2EE system initialized",
+      timestamp: new Date().toISOString(),
+    };
+  } catch (error) {
+    console.error("❌ [E2EE] Setup error:", error);
+
+    return {
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    };
+  }
+};
+
+/**
+ * Quick start E2EE
+ * @returns {Object} Quick start result
+ */
+export const quickStartE2EE = async () => {
+  try {
+    console.log("⚡ [E2EE] Quick starting E2EE...");
+
+    // Load service
+    const { default: autoEncryptionService } = await import(
+      "./services/autoEncryptionService"
+    );
+
+    // Initialize the service
     await autoEncryptionService.initialize();
 
     console.log("✅ [E2EE] Quick start complete");
 
     return {
       success: true,
-      autoEncryptionReady: autoEncryptionService.isReady(),
-      myFingerprint: autoEncryptionService.getMyFingerprint(),
+      message: "E2EE initialized successfully",
     };
   } catch (error) {
     console.error("❌ [E2EE] Quick start failed:", error);
-    return {
-      success: false,
-      error: error.message,
-    };
+
+    // Fallback: Try basic initialization
+    try {
+      const result = await setupE2EESystem();
+      return {
+        ...result,
+        warning: error.message,
+        fallback: true,
+      };
+    } catch (fallbackError) {
+      return {
+        success: false,
+        error: error.message,
+        fallbackError: fallbackError.message,
+      };
+    }
   }
 };
 
-// 🎯 DEBUG UTILITIES
+/**
+ * Debug E2EE system
+ * @returns {Object} Debug info
+ */
 export const debugE2EESystem = () => {
   console.group("🔐 E2EE SYSTEM DEBUG");
 
@@ -117,7 +127,6 @@ export const debugE2EESystem = () => {
       ? {
           initialized: window.autoE2EEService.initialized,
           status: window.autoE2EEService.status,
-          myFingerprint: window.autoE2EEService.getMyFingerprint?.(),
         }
       : "Not loaded",
   };
@@ -129,17 +138,33 @@ export const debugE2EESystem = () => {
   return services;
 };
 
-// 🎯 DEFAULT EXPORT
+// 🎯 MAIN EXPORT OBJECT - ONLY FOR BACKWARD COMPATIBILITY
 const E2EE = {
-  // Setup
+  // Setup functions
   setup: setupE2EESystem,
   quickStart: quickStartE2EE,
-
-  // Debug
   debug: debugE2EESystem,
+
+  // Services (lazy loaded)
+  getServices: async () => {
+    const [autoService, keyStorage, keyExchange] = await Promise.all([
+      import("./services/autoEncryptionService"),
+      import("./services/keyStorageService"),
+      import("./services/keyExchangeService"),
+    ]);
+
+    return {
+      autoEncryptionService: autoService.default,
+      keyStorageService: keyStorage.default,
+      keyExchangeService: keyExchange.default,
+    };
+  },
 
   // Version
   version: "1.0.0",
 };
 
+// 🎯 Default export cho compatibility
 export default E2EE;
+
+// 🎯 Named exports for everything

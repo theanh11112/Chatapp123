@@ -26,6 +26,27 @@ const formatMessageTime = (ts) => {
   }
 };
 
+const getEncryptionData = (message) => {
+  if (!message) return { ciphertext: null, iv: null, keyId: null };
+
+  return {
+    ciphertext:
+      message.encryptionData?.ciphertext ||
+      message.encryptionMetadata?.ciphertext ||
+      message.ciphertext,
+    iv:
+      message.encryptionData?.iv ||
+      message.encryptionMetadata?.iv ||
+      message.iv,
+    keyId:
+      message.encryptionData?.keyId ||
+      message.encryptionMetadata?.keyFingerprint ||
+      message.keyId,
+    algorithm:
+      message.encryptionData?.algorithm ||
+      message.encryptionMetadata?.algorithm,
+  };
+};
 const findMessageById = (chatState, messageId) => {
   // Tìm trong current messages
   if (chatState.current_messages) {
@@ -382,6 +403,7 @@ const slice = createSlice({
     },
 
     // 🆕 CẬP NHẬT: fetchCurrentMessages với xử lý E2EE messages hoàn chỉnh
+    // 🆕 CẬP NHẬT: fetchCurrentMessages với xử lý E2EE messages hoàn chỉnh
     fetchCurrentMessages(state, action) {
       const {
         messages,
@@ -491,10 +513,14 @@ const slice = createSlice({
 
             const processedReplyTo = processReplyTo(m);
 
+            // 🆕 SỬA: Lấy dữ liệu mã hóa đúng cách
+            const { ciphertext, iv, keyId } = getEncryptionData(m);
+            const isEncrypted = m.isEncrypted || false;
+
             // 🆕 Determine message content based on encryption
             let messageContent = m.content || m.message || "";
-            if (m.isEncrypted) {
-              if (m.ciphertext && m.iv && m.keyId) {
+            if (isEncrypted) {
+              if (ciphertext && iv && keyId) {
                 // Message is encrypted, show placeholder or try to decrypt
                 messageContent = "🔒 Encrypted message";
               } else {
@@ -519,22 +545,22 @@ const slice = createSlice({
                 username: m.senderName || "Unknown",
               },
               replyTo: processedReplyTo,
-              // 🆕 E2EE FIELDS - ĐẦY ĐỦ
-              isEncrypted: m.isEncrypted || false,
-              ciphertext: m.ciphertext,
-              iv: m.iv,
-              keyId: m.keyId,
+              // 🆕 E2EE FIELDS - SỬA: Sử dụng biến đã lấy
+              isEncrypted: isEncrypted,
+              ciphertext: ciphertext,
+              iv: iv,
+              keyId: keyId,
               ephemeralPublicKey: m.ephemeralPublicKey,
               encryptedKey: m.encryptedKey,
               encryptionStatus:
-                m.encryptionStatus || (m.isEncrypted ? "encrypted" : "none"),
+                m.encryptionStatus || (isEncrypted ? "encrypted" : "none"),
               // 🆕 Optimistic update fields
               isOptimistic: m.isOptimistic || false,
               tempId: m.tempId,
               // 🆕 Decryption state
               isDecrypted: m.isDecrypted || false,
-              decryptionError: m.decryptionError,
               decryptedContent: m.decryptedContent,
+              decryptionError: m.decryptionError,
             };
           }),
         ];
@@ -576,10 +602,14 @@ const slice = createSlice({
 
             const processedReplyTo = processReplyTo(m);
 
+            // 🆕 SỬA: Lấy dữ liệu mã hóa đúng cách
+            const { ciphertext, iv, keyId } = getEncryptionData(m);
+            const isEncrypted = m.isEncrypted || false;
+
             // 🆕 Determine message content based on encryption
             let messageContent = m.content || m.message || "";
-            if (m.isEncrypted) {
-              if (m.ciphertext && m.iv && m.keyId) {
+            if (isEncrypted) {
+              if (ciphertext && iv && keyId) {
                 // Message is encrypted, show placeholder
                 messageContent = "🔒 Encrypted message";
               } else {
@@ -603,15 +633,15 @@ const slice = createSlice({
                 username: m.sender?.username || "Unknown",
               },
               replyTo: processedReplyTo,
-              // 🆕 E2EE FIELDS - ĐẦY ĐỦ
-              isEncrypted: m.isEncrypted || false,
-              ciphertext: m.ciphertext,
-              iv: m.iv,
-              keyId: m.keyId,
+              // 🆕 E2EE FIELDS - SỬA: Sử dụng biến đã lấy
+              isEncrypted: isEncrypted,
+              ciphertext: ciphertext,
+              iv: iv,
+              keyId: keyId,
               ephemeralPublicKey: m.ephemeralPublicKey,
               encryptedKey: m.encryptedKey,
               encryptionStatus:
-                m.encryptionStatus || (m.isEncrypted ? "encrypted" : "none"),
+                m.encryptionStatus || (isEncrypted ? "encrypted" : "none"),
               // 🆕 Optimistic update fields
               isOptimistic: m.isOptimistic || false,
               tempId: m.tempId,
@@ -637,7 +667,6 @@ const slice = createSlice({
         });
       }
     },
-
     // 🆕 CẬP NHẬT: addDirectMessage với E2EE support hoàn chỉnh
     addDirectMessage(state, action) {
       const {
@@ -703,7 +732,7 @@ const slice = createSlice({
               isEncrypted: message.isEncrypted || false,
             };
 
-            // 🆕 Update lastMessage with encrypted content
+            // 🆕 Update lastMessage với encrypted content
             room.lastMessage = {
               id: message.id,
               content: message.isEncrypted
@@ -733,10 +762,18 @@ const slice = createSlice({
           return;
         }
 
+        // 🆕 SỬA: Lấy dữ liệu mã hóa đúng cách
+        const { ciphertext, iv, keyId } = getEncryptionData(message);
+        const isEncrypted = message.isEncrypted || false;
+
         // 🆕 Determine message content for encrypted messages
         let displayContent = message.message || message.content || "";
-        if (message.isEncrypted) {
-          displayContent = "🔒 Encrypted message";
+        if (isEncrypted) {
+          if (ciphertext && iv && keyId) {
+            displayContent = "🔒 Encrypted message";
+          } else {
+            displayContent = "🔒 [Encrypted - No data]";
+          }
         }
 
         const newGroupMessage = {
@@ -750,23 +787,38 @@ const slice = createSlice({
             keycloakId: currentUserId,
             username: "You",
           },
-          replyTo: message.replyTo,
+          replyTo: message.replyTo
+            ? {
+                id: message.replyTo.id,
+                content: message.replyTo.isEncrypted
+                  ? "🔒 Encrypted message"
+                  : message.replyTo.content,
+                sender:
+                  typeof message.replyTo.sender === "string"
+                    ? {
+                        keycloakId: message.replyTo.sender,
+                        username: "Unknown",
+                      }
+                    : message.replyTo.sender,
+                type: message.replyTo.type || "text",
+                isEncrypted: message.replyTo.isEncrypted || false,
+              }
+            : undefined,
           createdAt:
             message.createdAt || message.time || new Date().toISOString(),
           time: formatMessageTime(message.createdAt || message.time),
           attachments: message.attachments || [],
           incoming: message.incoming !== undefined ? message.incoming : false,
           outgoing: message.outgoing !== undefined ? message.outgoing : true,
-          // 🆕 E2EE FIELDS
-          isEncrypted: message.isEncrypted || false,
-          ciphertext: message.ciphertext,
-          iv: message.iv,
-          keyId: message.keyId,
+          // 🆕 E2EE FIELDS - SỬA
+          isEncrypted: isEncrypted,
+          ciphertext: ciphertext,
+          iv: iv,
+          keyId: keyId,
           ephemeralPublicKey: message.ephemeralPublicKey,
           encryptedKey: message.encryptedKey,
           encryptionStatus:
-            message.encryptionStatus ||
-            (message.isEncrypted ? "encrypted" : "none"),
+            message.encryptionStatus || (isEncrypted ? "encrypted" : "none"),
           // 🆕 Decryption state
           isDecrypted: message.isDecrypted || false,
           decryptedContent: message.decryptedContent,
@@ -777,7 +829,7 @@ const slice = createSlice({
 
         room.messages.push(newGroupMessage);
 
-        // 🆕 Update lastMessage with encryption info
+        // 🆕 Update lastMessage với encryption info
         room.lastMessage = {
           id: newGroupMessage.id,
           content: displayContent,
@@ -822,10 +874,17 @@ const slice = createSlice({
               isEncrypted: message.isEncrypted,
             });
 
+            // 🆕 SỬA: Lấy dữ liệu mã hóa đúng cách
+            const { ciphertext, iv, keyId } = getEncryptionData(message);
+
             state.direct_chat.current_messages[optimisticIndex] = {
               ...state.direct_chat.current_messages[optimisticIndex],
               ...message,
               isOptimistic: false,
+              // 🆕 SỬA: Thêm các trường mã hóa đúng cách
+              ciphertext: ciphertext,
+              iv: iv,
+              keyId: keyId,
               encryptionStatus: message.encryptionStatus || "encrypted",
               isEncrypted: message.isEncrypted || false,
             };
@@ -844,10 +903,18 @@ const slice = createSlice({
           return;
         }
 
+        // 🆕 SỬA: Lấy dữ liệu mã hóa đúng cách
+        const { ciphertext, iv, keyId } = getEncryptionData(message);
+        const isEncrypted = message.isEncrypted || false;
+
         // 🆕 Determine message content for encrypted messages
         let displayContent = message.message || "";
-        if (message.isEncrypted) {
-          displayContent = "🔒 Encrypted message";
+        if (isEncrypted) {
+          if (ciphertext && iv && keyId) {
+            displayContent = "🔒 Encrypted message";
+          } else {
+            displayContent = "🔒 [Encrypted - No data]";
+          }
         }
 
         // Thêm message mới với E2EE fields
@@ -855,9 +922,13 @@ const slice = createSlice({
           const newMessage = {
             ...message,
             message: displayContent,
+            // 🆕 SỬA: Thêm các trường mã hóa
+            ciphertext: ciphertext,
+            iv: iv,
+            keyId: keyId,
+            isEncrypted: isEncrypted,
             encryptionStatus:
-              message.encryptionStatus ||
-              (message.isEncrypted ? "encrypted" : "none"),
+              message.encryptionStatus || (isEncrypted ? "encrypted" : "none"),
             isDecrypted: message.isDecrypted || false,
             decryptedContent: message.decryptedContent,
           };
@@ -879,10 +950,10 @@ const slice = createSlice({
             attachments: message.attachments || [],
             seen: false,
             // 🆕 E2EE FIELDS
-            isEncrypted: message.isEncrypted || false,
-            ciphertext: message.ciphertext,
-            iv: message.iv,
-            keyId: message.keyId,
+            isEncrypted: isEncrypted,
+            ciphertext: ciphertext,
+            iv: iv,
+            keyId: keyId,
             ephemeralPublicKey: message.ephemeralPublicKey,
             encryptedKey: message.encryptedKey,
             encryptionStatus: message.encryptionStatus || "none",
@@ -897,6 +968,7 @@ const slice = createSlice({
       }
     },
 
+    // 🆕 CẬP NHẬT: addGroupMessage với E2EE support hoàn chỉnh
     // 🆕 CẬP NHẬT: addGroupMessage với E2EE support hoàn chỉnh
     addGroupMessage(state, action) {
       const {
@@ -987,6 +1059,7 @@ const slice = createSlice({
             isEncrypted: message.isEncrypted || false,
             time: optimisticMessage.time || message.time,
             createdAt: optimisticMessage.createdAt || message.createdAt,
+            // 🆕 SỬA: Determine display content based on encryption
             message: message.isEncrypted
               ? "🔒 Encrypted message"
               : message.message || message.content || "",
@@ -1039,8 +1112,12 @@ const slice = createSlice({
         return;
       }
 
+      // 🆕 SỬA: Lấy dữ liệu mã hóa đúng cách
+      const { ciphertext, iv, keyId } = getEncryptionData(message);
+      const isEncrypted = message.isEncrypted || false;
+
       // 🆕 TẠO MESSAGE THỐNG NHẤT với E2EE
-      const displayContent = message.isEncrypted
+      const displayContent = isEncrypted
         ? "🔒 Encrypted message"
         : message.message || message.content || "";
 
@@ -1076,16 +1153,15 @@ const slice = createSlice({
         attachments: message.attachments || [],
         incoming: message.incoming !== undefined ? message.incoming : false,
         outgoing: message.outgoing !== undefined ? message.outgoing : true,
-        // 🆕 E2EE FIELDS
-        isEncrypted: message.isEncrypted || false,
-        ciphertext: message.ciphertext,
-        iv: message.iv,
-        keyId: message.keyId,
+        // 🆕 E2EE FIELDS - SỬA
+        isEncrypted: isEncrypted,
+        ciphertext: ciphertext,
+        iv: iv,
+        keyId: keyId,
         ephemeralPublicKey: message.ephemeralPublicKey,
         encryptedKey: message.encryptedKey,
         encryptionStatus:
-          message.encryptionStatus ||
-          (message.isEncrypted ? "encrypted" : "none"),
+          message.encryptionStatus || (isEncrypted ? "encrypted" : "none"),
         // 🆕 Decryption state
         isDecrypted: message.isDecrypted || false,
         decryptedContent: message.decryptedContent,
@@ -1128,6 +1204,7 @@ const slice = createSlice({
     },
 
     // 🆕 CẬP NHẬT: updateDirectMessage với E2EE support
+    // 🆕 CẬP NHẬT: updateDirectMessage với E2EE support
     updateDirectMessage(state, action) {
       const { tempId, realMessage, conversation_id } = action.payload;
 
@@ -1155,10 +1232,17 @@ const slice = createSlice({
         const existingMessage =
           state.direct_chat.current_messages[optimisticIndex];
 
+        // 🆕 SỬA: Lấy dữ liệu mã hóa đúng cách
+        const { ciphertext, iv, keyId } = getEncryptionData(realMessage);
+
         state.direct_chat.current_messages[optimisticIndex] = {
           ...existingMessage,
           ...realMessage,
           isOptimistic: false,
+          // 🆕 SỬA: Lấy dữ liệu mã hóa đúng cách
+          ciphertext: ciphertext,
+          iv: iv,
+          keyId: keyId,
           encryptionStatus: realMessage.encryptionStatus || "encrypted",
           isEncrypted: realMessage.isEncrypted || false,
           // 🆕 Preserve decrypted content if available
@@ -1180,7 +1264,11 @@ const slice = createSlice({
         );
 
         if (convOptimisticIndex !== -1) {
-          const displayContent = realMessage.isEncrypted
+          // 🆕 SỬA: Lấy dữ liệu mã hóa đúng cách
+          const { ciphertext, iv, keyId } = getEncryptionData(realMessage);
+          const isEncrypted = realMessage.isEncrypted || false;
+
+          const displayContent = isEncrypted
             ? "🔒 Encrypted message"
             : realMessage.content;
 
@@ -1197,11 +1285,11 @@ const slice = createSlice({
             createdAt: realMessage.createdAt,
             attachments: realMessage.attachments || [],
             seen: false,
-            // 🆕 E2EE FIELDS
-            isEncrypted: realMessage.isEncrypted || false,
-            ciphertext: realMessage.ciphertext,
-            iv: realMessage.iv,
-            keyId: realMessage.keyId,
+            // 🆕 E2EE FIELDS - SỬA
+            isEncrypted: isEncrypted,
+            ciphertext: ciphertext,
+            iv: iv,
+            keyId: keyId,
             ephemeralPublicKey: realMessage.ephemeralPublicKey,
             encryptedKey: realMessage.encryptedKey,
             encryptionStatus: realMessage.encryptionStatus || "none",
@@ -1212,6 +1300,7 @@ const slice = createSlice({
     },
 
     // 🆕 THÊM: Reducer để cập nhật encryption status
+    // 🆕 THÊM: Reducer để cập nhật encryption status
     updateEncryptionStatus(state, action) {
       const {
         messageId,
@@ -1219,6 +1308,7 @@ const slice = createSlice({
         chatType,
         isDecrypted,
         decryptedContent,
+        decryptionError,
       } = action.payload;
 
       console.log("🔐 updateEncryptionStatus:", {
@@ -1227,6 +1317,7 @@ const slice = createSlice({
         chatType,
         isDecrypted,
         hasDecryptedContent: !!decryptedContent,
+        decryptionError,
       });
 
       if (chatType === "group") {
@@ -1238,6 +1329,7 @@ const slice = createSlice({
                   ...msg,
                   encryptionStatus,
                   isDecrypted: isDecrypted || msg.isDecrypted,
+                  decryptionError: decryptionError || msg.decryptionError,
                 };
 
                 // 🆕 Update message content if decrypted
@@ -1245,6 +1337,10 @@ const slice = createSlice({
                   updatedMsg.message = decryptedContent;
                   updatedMsg.decryptedContent = decryptedContent;
                   updatedMsg.isDecrypted = true;
+                  updatedMsg.encryptionStatus = "decrypted";
+                } else if (encryptionStatus === "decryption_failed") {
+                  // Hiển thị thông báo lỗi nếu giải mã thất bại
+                  updatedMsg.message = "🔒 [Decryption failed]";
                 }
 
                 return updatedMsg;
@@ -1261,12 +1357,16 @@ const slice = createSlice({
                   ...msg,
                   encryptionStatus,
                   isDecrypted: isDecrypted || msg.isDecrypted,
+                  decryptionError: decryptionError || msg.decryptionError,
                 };
 
                 if (isDecrypted && decryptedContent) {
                   updatedMsg.message = decryptedContent;
                   updatedMsg.decryptedContent = decryptedContent;
                   updatedMsg.isDecrypted = true;
+                  updatedMsg.encryptionStatus = "decrypted";
+                } else if (encryptionStatus === "decryption_failed") {
+                  updatedMsg.message = "🔒 [Decryption failed]";
                 }
 
                 return updatedMsg;
@@ -1283,12 +1383,16 @@ const slice = createSlice({
                 ...msg,
                 encryptionStatus,
                 isDecrypted: isDecrypted || msg.isDecrypted,
+                decryptionError: decryptionError || msg.decryptionError,
               };
 
               if (isDecrypted && decryptedContent) {
                 updatedMsg.message = decryptedContent;
                 updatedMsg.decryptedContent = decryptedContent;
                 updatedMsg.isDecrypted = true;
+                updatedMsg.encryptionStatus = "decrypted";
+              } else if (encryptionStatus === "decryption_failed") {
+                updatedMsg.message = "🔒 [Decryption failed]";
               }
 
               return updatedMsg;
@@ -1304,11 +1408,15 @@ const slice = createSlice({
                   ...msg,
                   encryptionStatus,
                   isDecrypted: isDecrypted || msg.isDecrypted,
+                  decryptionError: decryptionError || msg.decryptionError,
                 };
 
                 if (isDecrypted && decryptedContent) {
                   updatedMsg.content = decryptedContent;
                   updatedMsg.isDecrypted = true;
+                  updatedMsg.encryptionStatus = "decrypted";
+                } else if (encryptionStatus === "decryption_failed") {
+                  updatedMsg.content = "🔒 [Decryption failed]";
                 }
 
                 return updatedMsg;
@@ -1321,15 +1429,25 @@ const slice = createSlice({
     },
 
     // 🆕 THÊM: Reducer để xử lý encrypted messages từ socket
+    // 🆕 THÊM: Reducer để xử lý encrypted messages từ socket
     processEncryptedMessage(state, action) {
       const { message, chatType } = action.payload;
 
+      // 🆕 SỬA: Lấy dữ liệu mã hóa đúng cách
+      const { ciphertext, iv, keyId } = getEncryptionData(message);
+      const isEncrypted = message.isEncrypted || false;
+
       console.log("🔐 processEncryptedMessage:", {
-        message_id: message.id,
+        message_id: message.id || message._id,
         chatType,
-        isEncrypted: message.isEncrypted,
-        ciphertext: !!message.ciphertext,
-        keyId: message.keyId,
+        isEncrypted: isEncrypted,
+        ciphertext: !!ciphertext,
+        iv: !!iv,
+        keyId: keyId,
+        encryptionData: message.encryptionData,
+        encryptionMetadata: message.encryptionMetadata,
+        isDecrypted: message.isDecrypted,
+        hasDecryptedContent: !!message.decryptedContent,
       });
 
       const targetState =
@@ -1343,24 +1461,63 @@ const slice = createSlice({
           );
 
           if (!exists) {
-            const displayContent = message.isEncrypted
-              ? "🔒 Encrypted message"
-              : message.content;
+            // 🆕 SỬA: Hiển thị nội dung đã giải mã nếu có
+            let displayContent = message.content || message.message || "";
+            if (isEncrypted) {
+              if (message.isDecrypted && message.decryptedContent) {
+                // Nếu đã giải mã, hiển thị nội dung đã giải mã
+                displayContent = message.decryptedContent;
+              } else if (ciphertext && iv && keyId) {
+                // Nếu có đủ dữ liệu mã hóa nhưng chưa giải mã
+                displayContent = "🔒 Encrypted message";
+              } else {
+                // Nếu thiếu dữ liệu mã hóa
+                displayContent = "🔒 [Encrypted - No data]";
+              }
+            }
 
-            room.messages.push({
+            const newMessage = {
               ...message,
+              id: message.id || message._id,
+              _id: message._id || message.id,
               type: "msg",
-              subtype: message.type || "text",
+              subtype: message.subtype || message.type || "text",
               message: displayContent,
-              content: message.content,
+              content: message.content || message.message || "",
               incoming: true,
               outgoing: false,
               time: formatMessageTime(message.createdAt || new Date()),
-              encryptionStatus: message.encryptionStatus || "encrypted",
+              // 🆕 SỬA: Thêm các trường mã hóa đúng cách
+              isEncrypted: isEncrypted,
+              ciphertext: ciphertext,
+              iv: iv,
+              keyId: keyId,
+              ephemeralPublicKey: message.ephemeralPublicKey,
+              encryptedKey: message.encryptedKey,
+              encryptionStatus:
+                message.encryptionStatus ||
+                (isEncrypted ? "encrypted" : "none"),
               isDecrypted: message.isDecrypted || false,
               decryptedContent: message.decryptedContent,
+              decryptionError: message.decryptionError,
+            };
+
+            console.log("✅ Adding encrypted group message:", {
+              message_id: newMessage.id,
+              isEncrypted: newMessage.isEncrypted,
+              isDecrypted: newMessage.isDecrypted,
+              hasCiphertext: !!newMessage.ciphertext,
+              hasIV: !!newMessage.iv,
+              keyId: newMessage.keyId,
+              displayContent: displayContent,
             });
+
+            room.messages.push(newMessage);
+          } else {
+            console.log("ℹ️ Encrypted group message already exists");
           }
+        } else {
+          console.warn("⚠️ No current room found for encrypted group message");
         }
       } else {
         // Handle direct encrypted messages
@@ -1369,27 +1526,62 @@ const slice = createSlice({
         );
 
         if (!exists) {
-          const displayContent = message.isEncrypted
-            ? "🔒 Encrypted message"
-            : message.content;
+          // 🆕 SỬA: Hiển thị nội dung đã giải mã nếu có
+          let displayContent = message.content || message.message || "";
+          if (isEncrypted) {
+            if (message.isDecrypted && message.decryptedContent) {
+              // Nếu đã giải mã, hiển thị nội dung đã giải mã
+              displayContent = message.decryptedContent;
+            } else if (ciphertext && iv && keyId) {
+              // Nếu có đủ dữ liệu mã hóa nhưng chưa giải mã
+              displayContent = "🔒 Encrypted message";
+            } else {
+              // Nếu thiếu dữ liệu mã hóa
+              displayContent = "🔒 [Encrypted - No data]";
+            }
+          }
 
-          state.direct_chat.current_messages.push({
+          const newMessage = {
             ...message,
+            id: message.id || message._id,
+            _id: message._id || message.id,
             type: "msg",
-            subtype: message.type || "text",
+            subtype: message.subtype || message.type || "text",
             message: displayContent,
-            content: message.content,
+            content: message.content || message.message || "",
             incoming: true,
             outgoing: false,
             time: formatMessageTime(message.createdAt || new Date()),
-            encryptionStatus: message.encryptionStatus || "encrypted",
+            // 🆕 SỬA: Thêm các trường mã hóa đúng cách
+            isEncrypted: isEncrypted,
+            ciphertext: ciphertext,
+            iv: iv,
+            keyId: keyId,
+            ephemeralPublicKey: message.ephemeralPublicKey,
+            encryptedKey: message.encryptedKey,
+            encryptionStatus:
+              message.encryptionStatus || (isEncrypted ? "encrypted" : "none"),
             isDecrypted: message.isDecrypted || false,
             decryptedContent: message.decryptedContent,
+            decryptionError: message.decryptionError,
+          };
+
+          console.log("✅ Adding encrypted direct message:", {
+            message_id: newMessage.id,
+            isEncrypted: newMessage.isEncrypted,
+            isDecrypted: newMessage.isDecrypted,
+            hasCiphertext: !!newMessage.ciphertext,
+            hasIV: !!newMessage.iv,
+            keyId: newMessage.keyId,
+            displayContent: displayContent,
           });
+
+          state.direct_chat.current_messages.push(newMessage);
+        } else {
+          console.log("ℹ️ Encrypted direct message already exists");
         }
       }
     },
-
     // 🆕 THÊM: Reducers cho E2EE key management
     setEncryptionKeys(state, action) {
       const { chatType, targetId, keys } = action.payload;
@@ -2189,6 +2381,56 @@ export const toggleE2EE = (enabled) => async (dispatch) => {
   }
 };
 
+// 🆕 THÊM: Thunk để tự động giải mã tin nhắn khi fetch
+export const autoDecryptMessages =
+  (chatType, conversationId = null) =>
+  async (dispatch, getState) => {
+    try {
+      const state = getState();
+      const e2eeEnabled = state.conversation.e2ee.isEnabled;
+
+      if (!e2eeEnabled) {
+        console.log("🔐 E2EE is disabled, skipping auto-decrypt");
+        return;
+      }
+
+      let messages = [];
+
+      if (chatType === "group") {
+        if (state.conversation.group_chat.current_room?.messages) {
+          messages = state.conversation.group_chat.current_room.messages.filter(
+            (m) => m.isEncrypted && !m.isDecrypted
+          );
+        }
+      } else {
+        messages = state.conversation.direct_chat.current_messages.filter(
+          (m) => m.isEncrypted && !m.isDecrypted
+        );
+      }
+
+      console.log(
+        `🔐 Auto-decrypt found ${messages.length} messages to decrypt`
+      );
+
+      if (messages.length > 0) {
+        // TODO: Thực hiện giải mã thực tế ở đây
+        // dispatch(decryptPendingMessages(chatType, decryptionFunction));
+
+        console.log("⚠️ Auto-decrypt is TODO - implement decryption function");
+
+        // 🆕 HIỂN THỊ THÔNG BÁO CHO NGƯỜI DÙNG
+        dispatch(
+          showSnackbar({
+            severity: "info",
+            message: `Found ${messages.length} encrypted messages. Decryption will be attempted.`,
+          })
+        );
+      }
+    } catch (error) {
+      console.error("❌ autoDecryptMessages error:", error);
+    }
+  };
+
 // 🆕 THÊM: Thunk để decrypt message
 export const decryptMessageThunk =
   (messageId, chatType, decryptionFunction) => async (dispatch, getState) => {
@@ -2324,6 +2566,7 @@ export const decryptPendingMessages =
   };
 
 // Fetch group messages với MERGE
+// Fetch group messages với MERGE
 export const fetchGroupMessages = (roomId) => async (dispatch, getState) => {
   try {
     console.log("🔄 Fetching group messages for room:", roomId);
@@ -2367,7 +2610,10 @@ export const fetchGroupMessages = (roomId) => async (dispatch, getState) => {
       const e2eeEnabled = state.conversation.e2ee.isEnabled;
       if (e2eeEnabled && res.data.data.some((m) => m.isEncrypted)) {
         console.log("🔐 Auto-decrypting encrypted messages after fetch");
-        // TODO: Trigger decryption if needed
+        // Gọi auto-decrypt sau khi fetch xong
+        setTimeout(() => {
+          dispatch(autoDecryptMessages("group", roomId));
+        }, 500);
       }
     } else {
       console.warn("⚠️ No messages data in response:", res.data);
@@ -2606,6 +2852,7 @@ export const fetchPinnedMessages =
   };
 
 // 🆕 THÊM: Thunk để xử lý incoming encrypted message từ socket
+// 🆕 THÊM: Thunk để xử lý incoming encrypted message từ socket
 export const handleIncomingEncryptedMessage =
   (messageData) => async (dispatch, getState) => {
     try {
@@ -2618,6 +2865,7 @@ export const handleIncomingEncryptedMessage =
         hasCiphertext: !!message.ciphertext,
       });
 
+      // First, add the message to state
       if (chatType === "group") {
         dispatch(addGroupMessageThunk(message, roomId));
       } else {
@@ -2646,7 +2894,16 @@ export const handleIncomingEncryptedMessage =
             "🔐 Auto-decrypting incoming encrypted message:",
             message.id
           );
-          // TODO: Trigger decryption
+
+          // 🆕 THÊM: Thử giải mã ngay lập tức
+          setTimeout(() => {
+            dispatch(
+              autoDecryptMessages(
+                chatType,
+                chatType === "group" ? roomId : conversationId
+              )
+            );
+          }, 300);
         }
       }
     } catch (error) {

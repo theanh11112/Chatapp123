@@ -1,4 +1,4 @@
-// ChatHeader.js - HOÀN THIỆN VỚI E2EE INTEGRATION & FIXED UI
+// ChatHeader.js - VERSION MỚI SỬ DỤNG HOOKS & SERVICES THAY CONTEXT
 import React from "react";
 import {
   Avatar,
@@ -32,9 +32,9 @@ import { useDispatch, useSelector } from "react-redux";
 import { StartAudioCall } from "../../redux/slices/audioCall";
 import { StartVideoCall } from "../../redux/slices/videoCall";
 import { showSnackbar } from "../../redux/slices/app";
-import { getSocket, connectSocket } from "../../socket";
-import { useE2EE } from "../../contexts/E2EEContext";
-import E2EEIndicator from "./E2EEIndicator";
+import { getSocket } from "../../socket";
+import { useAutoE2EE, useE2EEStatus } from "../../e2ee";
+import { initiateKeyExchange } from "../../e2ee/services/keyExchangeService";
 
 const StyledBadge = styled(Badge)(({ theme }) => ({
   "& .MuiBadge-badge": {
@@ -76,6 +76,94 @@ const GroupBadge = styled(Badge)(({ theme }) => ({
     padding: "0 4px",
   },
 }));
+
+// E2EE Indicator Component
+const E2EEIndicator = ({ isEncrypted, hasError, isDisabled }) => {
+  const theme = useTheme();
+
+  if (isDisabled) {
+    return (
+      <Box
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 20,
+          height: 20,
+          borderRadius: "50%",
+          backgroundColor: theme.palette.grey[300],
+        }}
+      >
+        <Lock size={12} color={theme.palette.grey[600]} />
+      </Box>
+    );
+  }
+
+  if (hasError) {
+    return (
+      <Box
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 20,
+          height: 20,
+          borderRadius: "50%",
+          backgroundColor: theme.palette.error.light,
+          animation: "pulse 2s infinite",
+          "@keyframes pulse": {
+            "0%": {
+              opacity: 1,
+            },
+            "50%": {
+              opacity: 0.5,
+            },
+            "100%": {
+              opacity: 1,
+            },
+          },
+        }}
+      >
+        <Lock size={12} color={theme.palette.error.contrastText} />
+      </Box>
+    );
+  }
+
+  if (isEncrypted) {
+    return (
+      <Box
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 20,
+          height: 20,
+          borderRadius: "50%",
+          backgroundColor: theme.palette.success.light,
+        }}
+      >
+        <Lock size={12} color={theme.palette.success.contrastText} />
+      </Box>
+    );
+  }
+
+  // Not encrypted but ready
+  return (
+    <Box
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 20,
+        height: 20,
+        borderRadius: "50%",
+        backgroundColor: theme.palette.warning.light,
+      }}
+    >
+      <Lock size={12} color={theme.palette.warning.contrastText} />
+    </Box>
+  );
+};
 
 // Menu items for different conversation types
 const Direct_Conversation_Menu = [
@@ -133,20 +221,51 @@ const ChatHeader = () => {
     (state) => state.conversation?.group_chat || {}
   );
 
-  // 🆕 Lấy user info từ auth state
+  // Lấy user info từ auth state
   const { user_id, user, token } = useSelector((state) => state.auth);
   const currentUserId = user_id || user?.keycloakId;
 
-  // 🆕 Kiểm tra socket connection
+  // 🆕 Sử dụng hook auto E2EE
+  const {
+    isReady: autoServiceReady,
+    myFingerprint,
+    error: autoServiceError,
+    encryptMessage,
+    decryptMessage,
+    canEncryptTo,
+    syncKeys,
+    getStats,
+  } = useAutoE2EE();
+
+  // 🆕 Sử dụng hook E2EE status cho peer hiện tại
+  const friendId = current_conversation?.user_id;
+  // Header.js - Sửa phần sử dụng hook
+  // Line 243 và các vị trí sử dụng useE2EEStatus
+
+  const {
+    status: e2eeStatus,
+    isEncrypted,
+    hasPeerKey,
+    peerFingerprint,
+    needsDerivation,
+    needsKeyExchange,
+    isChecking,
+    checkStatus: refreshE2EEStatus,
+    deriveSecret,
+    resetAttempts,
+  } = useE2EEStatus(friendId, {
+    autoCheck: true,
+    checkInterval: 30000,
+  });
+
+  // Kiểm tra socket connection
   const socket = useSelector((state) => state.app.socket);
   const isSocketConnected = socket?.connected || false;
 
-  // 🆕 E2EE Context
-  const { e2eeEnabled, friendsE2EEStatus, initiateKeyExchange, getFriendKey } =
-    useE2EE();
-
   const [anchorEl, setAnchorEl] = React.useState(null);
   const open = Boolean(anchorEl);
+  const [peerKeyStatus, setPeerKeyStatus] = React.useState(null);
+  const [isCheckingPeerKey, setIsCheckingPeerKey] = React.useState(false);
 
   // Xác định loại chat hiện tại
   const isGroupChat = Boolean(current_room?.id);
@@ -156,10 +275,29 @@ const ChatHeader = () => {
     ? Group_Conversation_Menu
     : Direct_Conversation_Menu;
 
-  // 🆕 Lấy thông tin E2EE cho conversation hiện tại
-  const friendId = current_conversation?.user_id;
-  const isFriendE2EEEnabled = friendsE2EEStatus[friendId] || false;
-  const hasFriendKey = getFriendKey ? getFriendKey(friendId) : null;
+  // Kiểm tra peer key khi có friendId
+  React.useEffect(() => {
+    const checkPeerKey = async () => {
+      if (!friendId || !autoServiceReady) return;
+
+      setIsCheckingPeerKey(true);
+      try {
+        const result = await canEncryptTo(friendId);
+        setPeerKeyStatus(result);
+      } catch (error) {
+        console.error("❌ Failed to check peer key:", error);
+        setPeerKeyStatus({
+          canEncrypt: false,
+          hasKey: false,
+          error: error.message,
+        });
+      } finally {
+        setIsCheckingPeerKey(false);
+      }
+    };
+
+    checkPeerKey();
+  }, [friendId, autoServiceReady, canEncryptTo]);
 
   // Lấy thông tin avatar
   const getChatAvatar = () => {
@@ -210,35 +348,206 @@ const ChatHeader = () => {
       return "Group chats do not support End-to-End Encryption";
     }
 
-    if (!e2eeEnabled) {
-      return "End-to-End Encryption is disabled for your account. Enable it in settings.";
+    if (!autoServiceReady) {
+      return "End-to-End Encryption service is initializing...";
     }
 
-    if (!isFriendE2EEEnabled) {
-      return "Your friend has End-to-End Encryption disabled. They need to enable it first.";
+    if (autoServiceError) {
+      return `E2EE service error: ${autoServiceError}`;
     }
 
-    if (!hasFriendKey) {
-      return "Key exchange required for End-to-End Encryption. Click 'Exchange' to establish secure connection.";
+    if (!friendId) {
+      return "No conversation selected";
     }
 
-    return "Messages in this chat are End-to-End Encrypted. Only you and your friend can read them.";
+    if (isChecking) {
+      return "Checking encryption status...";
+    }
+
+    if (!peerKeyStatus?.hasKey) {
+      return "Friend's public key not available. They need to enable E2EE first.";
+    }
+
+    if (needsDerivation) {
+      return "Key derivation needed. Click 'Derive Keys' to establish secure connection.";
+    }
+
+    if (isEncrypted) {
+      return "Messages in this chat are End-to-End Encrypted. Only you and your friend can read them.";
+    }
+
+    return "Encryption not established. Click 'Initiate Exchange' to start.";
   };
 
   // 🆕 Get short E2EE status text for inline display
   const getShortE2EEStatusText = () => {
     if (isGroupChat) return "";
 
-    if (!e2eeEnabled) return "E2EE disabled";
-    if (!isFriendE2EEEnabled) return "Friend E2EE disabled";
-    if (!hasFriendKey) return "Key exchange needed";
-    return "End-to-End Encrypted";
+    if (!autoServiceReady) return "Initializing...";
+    if (autoServiceError) return "E2EE Error";
+    if (isChecking || isCheckingPeerKey) return "Checking...";
+    if (!peerKeyStatus?.hasKey) return "No friend key";
+    if (needsDerivation) return "Needs derivation";
+    if (isEncrypted) return "Encrypted";
+    return "Not encrypted";
   };
 
   // Kiểm tra có chat nào active không
   const hasActiveChat = isGroupChat || isDirectChat;
 
-  // 🆕 Handle start audio call - FIXED
+  // 🆕 Handle initiate key exchange
+  const handleInitiateKeyExchange = async () => {
+    if (!friendId) {
+      console.error("❌ No friend ID available");
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "No friend selected",
+        })
+      );
+      return;
+    }
+
+    try {
+      dispatch(
+        showSnackbar({
+          severity: "info",
+          message: "Initiating key exchange...",
+        })
+      );
+
+      const result = await initiateKeyExchange(friendId);
+
+      if (result.success) {
+        dispatch(
+          showSnackbar({
+            severity: "success",
+            message: "Key exchange initiated successfully",
+          })
+        );
+
+        // Refresh status after a delay
+        setTimeout(() => {
+          refreshE2EEStatus(true);
+        }, 2000);
+      } else {
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: `Failed to initiate exchange: ${result.error}`,
+          })
+        );
+      }
+    } catch (error) {
+      console.error("❌ Error initiating key exchange:", error);
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: `Failed to initiate key exchange: ${error.message}`,
+        })
+      );
+    }
+  };
+
+  // 🆕 Handle key derivation
+  const handleDeriveKeys = async () => {
+    if (!friendId) return;
+
+    try {
+      const result = await deriveSecret();
+      if (result.success) {
+        dispatch(
+          showSnackbar({
+            severity: "success",
+            message: "Keys derived successfully",
+          })
+        );
+        refreshE2EEStatus(true);
+      } else {
+        dispatch(
+          showSnackbar({
+            severity: "warning",
+            message: result.reason || "Derivation needed",
+          })
+        );
+      }
+    } catch (error) {
+      console.error("❌ Error deriving keys:", error);
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "Failed to derive keys",
+        })
+      );
+    }
+  };
+
+  // 🆕 Test encryption (for debugging)
+  const handleTestEncryption = async () => {
+    if (!friendId || !autoServiceReady) return;
+
+    try {
+      const testMessage = "Test encryption message";
+      const result = await encryptMessage(testMessage, friendId);
+
+      if (result.success) {
+        dispatch(
+          showSnackbar({
+            severity: "success",
+            message: "Encryption test successful",
+          })
+        );
+      } else {
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: `Encryption failed: ${result.error}`,
+          })
+        );
+      }
+    } catch (error) {
+      console.error("❌ Test encryption error:", error);
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "Test encryption failed",
+        })
+      );
+    }
+  };
+
+  // 🆕 Handle sync keys
+  const handleSyncKeys = async () => {
+    try {
+      const result = await syncKeys();
+      if (result.success) {
+        dispatch(
+          showSnackbar({
+            severity: "success",
+            message: "Keys synced successfully",
+          })
+        );
+        refreshE2EEStatus(true);
+      } else {
+        dispatch(
+          showSnackbar({
+            severity: "warning",
+            message: `Sync incomplete: ${result.error}`,
+          })
+        );
+      }
+    } catch (error) {
+      console.error("❌ Sync error:", error);
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "Failed to sync keys",
+        })
+      );
+    }
+  };
+
+  // Handle start audio call
   const handleStartAudioCall = async () => {
     console.log("🎯 handleStartAudioCall called");
 
@@ -267,7 +576,6 @@ const ChatHeader = () => {
     const toUserId = current_conversation.user_id;
 
     try {
-      // Kiểm tra socket connection
       const socket = getSocket();
       console.log("📞 Starting audio call to:", {
         toUserId,
@@ -277,25 +585,16 @@ const ChatHeader = () => {
       });
 
       if (!socket || !socket.connected) {
-        console.error("❌ Socket not connected, trying to reconnect...");
-
-        // Thử reconnect socket với token
-        try {
-          await connectSocket(token);
-          console.log("✅ Socket reconnected");
-        } catch (socketError) {
-          console.error("❌ Failed to reconnect socket:", socketError);
-          dispatch(
-            showSnackbar({
-              severity: "error",
-              message: "Connection lost. Please refresh the page.",
-            })
-          );
-          return;
-        }
+        console.error("❌ Socket not connected");
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: "Connection lost. Please refresh the page.",
+          })
+        );
+        return;
       }
 
-      // Start call
       const result = await dispatch(StartAudioCall(toUserId));
       console.log("✅ Audio call started successfully:", result);
     } catch (error) {
@@ -309,7 +608,7 @@ const ChatHeader = () => {
     }
   };
 
-  // 🆕 Handle start video call - FIXED
+  // Handle start video call
   const handleStartVideoCall = () => {
     console.log("🎯 handleStartVideoCall called");
 
@@ -356,34 +655,6 @@ const ChatHeader = () => {
       });
   };
 
-  // 🆕 Handle initiate key exchange
-  const handleInitiateKeyExchange = async () => {
-    if (!friendId) {
-      console.error("❌ No friend ID available");
-      return;
-    }
-
-    try {
-      const success = await initiateKeyExchange(friendId);
-      if (success) {
-        dispatch(
-          showSnackbar({
-            severity: "success",
-            message: "Key exchange initiated successfully",
-          })
-        );
-      }
-    } catch (error) {
-      console.error("❌ Error initiating key exchange:", error);
-      dispatch(
-        showSnackbar({
-          severity: "error",
-          message: "Failed to initiate key exchange",
-        })
-      );
-    }
-  };
-
   // Nếu không có conversation nào active, hiển thị placeholder
   if (!hasActiveChat) {
     return (
@@ -419,7 +690,7 @@ const ChatHeader = () => {
               : theme.palette.background,
           boxShadow: "0px 0px 2px rgba(0,0,0,0.25)",
           borderBottom:
-            isDirectChat && e2eeEnabled && isFriendE2EEEnabled && hasFriendKey
+            isDirectChat && isEncrypted
               ? `2px solid ${theme.palette.success.main}`
               : "none",
         }}
@@ -460,12 +731,8 @@ const ChatHeader = () => {
                 anchorOrigin={{
                   vertical: "bottom",
                   horizontal: "right",
-                  // Điều chỉnh vị trí badge xuống dưới thêm một chút
-                  vertical: "bottom",
-                  horizontal: "right",
                 }}
                 sx={{
-                  // Điều chỉnh margin để badge không bị lệch
                   "& .MuiBadge-badge": {
                     bottom: 4,
                     right: 4,
@@ -514,79 +781,42 @@ const ChatHeader = () => {
 
                     <Tooltip title={getE2EEStatusText()} arrow placement="top">
                       <Stack direction="row" alignItems="center" spacing={0.3}>
-                        {e2eeEnabled && isFriendE2EEEnabled && hasFriendKey ? (
-                          <>
-                            <Lock
-                              size={10}
-                              color={theme.palette.success.main}
-                            />
-                            <Typography
-                              variant="caption"
-                              color="success.main"
-                              sx={{ fontSize: "0.65rem" }}
-                            >
-                              E2EE
-                            </Typography>
-                          </>
-                        ) : e2eeEnabled &&
-                          isFriendE2EEEnabled &&
-                          !hasFriendKey ? (
-                          <>
-                            <Lock
-                              size={10}
-                              color={theme.palette.warning.main}
-                            />
-                            <Typography
-                              variant="caption"
-                              color="warning.main"
-                              sx={{ fontSize: "0.65rem" }}
-                            >
-                              Needs Key
-                            </Typography>
-                          </>
-                        ) : e2eeEnabled && !isFriendE2EEEnabled ? (
-                          <>
-                            <Lock
-                              size={10}
-                              color={theme.palette.warning.main}
-                            />
-                            <Typography
-                              variant="caption"
-                              color="warning.main"
-                              sx={{ fontSize: "0.65rem" }}
-                            >
-                              No E2EE
-                            </Typography>
-                          </>
-                        ) : !e2eeEnabled ? (
-                          <>
-                            <Lock size={10} color={theme.palette.error.main} />
-                            <Typography
-                              variant="caption"
-                              color="error.main"
-                              sx={{ fontSize: "0.65rem" }}
-                            >
-                              E2EE Off
-                            </Typography>
-                          </>
-                        ) : null}
+                        <E2EEIndicator
+                          isEncrypted={isEncrypted}
+                          hasError={!!autoServiceError}
+                          isDisabled={!autoServiceReady}
+                        />
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            fontSize: "0.65rem",
+                            color: isEncrypted
+                              ? theme.palette.success.main
+                              : autoServiceError
+                              ? theme.palette.error.main
+                              : needsDerivation || needsKeyExchange
+                              ? theme.palette.warning.main
+                              : theme.palette.text.secondary,
+                          }}
+                        >
+                          {getShortE2EEStatusText()}
+                        </Typography>
                       </Stack>
                     </Tooltip>
                   </>
                 )}
               </Stack>
 
-              {/* 🆕 Nút Exchange key khi cần - hiển thị dưới dòng status */}
-              {isDirectChat &&
-                e2eeEnabled &&
-                isFriendE2EEEnabled &&
-                !hasFriendKey && (
-                  <Stack
-                    direction="row"
-                    alignItems="center"
-                    spacing={0.5}
-                    sx={{ mt: 0.2 }}
-                  >
+              {/* 🆕 Action buttons cho E2EE khi cần */}
+              {isDirectChat && friendId && (
+                <Stack
+                  direction="row"
+                  alignItems="center"
+                  spacing={0.5}
+                  sx={{ mt: 0.2 }}
+                >
+                  {/* Nút Initiate Exchange khi chưa có key */}
+                  {!peerKeyStatus?.hasKey && autoServiceReady && (
                     <Button
                       size="small"
                       variant="outlined"
@@ -601,32 +831,55 @@ const ChatHeader = () => {
                       }}
                       startIcon={<Key size={10} />}
                     >
-                      Exchange Keys
+                      Initiate Exchange
                     </Button>
-                    <Tooltip title="Establish secure connection" arrow>
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ fontSize: "0.6rem" }}
-                      >
-                        for End-to-End Encryption
-                      </Typography>
-                    </Tooltip>
-                  </Stack>
-                )}
+                  )}
+
+                  {/* Nút Derive Keys khi có key nhưng chưa encrypted */}
+                  {peerKeyStatus?.hasKey && needsDerivation && (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={handleDeriveKeys}
+                      sx={{
+                        height: 20,
+                        fontSize: "0.6rem",
+                        minWidth: "auto",
+                        padding: "0 8px",
+                        lineHeight: 1,
+                        textTransform: "none",
+                      }}
+                      startIcon={<Key size={10} />}
+                    >
+                      Derive Keys
+                    </Button>
+                  )}
+
+                  {/* Nút Sync Keys khi có lỗi */}
+                  {autoServiceError && (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={handleSyncKeys}
+                      sx={{
+                        height: 20,
+                        fontSize: "0.6rem",
+                        minWidth: "auto",
+                        padding: "0 8px",
+                        lineHeight: 1,
+                        textTransform: "none",
+                      }}
+                      startIcon={<Key size={10} />}
+                    >
+                      Sync Keys
+                    </Button>
+                  )}
+                </Stack>
+              )}
             </Stack>
           </Stack>
 
           <Stack direction="row" spacing={isMobile ? 1 : 3} alignItems="center">
-            {/* 🆕 E2EE Indicator */}
-            {isDirectChat && (
-              <Tooltip title={getE2EEStatusText()} arrow>
-                <Box>
-                  <E2EEIndicator />
-                </Box>
-              </Tooltip>
-            )}
-
             {/* Video call - only for direct chats */}
             {!isGroupChat && isDirectChat && (
               <Tooltip
@@ -749,6 +1002,44 @@ const ChatHeader = () => {
                       {el.title}
                     </MenuItem>
                   ))}
+
+                  {/* 🆕 Debug menu items for E2EE */}
+                  {isDirectChat && friendId && (
+                    <>
+                      <Divider />
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        px={2}
+                      >
+                        E2EE Debug
+                      </Typography>
+                      <MenuItem
+                        onClick={() => {
+                          setAnchorEl(null);
+                          refreshE2EEStatus(true);
+                        }}
+                      >
+                        Refresh E2EE Status
+                      </MenuItem>
+                      <MenuItem
+                        onClick={() => {
+                          setAnchorEl(null);
+                          handleTestEncryption();
+                        }}
+                      >
+                        Test Encryption
+                      </MenuItem>
+                      <MenuItem
+                        onClick={() => {
+                          setAnchorEl(null);
+                          handleSyncKeys();
+                        }}
+                      >
+                        Sync All Keys
+                      </MenuItem>
+                    </>
+                  )}
                 </Stack>
               </Box>
             </Menu>
