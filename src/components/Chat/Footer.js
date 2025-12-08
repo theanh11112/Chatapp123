@@ -290,44 +290,24 @@ const Footer = () => {
 
   // 🆕 Kiểm tra encryption status khi chat thay đổi
   useEffect(() => {
-    // ⭐⭐⭐ Chỉ chạy khi có đủ điều kiện
     if (peerId && isDirectChat && autoE2EEReady) {
-      console.log("🔐 [Footer] Setting up E2EE monitoring for peer:", peerId);
+      console.log("🔐 [Footer] Initial E2EE status check for peer:", peerId);
 
-      let intervalId = null;
-      let timeoutId = null;
+      // Check ngay lập tức
+      checkE2EEStatus();
 
-      // 1. Kiểm tra NGAY LẬP TỨC (nhưng với debounce)
-      const immediateCheck = () => {
-        console.log("🔐 [Footer] Initial immediate check");
-        checkE2EEStatus();
-      };
-
-      // Thực hiện check ngay
-      immediateCheck();
-
-      // 2. Thêm một check sau 2 giây (để đảm bảo)
-      timeoutId = setTimeout(() => {
-        console.log("🔐 [Footer] Delayed check after 2s");
-        checkE2EEStatus();
-      }, 2000);
-
-      // 3. Setup interval check mỗi 30 giây
-      intervalId = setInterval(() => {
-        console.log("🔐 [Footer] Periodic check every 30s");
-        checkE2EEStatus();
+      // Setup interval check (mỗi 30 giây)
+      const intervalId = setInterval(() => {
+        console.log("🔐 [Footer] Periodic E2EE status check");
+        throttledCheckE2EEStatus();
       }, 30000);
 
-      // 4. Cleanup function
       return () => {
-        console.log("🔐 [Footer] Cleaning up E2EE monitoring");
-        if (timeoutId) clearTimeout(timeoutId);
-        if (intervalId) clearInterval(intervalId);
+        console.log("🔐 [Footer] Cleaning up E2EE status interval");
+        clearInterval(intervalId);
       };
     }
-
-    // Nếu không đủ điều kiện, không làm gì cả
-  }, [peerId, isDirectChat, autoE2EEReady, checkE2EEStatus]); // ⭐⭐⭐ LOẠI BỎ checkE2EEStatus khỏi dependency
+  }, [peerId, isDirectChat, autoE2EEReady]); // ⭐⭐⭐ LOẠI BỎ checkE2EEStatus khỏi dependency
 
   const getCurrentChat = useCallback(() => {
     if (isGroupChat && current_room?.id === room_id) {

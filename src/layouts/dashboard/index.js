@@ -51,6 +51,17 @@ const formatMessageTime = (ts) =>
     : "";
 
 const DashboardLayout = ({ showChat = false, children }) => {
+  useEffect(() => {
+    console.log("🔍 DASHBOARD RENDER CHECK:", {
+      time: new Date().toISOString(),
+      isReady,
+      isLoggedIn,
+      hasToken: !!keycloak.token,
+      conversationsCount: conversations.length,
+      roomsCount: rooms.length,
+    });
+  });
+
   const dispatch = useDispatch();
   const { keycloak, initialized } = useKeycloak();
 
@@ -72,6 +83,9 @@ const DashboardLayout = ({ showChat = false, children }) => {
     (s) => s.videoCall
   );
 
+  useEffect(() => {
+    console.log("🎯 SOCKET SETUP EFFECT TRIGGERED");
+  }, [isReady, isLoggedIn, keycloak.token, conversations, rooms]);
   // 🆕 THÊM: Fetch user profile khi app khởi động
   useEffect(() => {
     if (isLoggedIn && !user?._id) {

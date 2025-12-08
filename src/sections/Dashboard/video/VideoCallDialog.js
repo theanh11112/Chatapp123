@@ -670,7 +670,6 @@ const VideoCallDialog = () => {
           </DialogContent>
         </Dialog>
       )}
-
       {/* Active Call Dialog */}
       {videoCall.open_video_dialog && (
         <Dialog

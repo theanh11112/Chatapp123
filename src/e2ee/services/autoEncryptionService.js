@@ -115,7 +115,7 @@ class AutoEncryptionService extends EventEmitter {
       if (friends.length === 0) {
         console.log("🔄 Fetching friends from API...");
         try {
-          const api = require("../../utils/axios").default;
+          const api = require("../../api/axiosInstance");
           const response = await api.post("/users/get-friends", {
             keycloakId: this.getCurrentUserId(),
           });

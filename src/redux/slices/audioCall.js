@@ -1,6 +1,7 @@
 // redux/slices/audioCall.js - UPDATED VERSION
 import { createSlice } from "@reduxjs/toolkit";
 import { showSnackbar } from "./app";
+import { getSocket } from "../../socket";
 
 const initialState = {
   open_audio_dialog: false,
@@ -296,6 +297,7 @@ export const AcceptAudioCall = () => {
           const socket = getSocket();
           if (socket && socket.connected) {
             socket.emit("audio_call_accepted", {
+              callId: currentCall.callId, // 🆕 THÊM callId
               roomID: currentCall.roomID,
               // KHÔNG gửi callId
             });
@@ -334,7 +336,9 @@ export const RejectAudioCall = () => {
 
     if (currentCall) {
       // Send reject via socket
-      import("../../socket")
+      import("../../socket");
+      console
+        .log("777777")
         .then(({ getSocket }) => {
           const socket = getSocket();
           if (socket && socket.connected) {
@@ -559,7 +563,110 @@ export const HandleAudioCallStarted = (data) => {
     }
   };
 };
+// Thêm vào cuối file, trước export default
 
+// 🔴 THÊM: Handle call accepted from server
+export const HandleCallAcceptedFromServer = (data) => {
+  return async (dispatch, getState) => {
+    try {
+      console.log("🎯 HandleCallAcceptedFromServer:", data);
+
+      const state = getState().audioCall;
+      const currentCall = state.call_queue[0];
+
+      if (!currentCall) {
+        console.warn("⚠️ No current call to update");
+        return;
+      }
+
+      // Check roomID match
+      if (data.roomID !== currentCall.roomID) {
+        console.warn("⚠️ RoomID mismatch in call accepted", {
+          currentRoomID: currentCall.roomID,
+          serverRoomID: data.roomID,
+        });
+        return;
+      }
+
+      // Update call status to ongoing
+      dispatch(
+        updateCallData({
+          callId: data.callId || currentCall.callId,
+          roomID: data.roomID,
+          status: "ongoing",
+        })
+      );
+
+      // If caller, update isCallActive
+      if (!state.incoming) {
+        dispatch(setCallActive(true));
+      }
+
+      dispatch(
+        showSnackbar({
+          severity: "success",
+          message: `Call accepted by ${data.calleeId || "receiver"}`,
+        })
+      );
+    } catch (error) {
+      console.error("❌ HandleCallAcceptedFromServer error:", error);
+    }
+  };
+};
+
+// 🔴 THÊM: New action for answering with WebRTC
+export const AnswerCallWithWebRTC = (answer, callId, roomID) => {
+  return async (dispatch, getState) => {
+    try {
+      const socket = getSocket();
+      if (!socket || !socket.connected) {
+        throw new Error("Socket not connected");
+      }
+
+      console.log("🔊 Answering call with WebRTC:", {
+        callId,
+        roomID,
+        hasAnswer: !!answer,
+        answerType: answer?.type,
+      });
+
+      // Send to server using NEW event
+      socket.emit("answer_call_with_webrtc", {
+        callId,
+        roomID,
+        answer, // WebRTC answer
+      });
+
+      // Update local state
+      dispatch(
+        updateCallData({
+          callId,
+          roomID,
+          status: "ongoing",
+        })
+      );
+
+      dispatch(setCallActive(true));
+      dispatch(CloseAudioNotificationDialog());
+      dispatch(UpdateAudioCallDialog(true));
+
+      dispatch(
+        showSnackbar({
+          severity: "success",
+          message: "Answering call...",
+        })
+      );
+    } catch (error) {
+      console.error("❌ AnswerCallWithWebRTC error:", error);
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: "Failed to answer call",
+        })
+      );
+    }
+  };
+};
 // THÊM ACTION MỚI: Handle call accepted from server
 export const HandleCallAccepted = (data) => {
   return async (dispatch, getState) => {

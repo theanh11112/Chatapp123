@@ -1,4 +1,5 @@
-import { useEffect, useRef, useMemo, useCallback } from "react";
+// useAudioCall.js - FILE HOÀN CHỈNH ĐÃ FIX
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { log, createMethodLogger } from "../utils/audioCallLogger";
 import { useCallTimer } from "./useCallTimer";
@@ -7,16 +8,18 @@ import { useSocketListeners } from "./useSocketListeners";
 import { useCallControls } from "./useCallControls";
 import { formatCallName, formatCallAvatar } from "../utils/callFormatters";
 import { CALL_STATUS, CALL_TIMEOUTS } from "../constants/audioCallConstants";
+import { shallowEqual } from "react-redux";
 
 export const useAudioCall = () => {
   const logger = createMethodLogger("useAudioCall");
   const dispatch = useDispatch();
 
   // Redux state
-  const audioCallState = useSelector((state) => state.audioCall);
-  const authState = useSelector((state) => state.auth);
 
-  // User info - STABLE
+  // Selector tối ưu
+  const audioCallState = useSelector((state) => state.audioCall, shallowEqual);
+  const authState = useSelector((state) => state.auth, shallowEqual);
+  // User info
   const userID = useMemo(
     () => authState.user_id || authState.user?.keycloakId || authState.user?.id,
     [authState.user_id, authState.user?.keycloakId, authState.user?.id]
@@ -26,7 +29,7 @@ export const useAudioCall = () => {
     [authState.user?.username]
   );
 
-  // Current call from queue - STABLE
+  // Current call
   const currentCall = useMemo(() => {
     const call =
       audioCallState.call_queue && audioCallState.call_queue.length > 0
@@ -38,89 +41,44 @@ export const useAudioCall = () => {
       roomID: call?.roomID,
       incoming: call?.incoming,
       status: call?.status,
-      queueLength: audioCallState.call_queue?.length || 0,
     });
 
     return call;
   }, [audioCallState.call_queue, logger]);
 
-  // Refs - FIXED: Thêm refs để tracking state
+  // Refs
   const isMountedRef = useRef(true);
-  const lastCallEndedEventRef = useRef(null);
-  const prevOpenDialogRef = useRef(false);
-  const prevOpenNotificationRef = useRef(false);
-  const outgoingCallStartedRef = useRef(null);
-  const webRTCSetupCompleteRef = useRef(false);
+  const outgoingCallSetupRef = useRef(false);
+  const incomingCallSetupRef = useRef(false);
   const socketListenersSetupRef = useRef(false);
+  const prevCallStatusRef = useRef(null);
 
-  // Custom hooks - FIXED: Tạo stable dependencies
+  // 🔴 THÊM REF ĐỂ TRACK SETUP ATTEMPTS
+  const setupAttemptsRef = useRef(new Set());
+  const lastSetupTimeRef = useRef(0);
+
+  // Custom hooks
   const callTimer = useCallTimer();
-
-  // WebRTCSetup với dependencies ổn định
   const webRTCSetup = useWebRTCSetup(currentCall, userID, username);
-
-  // SocketListeners với dependencies ổn định
   const socketListeners = useSocketListeners(currentCall, userID, username);
 
-  // CallControls với stable dependencies
-  const callControlsDeps = useMemo(
-    () => ({
-      ...webRTCSetup,
-      ...callTimer,
-      userID,
-      username,
-    }),
-    [
-      webRTCSetup.callStatus,
-      webRTCSetup.isConnecting,
-      webRTCSetup.error,
-      webRTCSetup.setupWebRTCAudioCall,
-      webRTCSetup.cleanupWebRTC,
-      webRTCSetup.toggleMicrophone,
-      webRTCSetup.toggleAudioVolume,
-      webRTCSetup.setCallStatus,
-      webRTCSetup.setIsConnecting,
-      webRTCSetup.setError,
-      callTimer.callDuration,
-      callTimer.startCallTimer,
-      callTimer.stopCallTimer,
-      callTimer.resetCallTimer,
-      callTimer.getFormattedDuration,
-      userID,
-      username,
-    ]
-  );
+  // Call controls với joinCallRoom từ socketListeners
+  const callControls = useCallControls(currentCall, {
+    ...webRTCSetup,
+    ...callTimer,
+    userID,
+    username,
+    joinCallRoom: socketListeners.joinCallRoom,
+  });
 
-  const callControls = useCallControls(currentCall, callControlsDeps);
-
-  // Derived state - STABLE
+  // Derived state
   const shouldOpenDialog = useMemo(() => {
-    const open = audioCallState.open_audio_dialog && currentCall;
-    if (open !== prevOpenDialogRef.current) {
-      logger.debug("Dialog open changed", {
-        prev: prevOpenDialogRef.current,
-        new: open,
-        hasCurrentCall: !!currentCall,
-        dialogState: audioCallState.open_audio_dialog,
-      });
-      prevOpenDialogRef.current = open;
-    }
-    return open;
-  }, [audioCallState.open_audio_dialog, currentCall, logger]);
+    return audioCallState.open_audio_dialog && currentCall;
+  }, [audioCallState.open_audio_dialog, currentCall]);
 
   const shouldOpenNotification = useMemo(() => {
-    const open = audioCallState.open_audio_notification_dialog && currentCall;
-    if (open !== prevOpenNotificationRef.current) {
-      logger.debug("Notification open changed", {
-        prev: prevOpenNotificationRef.current,
-        new: open,
-        hasCurrentCall: !!currentCall,
-        notificationState: audioCallState.open_audio_notification_dialog,
-      });
-      prevOpenNotificationRef.current = open;
-    }
-    return open;
-  }, [audioCallState.open_audio_notification_dialog, currentCall, logger]);
+    return audioCallState.open_audio_notification_dialog && currentCall;
+  }, [audioCallState.open_audio_notification_dialog, currentCall]);
 
   const callName = useMemo(() => formatCallName(currentCall), [currentCall]);
   const callAvatar = useMemo(
@@ -128,136 +86,155 @@ export const useAudioCall = () => {
     [currentCall]
   );
 
-  // Socket event handlers - FIXED: Tạo stable callbacks với useMemo
+  // Event handlers
   const eventHandlers = useMemo(
     () => ({
-      handleWebRTCOffer: async (data) => {
-        try {
-          logger.info("handleWebRTCOffer called", {
-            roomID: data.roomID,
-            currentRoomID: currentCall?.roomID,
-            match: data.roomID === currentCall?.roomID,
-          });
+      handleAudioCallAccepted: (data) => {
+        logger.info("🎉 Audio call accepted event in useAudioCall", {
+          roomID: data.roomID,
+          currentRoomID: currentCall?.roomID,
+          acceptedBy: data.acceptedBy,
+          isIncomingCall: currentCall?.incoming,
+        });
 
-          if (data.roomID === currentCall?.roomID) {
-            webRTCSetup.setCallStatus(CALL_STATUS.CONNECTING);
-            logger.success("WebRTC offer handled for current room");
-          }
-        } catch (error) {
-          logger.error("Failed to handle WebRTC offer", error);
-          webRTCSetup.setError(error.message);
+        if (data.roomID === currentCall?.roomID && !currentCall?.incoming) {
+          logger.success("✅ Our outgoing call was accepted!");
+          webRTCSetup.setCallStatus(CALL_STATUS.CONNECTING);
+          webRTCSetup.setIsConnecting(true);
+          callTimer.startCallTimer();
         }
       },
+      handleWebRTCOffer: async (data) => {
+        logger.info("📨 WebRTC offer received in useAudioCall", {
+          roomID: data.roomID,
+          currentRoomID: currentCall?.roomID,
+        });
+      },
+      handleWebRTCAnswer: async (data) => {
+        logger.info("📨 WebRTC answer received in useAudioCall", {
+          roomID: data.roomID,
+          currentRoomID: currentCall?.roomID,
+        });
+      },
+      handleCallRoomJoined: (data) => {
+        logger.info("🚪 Call room joined in useAudioCall", {
+          roomID: data.roomID,
+          success: data.success,
+          currentRoomID: currentCall?.roomID,
+        });
+      },
       handleCallEnded: (data) => {
-        logger.info("Remote call ended event", {
+        logger.info("📴 Call ended remotely in useAudioCall", {
           roomID: data.roomID,
           callId: data.callId,
           currentRoomID: currentCall?.roomID,
-          currentCallId: currentCall?.id,
-          isEnding: callControls.isEnding,
         });
 
-        const now = Date.now();
         if (
-          lastCallEndedEventRef.current &&
-          now - lastCallEndedEventRef.current.timestamp < 2000
+          data.roomID === currentCall?.roomID ||
+          data.callId === currentCall?.id
         ) {
-          logger.warn("Recent call ended event, skipping duplicate");
-          return;
-        }
-
-        lastCallEndedEventRef.current = { timestamp: now, data };
-
-        if (
-          (data.roomID === currentCall?.roomID ||
-            data.callId === currentCall?.id) &&
-          !callControls.isEnding
-        ) {
-          logger.info("Call ended matches current call, ending locally");
+          logger.info("Our call was ended remotely, ending locally");
           setTimeout(() => {
-            if (isMountedRef.current && !callControls.isEnding) {
+            if (isMountedRef.current) {
               callControls.handleEndCall();
             }
           }, 100);
         }
       },
     }),
-    [currentCall, webRTCSetup, callControls, logger]
+    [
+      currentCall?.roomID,
+      currentCall?.id,
+      currentCall?.incoming,
+      webRTCSetup.setCallStatus,
+      webRTCSetup.setIsConnecting,
+      callTimer.startCallTimer,
+      callControls.handleEndCall,
+      logger,
+    ]
   );
 
-  // FIXED: Setup outgoing call effect với dependencies tối ưu
+  // 🔴 FIX: Setup outgoing call effect VỚI DEBOUNCE
   useEffect(() => {
-    if (shouldOpenDialog && currentCall && !currentCall?.incoming) {
-      // KIỂM TRA NẾU ĐÃ START RỒI THÌ KHÔNG START LẠI
-      if (outgoingCallStartedRef.current === currentCall.roomID) {
-        logger.warn("Outgoing call already started for this room, skipping");
-        return;
-      }
-
-      // KIỂM TRA NẾU WEBRTC ĐÃ SETUP COMPLETE
-      if (webRTCSetupCompleteRef.current === currentCall.roomID) {
-        logger.info("WebRTC already setup for this room");
-        return;
-      }
-
-      logger.info("Starting outgoing call setup", {
-        roomID: currentCall.roomID,
-        callId: currentCall.id,
-        status: currentCall.status,
-      });
-
-      const setupCall = async () => {
-        try {
-          outgoingCallStartedRef.current = currentCall.roomID;
-
-          const success = await webRTCSetup.setupWebRTCAudioCall(false, {
-            onCallConnected: () => {
-              logger.success("Outgoing call connected");
-              callTimer.startCallTimer();
-              webRTCSetupCompleteRef.current = currentCall.roomID;
-            },
-            onError: (error) => {
-              logger.error("Outgoing call setup failed", error);
-              outgoingCallStartedRef.current = null;
-              webRTCSetupCompleteRef.current = null;
-            },
-          });
-
-          if (!success) {
-            logger.error("WebRTC setup returned false");
-            outgoingCallStartedRef.current = null;
-            webRTCSetupCompleteRef.current = null;
-          }
-        } catch (error) {
-          logger.error("Failed to setup outgoing call", error);
-          outgoingCallStartedRef.current = null;
-          webRTCSetupCompleteRef.current = null;
-        }
-      };
-
-      setupCall();
-    } else if (!shouldOpenDialog && outgoingCallStartedRef.current) {
-      // RESET KHI DIALOG ĐÓNG
-      logger.debug("Dialog closed, resetting outgoing call refs");
-      outgoingCallStartedRef.current = null;
-      webRTCSetupCompleteRef.current = null;
+    if (!shouldOpenDialog || !currentCall || currentCall?.incoming) {
+      return;
     }
+
+    const roomID = currentCall.roomID;
+    const now = Date.now();
+
+    // 🔴 DEBOUNCE: CHỈ SETUP SAU 500ms KỂ TỪ LẦN CUỐI
+    if (now - lastSetupTimeRef.current < 500) {
+      logger.debug("Debouncing outgoing call setup", {
+        roomID,
+        timeSinceLast: now - lastSetupTimeRef.current,
+      });
+      return;
+    }
+
+    // 🔴 KIỂM TRA ĐÃ SETUP ROOM NÀY CHƯA
+    const setupKey = `audio_call_setup_${roomID}`;
+    if (sessionStorage.getItem(setupKey) === "true") {
+      logger.debug("Outgoing call already setup for this room", { roomID });
+      return;
+    }
+
+    // 🔴 KIỂM TRA SỐ LẦN SETUP
+    if (setupAttemptsRef.current.has(roomID)) {
+      logger.debug("Already attempted setup for this room", { roomID });
+      return;
+    }
+
+    logger.info("🚀 Setting up outgoing call", {
+      roomID,
+      callId: currentCall.id,
+      userID,
+    });
+
+    // 🔴 ĐÁNH DẤU ĐANG SETUP
+    setupAttemptsRef.current.add(roomID);
+    lastSetupTimeRef.current = now;
+    sessionStorage.setItem(setupKey, "true");
+
+    const setupCall = async () => {
+      try {
+        await callControls.setupOutgoingCall?.();
+        logger.success("Outgoing call setup initiated");
+      } catch (error) {
+        logger.error("Failed to setup outgoing call", error);
+        // 🔴 XÓA FLAG NẾU LỖI ĐỂ CÓ THỂ RETRY
+        sessionStorage.removeItem(setupKey);
+        setupAttemptsRef.current.delete(roomID);
+      }
+    };
+
+    setupCall();
+
+    // 🔴 CLEANUP SETUP ATTEMPT SAU 30s
+    const cleanupTimer = setTimeout(() => {
+      setupAttemptsRef.current.delete(roomID);
+    }, 30000);
+
+    return () => {
+      clearTimeout(cleanupTimer);
+    };
   }, [
     shouldOpenDialog,
-    currentCall?.roomID,
+    currentCall?.roomID, // 🔴 CHỈ THEO DÕI roomID
     currentCall?.id,
     currentCall?.incoming,
-    currentCall?.status,
+    userID,
+    callControls.setupOutgoingCall,
     logger,
   ]);
 
-  // FIXED: Setup socket listeners effect với dependencies tối ưu
+  // Setup socket listeners
   useEffect(() => {
     if (!shouldOpenDialog || !currentCall || !isMountedRef.current) {
       return;
     }
 
-    // Chỉ setup socket listeners nếu chưa có
     if (socketListenersSetupRef.current) {
       logger.debug("Socket listeners already set up");
       return;
@@ -270,25 +247,11 @@ export const useAudioCall = () => {
     });
 
     const cleanupSocketListeners = socketListeners.setupSocketListeners({
-      onWebRTCOffer: eventHandlers.handleWebRTCOffer,
-      onWebRTCAnswer: (data) => {
-        logger.info("WebRTC answer received", data);
-        // Xử lý answer nếu cần
-      },
-      onWebRTCIceCandidate: (data) => {
-        logger.debug("ICE candidate received", {
-          candidate: data.candidate?.candidate?.substring(0, 30) + "...",
-        });
-        // Xử lý ICE candidate nếu cần
-      },
-      onAudioCallAccepted: (data) => {
-        logger.info("Audio call accepted event received", data);
-        if (!currentCall?.incoming) {
-          webRTCSetup.setCallStatus(CALL_STATUS.CONNECTING);
-          webRTCSetup.setIsConnecting(true);
-        }
-      },
-      onCallEnded: eventHandlers.handleCallEnded,
+      handleAudioCallAccepted: eventHandlers.handleAudioCallAccepted,
+      handleWebRTCOffer: eventHandlers.handleWebRTCOffer,
+      handleWebRTCAnswer: eventHandlers.handleWebRTCAnswer,
+      handleCallRoomJoined: eventHandlers.handleCallRoomJoined,
+      handleCallEnded: eventHandlers.handleCallEnded,
     });
 
     socketListenersSetupRef.current = true;
@@ -304,6 +267,8 @@ export const useAudioCall = () => {
     currentCall?.id,
     currentCall?.incoming,
     logger,
+    eventHandlers,
+    socketListeners.setupSocketListeners,
   ]);
 
   // Auto-reject incoming call timeout
@@ -334,7 +299,108 @@ export const useAudioCall = () => {
     logger,
   ]);
 
-  // FIXED: Component mount/unmount effect - Tối ưu cleanup
+  // 🔴 FIX: Update call status với DEBOUNCE
+  useEffect(() => {
+    if (!currentCall) {
+      // Reset khi không có call
+      webRTCSetup.setCallStatus(CALL_STATUS.IDLE);
+      webRTCSetup.setIsConnecting(false);
+      callTimer.stopCallTimer();
+      callTimer.resetCallTimer();
+      prevCallStatusRef.current = null;
+      return;
+    }
+
+    const currentStatus = currentCall.status;
+
+    // 🔴 DEBOUNCE STATUS UPDATES
+    if (prevCallStatusRef.current === currentStatus) {
+      return;
+    }
+
+    // 🔴 GHI LOG CHỈ KHI THAY ĐỔI QUAN TRỌNG
+    const importantStatuses = [
+      "ongoing",
+      "joined",
+      "ringing",
+      "ended",
+      "rejected",
+    ];
+    if (importantStatuses.includes(currentStatus)) {
+      logger.info("Call status changed", {
+        from: prevCallStatusRef.current,
+        to: currentStatus,
+        incoming: currentCall.incoming,
+      });
+    }
+
+    // 🔴 XỬ LÝ STATUS VỚI DEBOUNCE
+    const handleStatusUpdate = () => {
+      switch (currentStatus) {
+        case "ongoing":
+        case "joined":
+          if (webRTCSetup.callStatus !== CALL_STATUS.CONNECTED) {
+            webRTCSetup.setCallStatus(CALL_STATUS.CONNECTED);
+          }
+          if (webRTCSetup.isConnecting !== false) {
+            webRTCSetup.setIsConnecting(false);
+          }
+          if (callTimer.callDuration === 0) {
+            callTimer.startCallTimer();
+          }
+          break;
+
+        case "ringing":
+          const newCallStatus = currentCall.incoming
+            ? CALL_STATUS.INCOMING
+            : CALL_STATUS.RINGING;
+          if (webRTCSetup.callStatus !== newCallStatus) {
+            webRTCSetup.setCallStatus(newCallStatus);
+          }
+          if (webRTCSetup.isConnecting !== false) {
+            webRTCSetup.setIsConnecting(false);
+          }
+          break;
+
+        case "ended":
+        case "rejected":
+          if (webRTCSetup.callStatus !== CALL_STATUS.DISCONNECTED) {
+            webRTCSetup.setCallStatus(CALL_STATUS.DISCONNECTED);
+          }
+          if (webRTCSetup.isConnecting !== false) {
+            webRTCSetup.setIsConnecting(false);
+          }
+          callTimer.stopCallTimer();
+          break;
+
+        default:
+          break;
+      }
+    };
+
+    // 🔴 DEBOUNCE STATUS UPDATE (100ms)
+    const timeoutId = setTimeout(handleStatusUpdate, 100);
+
+    prevCallStatusRef.current = currentStatus;
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [
+    currentCall?.status,
+    currentCall?.incoming,
+    webRTCSetup.callStatus,
+    webRTCSetup.isConnecting,
+    webRTCSetup.setCallStatus,
+    webRTCSetup.setIsConnecting,
+    callTimer.startCallTimer,
+    callTimer.stopCallTimer,
+    callTimer.resetCallTimer,
+    callTimer.callDuration,
+    logger,
+  ]);
+
+  // Component mount/unmount
   useEffect(() => {
     isMountedRef.current = true;
     logger.info("useAudioCall hook mounting", {
@@ -346,7 +412,6 @@ export const useAudioCall = () => {
       isMountedRef.current = false;
       logger.info("useAudioCall hook unmounting - performing cleanup");
 
-      // Cleanup chỉ khi thực sự cần
       if (currentCall) {
         logger.info("Cleaning up active call on unmount", {
           roomID: currentCall.roomID,
@@ -355,130 +420,75 @@ export const useAudioCall = () => {
 
         callTimer.stopCallTimer();
 
-        // Cleanup socket listeners
         if (socketListenersSetupRef.current) {
           socketListeners.cleanupSocketListeners();
           socketListenersSetupRef.current = false;
         }
 
-        // WebRTC cleanup với error handling
         webRTCSetup.cleanupWebRTC().catch((err) => {
           logger.error("Error during WebRTC cleanup on unmount", err);
         });
+
+        // 🔴 CLEANUP SESSION STORAGE
+        const roomID = currentCall.roomID;
+        sessionStorage.removeItem(`outgoing_setup_${roomID}`);
+        sessionStorage.removeItem(`room_joined_${roomID}`);
+        sessionStorage.removeItem(`audio_call_setup_${roomID}`);
+        setupAttemptsRef.current.delete(roomID);
       }
 
-      // RESET TẤT CẢ REFS
-      outgoingCallStartedRef.current = null;
-      webRTCSetupCompleteRef.current = null;
-      lastCallEndedEventRef.current = null;
-      prevOpenDialogRef.current = false;
-      prevOpenNotificationRef.current = false;
+      // Reset refs
+      outgoingCallSetupRef.current = null;
+      incomingCallSetupRef.current = null;
+      prevCallStatusRef.current = null;
+      lastSetupTimeRef.current = 0;
+      setupAttemptsRef.current.clear();
 
       logger.info("Cleanup completed");
     };
   }, [currentCall?.roomID, currentCall?.id, logger]);
 
-  // Update call status khi currentCall changes
-  useEffect(() => {
-    if (currentCall) {
-      logger.info("Current call updated", {
-        callId: currentCall.id,
-        roomID: currentCall.roomID,
-        status: currentCall.status,
-        isIncoming: currentCall.incoming,
-        from: currentCall.from,
-        to: currentCall.to,
-      });
+  // 🔴 Optimized formatted duration
+  const formattedDuration = useMemo(() => {
+    return callTimer.getFormattedDuration?.() || "00:00";
+  }, [callTimer.getFormattedDuration]);
 
-      // Update call status dựa trên currentCall status
-      if (currentCall.status === "ongoing" || currentCall.status === "joined") {
-        webRTCSetup.setCallStatus(CALL_STATUS.CONNECTED);
-        webRTCSetup.setIsConnecting(false);
+  // 🔴 Optimized call state
+  const memoizedCallState = useMemo(
+    () => ({
+      callStatus: webRTCSetup.callStatus,
+      isConnecting: webRTCSetup.isConnecting,
+      error: webRTCSetup.error,
+      isCallActive: audioCallState.isCallActive,
+    }),
+    [
+      webRTCSetup.callStatus,
+      webRTCSetup.isConnecting,
+      webRTCSetup.error,
+      audioCallState.isCallActive,
+    ]
+  );
 
-        // Chỉ start timer nếu chưa start
-        if (callTimer.callDuration === 0) {
-          callTimer.startCallTimer();
-        }
-      } else if (currentCall.status === "ringing") {
-        webRTCSetup.setCallStatus(
-          currentCall.incoming ? CALL_STATUS.INCOMING : CALL_STATUS.RINGING
-        );
-        webRTCSetup.setIsConnecting(false);
-      } else if (
-        currentCall.status === "ended" ||
-        currentCall.status === "rejected"
-      ) {
-        webRTCSetup.setCallStatus(CALL_STATUS.DISCONNECTED);
-        webRTCSetup.setIsConnecting(false);
-        callTimer.stopCallTimer();
-      }
-    } else {
-      // No current call, reset status
-      webRTCSetup.setCallStatus(CALL_STATUS.IDLE);
-      webRTCSetup.setIsConnecting(false);
-      callTimer.stopCallTimer();
-      callTimer.resetCallTimer();
-    }
-  }, [
-    currentCall?.status,
-    currentCall?.incoming,
-    webRTCSetup.setCallStatus,
-    webRTCSetup.setIsConnecting,
-    callTimer.startCallTimer,
-    callTimer.stopCallTimer,
-    callTimer.resetCallTimer,
-    callTimer.callDuration,
-  ]);
-
-  // FIXED: Debug effect - chỉ chạy khi cần thiết
-  useEffect(() => {
-    if (DEBUG && (shouldOpenDialog || shouldOpenNotification)) {
-      logger.debug("Audio call state update", {
-        shouldOpenDialog,
-        shouldOpenNotification,
-        callStatus: webRTCSetup.callStatus,
-        isConnecting: webRTCSetup.isConnecting,
-        error: webRTCSetup.error,
-        callDuration: callTimer.callDuration,
-        currentCallId: currentCall?.id,
-      });
-    }
-  }, [
-    shouldOpenDialog,
-    shouldOpenNotification,
-    webRTCSetup.callStatus,
-    webRTCSetup.isConnecting,
-    webRTCSetup.error,
-    callTimer.callDuration,
-    currentCall?.id,
-    logger,
-  ]);
-
-  // Memoize return value để tránh re-render không cần thiết
   return useMemo(
     () => ({
       currentCall,
-      callState: {
-        callDuration: callTimer.callDuration,
-        callStatus: webRTCSetup.callStatus,
-        isConnecting: webRTCSetup.isConnecting,
-        error: webRTCSetup.error,
-        isCallActive: audioCallState.isCallActive,
-        getFormattedDuration: callTimer.getFormattedDuration,
-      },
+      callState: memoizedCallState,
       callControls: {
         handleAccept: callControls.handleAccept,
         handleReject: callControls.handleReject,
         handleEndCall: callControls.handleEndCall,
         handleToggleMute: callControls.handleToggleMute,
         handleToggleSpeaker: callControls.handleToggleSpeaker,
+        setupOutgoingCall: callControls.setupOutgoingCall,
         isMuted: callControls.isMuted,
         isSpeakerOn: callControls.isSpeakerOn,
         isEnding: callControls.isEnding,
+        isAccepting: callControls.isAccepting,
       },
       uiState: {
         callName,
         callAvatar,
+        formattedDuration,
         isIncoming: currentCall?.incoming || false,
         shouldOpenDialog,
         shouldOpenNotification,
@@ -487,28 +497,23 @@ export const useAudioCall = () => {
     }),
     [
       currentCall,
-      callTimer.callDuration,
-      webRTCSetup.callStatus,
-      webRTCSetup.isConnecting,
-      webRTCSetup.error,
-      audioCallState.isCallActive,
-      callTimer.getFormattedDuration,
+      memoizedCallState,
       callControls.handleAccept,
       callControls.handleReject,
       callControls.handleEndCall,
       callControls.handleToggleMute,
       callControls.handleToggleSpeaker,
+      callControls.setupOutgoingCall,
       callControls.isMuted,
       callControls.isSpeakerOn,
       callControls.isEnding,
+      callControls.isAccepting,
       callName,
       callAvatar,
+      formattedDuration,
       shouldOpenDialog,
       shouldOpenNotification,
       audioCallState.incoming,
     ]
   );
 };
-
-// Debug flag
-const DEBUG = process.env.NODE_ENV === "development";

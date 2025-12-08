@@ -535,10 +535,155 @@ export const connectSocket = (token) => {
       );
     });
 
+    // ==================== SOCKET EVENT HANDLERS ====================
+
+    // Thêm vào phần audio call notification
+
+    // 🔴 THÊM: Khi người gọi nhận được thông báo caller đã bắt máy
+    // socket.on("call_accepted_by_callee", (data) => {
+    //   if (debounceEvent("call_accepted_by_callee", data)) return;
+
+    //   log.socketEvent("call_accepted_by_callee", data);
+
+    //   // Emit event cho component xử lý
+    //   socketEvents.emit("call_accepted_by_callee", data);
+
+    //   // Show notification
+    //   store.dispatch(
+    //     showSnackbar({
+    //       severity: "success",
+    //       message: `${data.calleeId} accepted your call`,
+    //     })
+    //   );
+    // });
+
+    // // 🔴 THÊM: Khi người nhận xác nhận đã gửi answer thành công
+    // socket.on("call_answer_complete", (data) => {
+    //   if (debounceEvent("call_answer_complete", data)) return;
+
+    //   log.socketEvent("call_answer_complete", data);
+
+    //   // Emit event cho component
+    //   socketEvents.emit("call_answer_complete", data);
+
+    //   if (data.success) {
+    //     log.success("Call answer sent successfully");
+    //   }
+    // });
+
+    // 🔴 THÊM: Event mới - khi caller tạo cuộc gọi thành công
+    socket.on("audio_call_started", (data) => {
+      if (debounceEvent("audio_call_started", data)) return;
+
+      log.socketEvent("audio_call_started", data);
+
+      // Emit event để component AudioCallDialog cập nhật callId
+      socketEvents.emit("audio_call_started_from_server", data);
+    });
+
+    // 🔴 THÊM: WebRTC answer (đã có nhưng cần log chi tiết)
+    socket.on("webrtc_answer", (data) => {
+      log.socketEvent("webrtc_answer", {
+        roomID: data.roomID,
+        callId: data.callId,
+        answerType: data.answer?.type,
+        from: data.from,
+        hasAnswer: !!data.answer,
+      });
+
+      // QUAN TRỌNG: Check if answer is for current call
+      const currentCall = store.getState().audioCall.call_queue[0];
+      if (currentCall && data.roomID === currentCall.roomID) {
+        log.success("✅ Received WebRTC answer for current call!");
+
+        // Emit cho WebRTC handler
+        socketEvents.emit("webrtc_answer", data);
+
+        // Also show notification
+        store.dispatch(
+          showSnackbar({
+            severity: "success",
+            message: "Connected to callee",
+          })
+        );
+      } else {
+        log.warn("⚠️ WebRTC answer not for current call", {
+          answerRoomID: data.roomID,
+          currentRoomID: currentCall?.roomID,
+        });
+      }
+    });
     // 5.2 Audio call started
     socket.on("audio_call_started", (data) => {
       log.socketEvent("audio_call_started", data);
       socketEvents.emit("audio_call_started", data);
+    });
+
+    // ==================== FIX: THÊM EVENT HANDLERS BỊ THIẾU ====================
+
+    // 1. Audio call accepted success (server confirmation)
+    socket.on("audio_call_accepted_success", (data) => {
+      if (debounceEvent("audio_call_accepted_success", data)) return;
+
+      log.socketEvent("audio_call_accepted_success", data);
+      console.log("✅ Audio call accept confirmed by server", data);
+
+      // Emit để component biết accept đã thành công
+      socketEvents.emit("audio_call_accepted_success", data);
+    });
+
+    // 2. Video call accepted success
+    socket.on("video_call_accepted_success", (data) => {
+      if (debounceEvent("video_call_accepted_success", data)) return;
+
+      log.socketEvent("video_call_accepted_success", data);
+      log.success("✅ Video call accept confirmed by server", data);
+
+      socketEvents.emit("video_call_accepted_success", data);
+    });
+
+    // 3. Call metrics (server gửi thông tin metrics)
+    socket.on("call_metrics", (data) => {
+      log.socketEvent("call_metrics", data);
+
+      // Log metrics cho debug
+      if (DEBUG) {
+        console.log(`📊 Call Metrics: ${data.action} - ${data.type} call`, {
+          callId: data.callId,
+          from: data.from,
+          to: data.to,
+          roomID: data.roomID,
+          success: data.success,
+        });
+      }
+
+      socketEvents.emit("call_metrics", data);
+    });
+
+    // 4. Video call started
+    socket.on("video_call_started", (data) => {
+      if (debounceEvent("video_call_started", data)) return;
+
+      log.socketEvent("video_call_started", data);
+      log.success("🎬 Video call started", data);
+
+      // Emit event cho component VideoCallDialog
+      socketEvents.emit("video_call_started_from_server", data);
+    });
+
+    // 5. Video call accepted
+    socket.on("video_call_accepted", (data) => {
+      handleCallAccepted("video_call_accepted", data, false); // false = not audio call
+    });
+
+    // 6. Video call declined
+    socket.on("video_call_declined", (data) => {
+      handleCallDeclined("video_call_declined", data);
+    });
+
+    // 7. Video call ended
+    socket.on("video_call_ended", (data) => {
+      handleCallEnded("video_call_ended", data);
     });
 
     // 5.3 Call accepted handlers
@@ -568,14 +713,8 @@ export const connectSocket = (token) => {
         store.dispatch(setCallActive(true));
       }
 
-      if (data.roomID) {
-        if (callMonitoring.activeCalls.has(data.roomID)) {
-          const existingCall = callMonitoring.activeCalls.get(data.roomID);
-          if (existingCall.interval) {
-            clearInterval(existingCall.interval);
-          }
-        }
-
+      // 🎯 FIX: CHỈ tạo interval nếu chưa có
+      if (data.roomID && !callMonitoring.activeCalls.has(data.roomID)) {
         callMonitoring.lastCallUpdate.set(data.roomID, Date.now());
 
         const interval = setInterval(() => {

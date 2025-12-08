@@ -1,4 +1,5 @@
-import React from "react";
+// ActiveCallDialog.js - THÊM DEBUG VÀ OPTIMIZE
+import React, { useState, useEffect, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -18,19 +19,59 @@ const Transition = React.forwardRef(function Transition(props, ref) {
   return <Slide direction="up" ref={ref} {...props} />;
 });
 
-const ActiveCallDialog = ({ call, callState, callControls, onClose }) => {
+// 🔴 COMPONENT CON CHO DURATION - GIẢM RE-RENDER
+const CallDurationDisplay = React.memo(
+  ({ formattedDuration, isCallActive }) => {
+    const [displayTime, setDisplayTime] = useState("00:00");
+
+    useEffect(() => {
+      // if (isCallActive) {
+      //   // 🔴 CẬP NHẬT MỖI GIÂY NHƯNG KHÔNG RE-RENDER PARENT
+      //   const interval = setInterval(() => {
+      //     setDisplayTime(formattedDuration);
+      //   }, 1000);
+      //   return () => clearInterval(interval);
+      // } else {
+      //   setDisplayTime("00:00");
+      // }
+    }, [formattedDuration, isCallActive]);
+
+    return (
+      <Typography variant="body1" color="rgba(255,255,255,0.9)">
+        {displayTime}
+      </Typography>
+    );
+  }
+);
+
+CallDurationDisplay.displayName = "CallDurationDisplay";
+
+const ActiveCallDialog = ({
+  call,
+  callState,
+  callControls,
+  onClose,
+  uiState, // 🔴 NHẬN uiState TỪ useAudioCall
+}) => {
   const theme = useTheme();
+  const renderCount = useRef(0);
+
+  // 🔴 DEBUG RE-RENDER
+  useEffect(() => {
+    // renderCount.current += 1;
+    // console.log(`🔄 ActiveCallDialog re-render #${renderCount.current}`, {
+    //   time: new Date().toISOString(),
+    //   callStatus: callState.callStatus,
+    //   isConnecting: callState.isConnecting,
+    //   error: callState.error,
+    //   hasCall: !!call,
+    //   formattedDuration: uiState?.formattedDuration || "00:00",
+    // });
+  });
 
   if (!call) return null;
 
-  const {
-    callDuration,
-    callStatus,
-    isConnecting,
-    error,
-    isCallActive,
-    getFormattedDuration,
-  } = callState;
+  const { callStatus, isConnecting, error, isCallActive } = callState;
 
   const {
     handleEndCall,
@@ -40,6 +81,8 @@ const ActiveCallDialog = ({ call, callState, callControls, onClose }) => {
     isSpeakerOn,
     isEnding,
   } = callControls;
+
+  const { formattedDuration, callName, callAvatar } = uiState || {};
 
   return (
     <Dialog
@@ -79,7 +122,7 @@ const ActiveCallDialog = ({ call, callState, callControls, onClose }) => {
         >
           <Stack alignItems="center" spacing={3}>
             <Avatar
-              src={call.avatar}
+              src={callAvatar}
               sx={{
                 width: 120,
                 height: 120,
@@ -97,14 +140,15 @@ const ActiveCallDialog = ({ call, callState, callControls, onClose }) => {
                 color="white"
                 gutterBottom
               >
-                {call.name || "Unknown Caller"}
+                {callName || "Unknown Caller"}
               </Typography>
-              <Typography variant="body1" color="rgba(255,255,255,0.9)">
-                {isCallActive
-                  ? getFormattedDuration?.() ||
-                    `${Math.floor(callDuration / 60)}:${callDuration % 60}`
-                  : callStatus}
-              </Typography>
+
+              {/* 🔴 SỬ DỤNG COMPONENT CON CHO DURATION */}
+              <CallDurationDisplay
+                formattedDuration={formattedDuration}
+                isCallActive={isCallActive}
+              />
+
               {isConnecting && (
                 <Typography variant="caption" color="rgba(255,255,255,0.7)">
                   Connecting... ({callStatus})
@@ -152,4 +196,20 @@ const ActiveCallDialog = ({ call, callState, callControls, onClose }) => {
   );
 };
 
-export default React.memo(ActiveCallDialog);
+// 🔴 SỬ DỤNG CUSTOM COMPARISON FUNCTION
+const arePropsEqual = (prevProps, nextProps) => {
+  // Chỉ re-render nếu các props quan trọng thay đổi
+  return (
+    prevProps.call?.id === nextProps.call?.id &&
+    prevProps.callState.callStatus === nextProps.callState.callStatus &&
+    prevProps.callState.isConnecting === nextProps.callState.isConnecting &&
+    prevProps.callState.error === nextProps.callState.error &&
+    prevProps.uiState?.formattedDuration ===
+      nextProps.uiState?.formattedDuration &&
+    prevProps.callControls.isMuted === nextProps.callControls.isMuted &&
+    prevProps.callControls.isSpeakerOn === nextProps.callControls.isSpeakerOn &&
+    prevProps.callControls.isEnding === nextProps.callControls.isEnding
+  );
+};
+
+export default React.memo(ActiveCallDialog, arePropsEqual);

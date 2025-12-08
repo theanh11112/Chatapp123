@@ -1,215 +1,181 @@
+// EncryptionBadge.js - COMPLETE OPTIMIZED VERSION
 import React from "react";
-import { Tooltip, Box, Typography, Chip, IconButton } from "@mui/material";
-import {
-  Lock as LockIcon,
-  LockOpen as LockOpenIcon,
-  VpnKey as KeyIcon,
-  Error as ErrorIcon,
-  CheckCircle as CheckCircleIcon,
-  Sync as SyncIcon,
-  Warning as WarningIcon,
-} from "@mui/icons-material";
+import { Badge, Tooltip, Box, Typography } from "@mui/material";
+import { Lock, LockOpen, Shield, ShieldWarning, XCircle } from "phosphor-react";
+import { useTheme } from "@mui/material/styles";
 
-const EncryptionBadge = ({
-  status = "unknown",
-  peerName = "",
-  showTooltip = true,
-  size = "small",
-  onClick,
-}) => {
-  console.log("🔍 [EncryptionBadge] Component render:", {
-    status,
-    peerName,
-    showTooltip,
-    size,
-    hasOnClick: !!onClick,
-  });
-
-  const getBadgeConfig = () => {
-    console.log(`🔄 [EncryptionBadge] getBadgeConfig called: status=${status}`);
-
-    switch (status) {
-      case "encrypted":
-        console.log("✅ [EncryptionBadge] Status: encrypted");
-        return {
-          icon: <LockIcon fontSize={size} />,
-          color: "success.main",
-          bgcolor: "success.lighter",
-          text: "End-to-end encrypted",
-          tooltip: `Messages with ${
-            peerName || "this chat"
-          } are end-to-end encrypted`,
-        };
-
-      case "establishing":
-        console.log("🔄 [EncryptionBadge] Status: establishing");
-        return {
-          icon: <SyncIcon fontSize={size} />,
-          color: "warning.main",
-          bgcolor: "warning.lighter",
-          text: "Establishing encryption...",
-          tooltip: "Setting up secure connection...",
-        };
-
-      case "unavailable":
-        console.log("🔓 [EncryptionBadge] Status: unavailable");
-        return {
-          icon: <LockOpenIcon fontSize={size} />,
-          color: "text.disabled",
-          bgcolor: "grey.100",
-          text: "Not encrypted",
-          tooltip: "Encryption not available for this chat",
-        };
-
-      case "error":
-        console.log("❌ [EncryptionBadge] Status: error");
-        return {
-          icon: <ErrorIcon fontSize={size} />,
-          color: "error.main",
-          bgcolor: "error.lighter",
-          text: "Encryption error",
-          tooltip: "There was an error with encryption",
-        };
-
-      case "key_exchange_pending":
-        console.log("🔑 [EncryptionBadge] Status: key_exchange_pending");
-        return {
-          icon: <KeyIcon fontSize={size} />,
-          color: "info.main",
-          bgcolor: "info.lighter",
-          text: "Exchanging keys...",
-          tooltip: "Waiting for key exchange confirmation",
-        };
-
-      default:
-        console.log("❓ [EncryptionBadge] Status: unknown");
-        return {
-          icon: <WarningIcon fontSize={size} />,
-          color: "text.secondary",
-          bgcolor: "grey.100",
-          text: "Unknown",
-          tooltip: "Encryption status unknown",
-        };
-    }
+const getBadgeConfig = (status) => {
+  const configs = {
+    encrypted: {
+      icon: <LockOpen size={14} />,
+      color: "success",
+      tooltip: "End-to-end encrypted",
+      text: "Encrypted",
+    },
+    decrypting: {
+      icon: <Lock size={14} />,
+      color: "info",
+      tooltip: "Decrypting...",
+      text: "Decrypting",
+    },
+    unavailable: {
+      icon: <Shield size={14} />,
+      color: "default",
+      tooltip: "Encryption not available",
+      text: "Unavailable",
+    },
+    needs_key: {
+      icon: <ShieldWarning size={14} />,
+      color: "warning",
+      tooltip: "Waiting for encryption key",
+      text: "Needs Key",
+    },
+    error: {
+      icon: <XCircle size={14} />,
+      color: "error",
+      tooltip: "Encryption error",
+      text: "Error",
+    },
+    unknown: {
+      icon: <Shield size={14} />,
+      color: "default",
+      tooltip: "Encryption status unknown",
+      text: "Unknown",
+    },
   };
 
-  const config = getBadgeConfig();
+  return configs[status] || configs.unknown;
+};
 
-  const badgeContent = (
-    <Box
-      sx={{
-        display: "flex",
-        alignItems: "center",
-        gap: 0.5,
-        px: 1,
-        py: 0.5,
-        borderRadius: 1,
-        bgcolor: config.bgcolor,
-        color: config.color,
-        cursor: onClick ? "pointer" : "default",
-        "&:hover": onClick ? { bgcolor: "action.hover" } : {},
-      }}
-      onClick={(e) => {
-        console.log("🖱️ [EncryptionBadge] Clicked:", { status, peerName });
-        if (onClick) {
-          onClick(e);
-        }
-      }}
-    >
-      {config.icon}
-      <Typography variant="caption" sx={{ fontWeight: 500 }}>
-        {config.text}
-      </Typography>
-    </Box>
-  );
+const EncryptionBadge = React.memo(
+  ({
+    status = "unknown",
+    peerName = "",
+    fingerprint = "",
+    showTooltip = true,
+    size = "medium",
+    onClick,
+  }) => {
+    const theme = useTheme();
+    const config = getBadgeConfig(status);
 
-  if (showTooltip) {
+    const sizeConfig = {
+      small: {
+        iconSize: 12,
+        padding: "2px 6px",
+        fontSize: "0.65rem",
+        gap: 2,
+      },
+      medium: {
+        iconSize: 14,
+        padding: "3px 8px",
+        fontSize: "0.75rem",
+        gap: 4,
+      },
+      large: {
+        iconSize: 16,
+        padding: "4px 10px",
+        fontSize: "0.85rem",
+        gap: 6,
+      },
+    };
+
+    const currentSize = sizeConfig[size] || sizeConfig.medium;
+
+    const badgeContent = (
+      <Box
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: currentSize.gap,
+          padding: currentSize.padding,
+          borderRadius: 1,
+          backgroundColor:
+            status === "encrypted"
+              ? theme.palette.success.light
+              : status === "error"
+              ? theme.palette.error.light
+              : status === "needs_key"
+              ? theme.palette.warning.light
+              : theme.palette.grey[200],
+          color:
+            status === "encrypted"
+              ? theme.palette.success.dark
+              : status === "error"
+              ? theme.palette.error.dark
+              : status === "needs_key"
+              ? theme.palette.warning.dark
+              : theme.palette.grey[700],
+          border: `1px solid ${
+            status === "encrypted"
+              ? theme.palette.success.main
+              : status === "error"
+              ? theme.palette.error.main
+              : status === "needs_key"
+              ? theme.palette.warning.main
+              : theme.palette.grey[300]
+          }`,
+          cursor: onClick ? "pointer" : "default",
+          transition: "all 0.2s ease",
+          "&:hover": onClick
+            ? {
+                opacity: 0.9,
+                transform: "translateY(-1px)",
+              }
+            : {},
+        }}
+        onClick={onClick}
+      >
+        <Box sx={{ display: "flex", alignItems: "center" }}>
+          {React.cloneElement(config.icon, { size: currentSize.iconSize })}
+        </Box>
+        <Typography
+          variant="caption"
+          sx={{
+            fontSize: currentSize.fontSize,
+            fontWeight: 500,
+            lineHeight: 1,
+          }}
+        >
+          {config.text}
+        </Typography>
+      </Box>
+    );
+
+    if (!showTooltip) {
+      return badgeContent;
+    }
+
+    let tooltipTitle = config.tooltip;
+    if (peerName && status === "encrypted") {
+      tooltipTitle = `End-to-end encrypted with ${peerName}`;
+      if (fingerprint) {
+        tooltipTitle += ` (${fingerprint.substring(0, 8)})`;
+      }
+    } else if (peerName) {
+      tooltipTitle += ` with ${peerName}`;
+    }
+
     return (
-      <Tooltip title={config.tooltip} arrow placement="top">
+      <Tooltip title={tooltipTitle} arrow placement="top">
         {badgeContent}
       </Tooltip>
     );
   }
+);
 
-  console.log("✅ [EncryptionBadge] Rendering badge");
-  return badgeContent;
-};
-
-// Additional component for message-level badge
-export const MessageEncryptionBadge = ({
-  isEncrypted,
-  isDecrypted,
-  algorithm,
-  onClick,
-}) => {
-  console.log("🔍 [MessageEncryptionBadge] Component render:", {
-    isEncrypted,
-    isDecrypted,
-    algorithm,
-    hasOnClick: !!onClick,
-  });
-
-  if (!isEncrypted) {
-    console.log("🔓 [MessageEncryptionBadge] Not encrypted, returning null");
-    return null;
-  }
-
-  const getMessageBadgeConfig = () => {
-    console.log(`🔄 [MessageEncryptionBadge] getMessageBadgeConfig called:`, {
-      isDecrypted,
-      algorithm,
-    });
-
-    if (isDecrypted) {
-      console.log("✅ [MessageEncryptionBadge] Message is decrypted");
-      return {
-        icon: <LockIcon fontSize="10px" />,
-        text: "Decrypted",
-        color: "success.main",
-        tooltip: `This message was decrypted using ${algorithm || "AES-GCM"}`,
-      };
-    } else {
-      console.log(
-        "🔐 [MessageEncryptionBadge] Message is encrypted (not decrypted)"
-      );
-      return {
-        icon: <LockIcon fontSize="10px" />,
-        text: "Encrypted",
-        color: "warning.main",
-        tooltip: "Encrypted message - tap to decrypt",
-      };
-    }
-  };
-
-  const config = getMessageBadgeConfig();
-
-  console.log("✅ [MessageEncryptionBadge] Rendering chip");
+// 🆕 Custom comparison function để tránh re-render không cần thiết
+const arePropsEqual = (prevProps, nextProps) => {
   return (
-    <Tooltip title={config.tooltip} arrow>
-      <Chip
-        icon={config.icon}
-        label={config.text}
-        size="extra-small"
-        sx={{
-          height: "16px",
-          fontSize: "0.6rem",
-          color: config.color,
-          borderColor: config.color,
-          "& .MuiChip-icon": { fontSize: "10px" },
-        }}
-        variant="outlined"
-        onClick={(e) => {
-          console.log("🖱️ [MessageEncryptionBadge] Chip clicked:", {
-            isEncrypted,
-            isDecrypted,
-          });
-          if (onClick) {
-            onClick(e);
-          }
-        }}
-      />
-    </Tooltip>
+    prevProps.status === nextProps.status &&
+    prevProps.peerName === nextProps.peerName &&
+    prevProps.fingerprint === nextProps.fingerprint &&
+    prevProps.showTooltip === nextProps.showTooltip &&
+    prevProps.size === nextProps.size &&
+    prevProps.onClick === nextProps.onClick
   );
 };
 
-export default EncryptionBadge;
+EncryptionBadge.displayName = "EncryptionBadge";
+
+export default React.memo(EncryptionBadge, arePropsEqual);

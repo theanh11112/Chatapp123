@@ -12,8 +12,9 @@ import {
 import { showSnackbar } from "../../../../redux/slices/app";
 import { getSocket } from "../../../../socket";
 import { createMethodLogger } from "../utils/audioCallLogger";
-import { CALL_STATUS } from "../constants/audioCallConstants";
+import { CALL_STATUS, ERROR_MESSAGES } from "../constants/audioCallConstants";
 import { formatDuration } from "../utils/callFormatters";
+import webRTCService from "../../../../services/webRTCService";
 
 export const useCallControls = (currentCall, dependencies = {}) => {
   const logger = createMethodLogger("useCallControls");
@@ -23,57 +24,100 @@ export const useCallControls = (currentCall, dependencies = {}) => {
   const [isMuted, setIsMuted] = useState(false);
   const [isSpeakerOn, setIsSpeakerOn] = useState(true);
   const [isEnding, setIsEnding] = useState(false);
+  const [isAccepting, setIsAccepting] = useState(false);
   const [acceptRetryCount, setAcceptRetryCount] = useState(0);
   const [endRetryCount, setEndRetryCount] = useState(0);
 
-  // 🔴 FIX: Thêm state để tracking microphone status từ WebRTC
-  const [microphoneStatus, setMicrophoneStatus] = useState({
-    muted: false,
-    canToggle: false,
-    available: false,
-  });
+  // 🔴 FIX: Tách handleReject ra đầu tiên để tránh circular dependency
+  const handleReject = useCallback(async () => {
+    const currentLogger = loggerRef.current;
+    const { cleanupWebRTC } = dependencies;
 
-  // Tạo stable dependencies với useMemo
-  const stableDependencies = useMemo(
-    () => ({
-      setupWebRTCAudioCall: dependencies.setupWebRTCAudioCall,
-      cleanupWebRTC: dependencies.cleanupWebRTC,
-      toggleMicrophone: dependencies.toggleMicrophone,
-      toggleAudioVolume: dependencies.toggleAudioVolume,
-      startCallTimer: dependencies.startCallTimer,
-      stopCallTimer: dependencies.stopCallTimer,
-      callDuration: dependencies.callDuration,
-      userID: dependencies.userID,
-      username: dependencies.username,
-      callStatus: dependencies.callStatus,
-      setCallStatus: dependencies.setCallStatus,
-      setIsConnecting: dependencies.setIsConnecting,
-      setError: dependencies.setError,
-      webrtcService: dependencies.webrtcService, // 🔴 THÊM WEBRTC SERVICE
-    }),
-    [
-      dependencies.setupWebRTCAudioCall,
-      dependencies.cleanupWebRTC,
-      dependencies.toggleMicrophone,
-      dependencies.toggleAudioVolume,
-      dependencies.startCallTimer,
-      dependencies.stopCallTimer,
-      dependencies.callDuration,
-      dependencies.userID,
-      dependencies.username,
-      dependencies.callStatus,
-      dependencies.setCallStatus,
-      dependencies.setIsConnecting,
-      dependencies.setError,
-      dependencies.webrtcService,
-    ]
-  );
+    currentLogger.info("❌ Rejecting audio call", {
+      callId: currentCall?.id,
+      roomID: currentCall?.roomID,
+    });
 
-  // Cache trong ref để tránh re-render
-  const depsRef = useRef(stableDependencies);
-  depsRef.current = stableDependencies;
+    try {
+      if (currentCall?.id && currentCall?.roomID) {
+        const socket = getSocket();
+        if (socket && socket.connected) {
+          await retryWithBackoff(
+            () => {
+              return new Promise((resolve, reject) => {
+                socket.emit(
+                  "decline_call",
+                  {
+                    callId: currentCall.id,
+                    roomID: currentCall.roomID,
+                  },
+                  (response) => {
+                    if (response?.error) {
+                      reject(new Error(response.error));
+                    } else {
+                      resolve(response);
+                    }
+                  }
+                );
+              });
+            },
+            "Socket decline_call",
+            1
+          );
+        }
+      }
 
-  // Tạo stable retry function với useMemo
+      dispatch(RejectAudioCall());
+
+      // Cleanup WebRTC
+      if (cleanupWebRTC) {
+        await cleanupWebRTC();
+      }
+
+      // Reset states
+      setIsMuted(false);
+      setIsSpeakerOn(true);
+
+      currentLogger.success("Call rejected successfully");
+    } catch (error) {
+      currentLogger.error("Error rejecting call", error);
+      // Vẫn reject ngay cả khi cleanup failed
+      dispatch(RejectAudioCall());
+    }
+  }, [
+    currentCall?.id,
+    currentCall?.roomID,
+    dependencies?.cleanupWebRTC,
+    dispatch,
+  ]);
+
+  // Join call room function
+  const joinCallRoom = useCallback(async (roomID) => {
+    const currentLogger = loggerRef.current;
+    const socket = getSocket();
+
+    if (!socket || !socket.connected) {
+      throw new Error("Socket not connected");
+    }
+
+    currentLogger.info("Joining call room", { roomID });
+
+    return new Promise((resolve, reject) => {
+      socket
+        .timeout(5000)
+        .emit("join_call_room", { roomID }, (err, response) => {
+          if (err) {
+            currentLogger.error("Failed to join room", err);
+            reject(new Error(`Failed to join room: ${err.message}`));
+          } else {
+            currentLogger.success("✅ Joined call room", { roomID, response });
+            resolve(response);
+          }
+        });
+    });
+  }, []);
+
+  // Retry với backoff
   const retryWithBackoff = useMemo(
     () =>
       async (fn, operationName, maxRetries = 3) => {
@@ -118,50 +162,196 @@ export const useCallControls = (currentCall, dependencies = {}) => {
     []
   );
 
-  // 🔴 FIX: Hàm check microphone status từ WebRTC
-  const updateMicrophoneStatus = useCallback(() => {
+  // 🔴 QUAN TRỌNG: handleAccept - ĐÃ SỬA VỚI ROOM JOINING
+  const handleAccept = useCallback(async () => {
+    const currentLogger = loggerRef.current;
+    const {
+      setupWebRTCAudioCall,
+      startCallTimer,
+      userID,
+      setCallStatus,
+      setIsConnecting,
+      setError,
+    } = dependencies;
+
+    currentLogger.info("🎯 Accepting audio call", {
+      callId: currentCall?.id,
+      roomID: currentCall?.roomID,
+      isTempCallId: currentCall?.id?.startsWith?.("temp_"),
+      userID,
+    });
+
+    if (isAccepting) {
+      currentLogger.warn("Already accepting call, skipping");
+      return;
+    }
+
+    setIsAccepting(true);
+    setAcceptRetryCount((prev) => prev + 1);
+
     try {
-      const webrtcService = depsRef.current.webrtcService;
-      if (
-        webrtcService &&
-        typeof webrtcService.getMicrophoneStatus === "function"
-      ) {
-        const status = webrtcService.getMicrophoneStatus();
-        logger.debug("Microphone status from WebRTC", status);
+      // 1. Cập nhật UI status
+      if (setCallStatus) setCallStatus(CALL_STATUS.CONNECTING);
+      if (setIsConnecting) setIsConnecting(true);
 
-        setMicrophoneStatus((prev) => ({
-          ...prev,
-          muted: status.muted,
-          canToggle: status.canToggle,
-          available: status.available,
-          streamActive: status.streamActive,
-          hasAudio: status.hasAudio,
-        }));
+      // 2. JOIN ROOM TRƯỚC
+      currentLogger.info("Step 1: Joining call room...");
+      await retryWithBackoff(
+        async () => {
+          const joinResult = await joinCallRoom(currentCall.roomID);
+          if (!joinResult?.success) {
+            throw new Error("Failed to join room");
+          }
+          return joinResult;
+        },
+        "Join call room",
+        2
+      );
 
-        // Sync với local state isMuted
-        if (status.muted !== isMuted) {
-          setIsMuted(status.muted);
-          logger.debug("Syncing mute state with WebRTC", {
-            webRTCMuted: status.muted,
-            localMuted: isMuted,
+      // 3. Gửi accept qua socket
+      currentLogger.info("Step 2: Sending audio_call_accepted...");
+      await retryWithBackoff(
+        async () => {
+          const socket = getSocket();
+          if (!socket || !socket.connected) {
+            throw new Error("Socket not connected");
+          }
+
+          return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              reject(new Error("Socket timeout"));
+            }, 3000);
+
+            socket.emit(
+              "audio_call_accepted",
+              {
+                roomID: currentCall.roomID,
+                callId: currentCall.id,
+                userId: userID,
+              },
+              (response) => {
+                clearTimeout(timeout);
+                if (response?.error) {
+                  reject(new Error(response.error));
+                } else {
+                  resolve(response);
+                }
+              }
+            );
           });
-        }
+        },
+        "Socket audio_call_accepted",
+        2
+      );
+
+      currentLogger.success("✅ audio_call_accepted sent successfully");
+
+      // 4. Setup WebRTC (incoming mode)
+      currentLogger.info("Step 3: Setting up WebRTC (incoming mode)...");
+      const webRTCSetupSuccess = await retryWithBackoff(
+        async () => {
+          if (!setupWebRTCAudioCall) {
+            throw new Error("setupWebRTCAudioCall function not available");
+          }
+
+          const success = await setupWebRTCAudioCall(true, {
+            onCallConnected: () => {
+              currentLogger.success("✅ WebRTC call connected!");
+              if (startCallTimer) startCallTimer();
+
+              // Auto-send WebRTC answer khi nhận được offer
+              currentLogger.info("Ready to receive WebRTC offer...");
+            },
+            onError: (error) => {
+              currentLogger.error("WebRTC setup error", error);
+              throw error;
+            },
+          });
+
+          if (!success) {
+            throw new Error("WebRTC setup returned false");
+          }
+
+          return success;
+        },
+        "WebRTC setup",
+        2
+      );
+
+      if (webRTCSetupSuccess) {
+        // 5. Cập nhật Redux state
+        dispatch(AcceptAudioCall());
+        dispatch(UpdateAudioCallDialog(true));
+        dispatch(CloseAudioNotificationDialog());
+
+        // 6. Show success notification
+        dispatch(
+          showSnackbar({
+            severity: "success",
+            message: "Audio call accepted",
+            autoHideDuration: 2000,
+          })
+        );
+
+        currentLogger.success("🎉 Call accepted successfully!", {
+          roomID: currentCall?.roomID,
+          callId: currentCall?.id,
+          userID,
+        });
+      } else {
+        throw new Error("WebRTC setup failed");
       }
     } catch (error) {
-      logger.error("Failed to get microphone status", error);
+      const currentAttempt = acceptRetryCount + 1;
+      currentLogger.error("❌ Failed to accept call", error, {
+        attempt: currentAttempt,
+        roomID: currentCall?.roomID,
+      });
+
+      if (setError) setError(error.message);
+
+      // Show error to user
+      dispatch(
+        showSnackbar({
+          severity: "error",
+          message: `Failed to accept call: ${error.message}`,
+          autoHideDuration: 4000,
+        })
+      );
+
+      // Auto-reject nếu thất bại nhiều lần
+      if (currentAttempt >= 3) {
+        currentLogger.warn("Max accept attempts reached, auto-rejecting");
+        setTimeout(() => {
+          if (currentCall) {
+            handleReject();
+          }
+        }, 1000);
+      }
+    } finally {
+      setIsAccepting(false);
     }
-  }, [isMuted, logger]);
+  }, [
+    currentCall?.id,
+    currentCall?.roomID,
+    currentCall?.id?.startsWith?.("temp_"),
+    isAccepting,
+    acceptRetryCount,
+    dependencies,
+    joinCallRoom,
+    retryWithBackoff,
+    dispatch,
+    handleReject, // 🔴 Đã được định nghĩa trước
+  ]);
 
   const handleEndCall = useCallback(async () => {
     const currentLogger = loggerRef.current;
-    const { stopCallTimer, cleanupWebRTC, userID, callDuration } =
-      depsRef.current;
+    const { stopCallTimer, cleanupWebRTC, userID, callDuration } = dependencies;
 
-    currentLogger.info("End call requested", {
+    currentLogger.info("📴 End call requested", {
       isEnding,
       currentCallId: currentCall?.id,
       currentRoomID: currentCall?.roomID,
-      callIdType: currentCall?.id?.startsWith?.("temp_") ? "temp" : "valid",
       userID,
     });
 
@@ -175,9 +365,9 @@ export const useCallControls = (currentCall, dependencies = {}) => {
 
     try {
       // Stop timer first
-      stopCallTimer?.();
+      if (stopCallTimer) stopCallTimer();
 
-      // Send socket end_call if valid call
+      // Gửi socket end_call nếu call hợp lệ
       const shouldSendSocketEnd =
         currentCall?.roomID &&
         currentCall?.id &&
@@ -186,7 +376,7 @@ export const useCallControls = (currentCall, dependencies = {}) => {
       if (shouldSendSocketEnd) {
         const socket = getSocket();
         if (socket && socket.connected) {
-          currentLogger.info("Sending socket end_call with retry", {
+          currentLogger.info("Sending socket end_call", {
             callId: currentCall.id,
             roomID: currentCall.roomID,
             attempt: attemptNumber,
@@ -231,25 +421,21 @@ export const useCallControls = (currentCall, dependencies = {}) => {
         );
       }
 
-      // Cleanup WebRTC with retry
-      if (currentCall?.roomID) {
+      // Cleanup WebRTC
+      if (currentCall?.roomID && cleanupWebRTC) {
         await retryWithBackoff(
           async () => {
             currentLogger.info("Cleaning up WebRTC");
-            await cleanupWebRTC?.();
+            await cleanupWebRTC();
           },
           "WebRTC cleanup",
           2
         );
       }
 
-      // Reset microphone status
-      setMicrophoneStatus({
-        muted: false,
-        canToggle: false,
-        available: false,
-      });
+      // Reset states
       setIsMuted(false);
+      setIsSpeakerOn(true);
 
       // Dispatch to Redux
       dispatch(EndAudioCall());
@@ -264,7 +450,7 @@ export const useCallControls = (currentCall, dependencies = {}) => {
         })
       );
 
-      currentLogger.success("Call ended successfully", {
+      currentLogger.success("✅ Call ended successfully", {
         duration: callDuration,
         roomID: currentCall?.roomID,
       });
@@ -275,7 +461,7 @@ export const useCallControls = (currentCall, dependencies = {}) => {
         attempt: attemptNumber,
       });
 
-      // Even if cleanup failed, still show ended
+      // Vẫn end call ngay cả khi cleanup failed
       dispatch(EndAudioCall());
 
       dispatch(
@@ -295,274 +481,29 @@ export const useCallControls = (currentCall, dependencies = {}) => {
     currentCall?.id?.startsWith?.("temp_"),
     isEnding,
     endRetryCount,
+    dependencies,
     retryWithBackoff,
     dispatch,
   ]);
 
-  const handleReject = useCallback(async () => {
-    const currentLogger = loggerRef.current;
-    const { cleanupWebRTC } = depsRef.current;
-
-    currentLogger.info("Rejecting audio call", {
-      callId: currentCall?.id,
-      roomID: currentCall?.roomID,
-    });
-
-    try {
-      if (currentCall?.id && currentCall?.roomID) {
-        const socket = getSocket();
-        if (socket && socket.connected) {
-          await retryWithBackoff(
-            () => {
-              return new Promise((resolve, reject) => {
-                socket.emit(
-                  "decline_call",
-                  {
-                    callId: currentCall.id,
-                    roomID: currentCall.roomID,
-                  },
-                  (response) => {
-                    if (response?.error) {
-                      reject(new Error(response.error));
-                    } else {
-                      resolve(response);
-                    }
-                  }
-                );
-              });
-            },
-            "Socket decline_call",
-            1
-          );
-        }
-      }
-
-      dispatch(RejectAudioCall());
-
-      // Cleanup WebRTC
-      await retryWithBackoff(
-        async () => {
-          await cleanupWebRTC?.();
-        },
-        "WebRTC cleanup on reject",
-        1
-      );
-
-      // Reset microphone status
-      setMicrophoneStatus({
-        muted: false,
-        canToggle: false,
-        available: false,
-      });
-      setIsMuted(false);
-
-      currentLogger.success("Call rejected successfully");
-    } catch (error) {
-      currentLogger.error("Error rejecting call", error);
-      // Still reject even if cleanup fails
-      dispatch(RejectAudioCall());
-    }
-  }, [currentCall?.id, currentCall?.roomID, retryWithBackoff, dispatch]);
-
-  const handleAccept = useCallback(async () => {
-    const currentLogger = loggerRef.current;
-    const {
-      setupWebRTCAudioCall,
-      startCallTimer,
-      userID,
-      setCallStatus,
-      setIsConnecting,
-      setError,
-    } = depsRef.current;
-
-    currentLogger.info("Accepting audio call", {
-      callId: currentCall?.id,
-      roomID: currentCall?.roomID,
-      isTempCallId: currentCall?.id?.startsWith?.("temp_"),
-      userID,
-    });
-
-    setAcceptRetryCount((prev) => {
-      const currentAttempt = prev + 1;
-
-      // Thực hiện async logic bên trong functional update
-      const performAccept = async () => {
-        try {
-          // Update status
-          setCallStatus?.(CALL_STATUS.CONNECTING);
-          setIsConnecting?.(true);
-
-          // Send accept via socket with retry
-          if (
-            currentCall?.roomID &&
-            currentCall?.id &&
-            !currentCall.id.startsWith("temp_")
-          ) {
-            await retryWithBackoff(
-              async () => {
-                const socket = getSocket();
-                if (!socket || !socket.connected) {
-                  throw new Error("Socket not connected");
-                }
-
-                return new Promise((resolve, reject) => {
-                  const timeout = setTimeout(() => {
-                    reject(new Error("Socket timeout"));
-                  }, 3000);
-
-                  socket.emit(
-                    "audio_call_accepted",
-                    {
-                      roomID: currentCall.roomID,
-                      callId: currentCall.id,
-                      userId: userID,
-                    },
-                    (response) => {
-                      clearTimeout(timeout);
-                      if (response?.error) {
-                        reject(new Error(response.error));
-                      } else {
-                        resolve(response);
-                      }
-                    }
-                  );
-                });
-              },
-              "Socket audio_call_accepted",
-              2
-            );
-
-            currentLogger.success("audio_call_accepted sent");
-          }
-
-          // Setup WebRTC with retry
-          const webRTCSetupSuccess = await retryWithBackoff(
-            async () => {
-              currentLogger.info(
-                `Setting up WebRTC (attempt ${currentAttempt})`
-              );
-              const success = await setupWebRTCAudioCall?.(true, {
-                onCallConnected: () => {
-                  currentLogger.success("WebRTC connected");
-                  startCallTimer?.();
-
-                  // Update microphone status khi call connected
-                  setTimeout(() => {
-                    updateMicrophoneStatus();
-                  }, 500);
-                },
-                onError: (error) => {
-                  currentLogger.error("WebRTC setup error", error);
-                  throw error;
-                },
-              });
-
-              if (!success) {
-                throw new Error("WebRTC setup returned false");
-              }
-
-              return success;
-            },
-            "WebRTC setup",
-            2
-          );
-
-          if (webRTCSetupSuccess) {
-            // Update microphone status
-            setTimeout(() => {
-              updateMicrophoneStatus();
-            }, 1000);
-
-            // Update Redux state
-            dispatch(AcceptAudioCall());
-            dispatch(UpdateAudioCallDialog(true));
-            dispatch(CloseAudioNotificationDialog());
-
-            // Show success notification
-            dispatch(
-              showSnackbar({
-                severity: "success",
-                message: "Audio call accepted",
-                autoHideDuration: 2000,
-              })
-            );
-
-            currentLogger.success("Call accepted successfully", {
-              roomID: currentCall?.roomID,
-              callId: currentCall?.id,
-            });
-          }
-        } catch (error) {
-          currentLogger.error("Failed to accept call", error, {
-            attempt: currentAttempt,
-            roomID: currentCall?.roomID,
-          });
-
-          setError?.(error.message);
-
-          // Show error to user
-          dispatch(
-            showSnackbar({
-              severity: "error",
-              message: `Failed to accept call: ${error.message}`,
-              autoHideDuration: 4000,
-            })
-          );
-
-          // Auto-reject if acceptance fails
-          if (currentAttempt >= 3) {
-            currentLogger.warn("Max accept attempts reached, auto-rejecting");
-            setTimeout(() => {
-              if (currentCall) {
-                handleReject();
-              }
-            }, 1000);
-          }
-        }
-      };
-
-      // Chạy async logic
-      performAccept();
-
-      return currentAttempt;
-    });
-  }, [
-    currentCall?.id,
-    currentCall?.roomID,
-    currentCall?.id?.startsWith?.("temp_"),
-    retryWithBackoff,
-    dispatch,
-    handleReject,
-    updateMicrophoneStatus,
-  ]);
-
-  // 🔴 FIX COMPLETE: handleToggleMute với đúng flow
   const handleToggleMute = useCallback(async () => {
     const currentLogger = loggerRef.current;
-    const { toggleMicrophone, setError, webrtcService } = depsRef.current;
+    const { toggleMicrophone, setError } = dependencies;
 
     currentLogger.info("Toggling microphone", {
       currentMuted: isMuted,
       callId: currentCall?.id,
-      microphoneStatus,
     });
-
-    // Check if we can toggle
-    if (!microphoneStatus.canToggle || !microphoneStatus.available) {
-      currentLogger.warn("Cannot toggle microphone", {
-        canToggle: microphoneStatus.canToggle,
-        available: microphoneStatus.available,
-      });
-      return;
-    }
 
     const newMutedState = !isMuted;
 
     try {
-      // 🔴 QUAN TRỌNG: Gọi WebRTCService trước khi update UI state
       const success = await retryWithBackoff(
         async () => {
-          const result = toggleMicrophone?.(newMutedState);
+          if (!toggleMicrophone) {
+            throw new Error("toggleMicrophone function not available");
+          }
+          const result = toggleMicrophone(newMutedState);
           if (!result) {
             throw new Error("Toggle microphone returned false");
           }
@@ -573,19 +514,9 @@ export const useCallControls = (currentCall, dependencies = {}) => {
       );
 
       if (success) {
-        // 🔴 Chỉ update UI state sau khi WebRTC thành công
         setIsMuted(newMutedState);
-
-        // Update microphone status
-        setMicrophoneStatus((prev) => ({
-          ...prev,
-          muted: newMutedState,
-        }));
-
-        // Dispatch Redux action
         dispatch(ToggleMuteAudio());
 
-        // Show notification
         dispatch(
           showSnackbar({
             severity: "info",
@@ -597,39 +528,14 @@ export const useCallControls = (currentCall, dependencies = {}) => {
         currentLogger.success(
           `Microphone ${newMutedState ? "muted" : "unmuted"} successfully`
         );
-
-        // 🔴 Listen to WebRTC microphoneToggled event để sync
-        if (webrtcService) {
-          const handleMicrophoneToggled = (data) => {
-            if (data.success && data.muted !== newMutedState) {
-              currentLogger.debug("Syncing mute state from WebRTC event", {
-                eventMuted: data.muted,
-                localMuted: newMutedState,
-              });
-              setIsMuted(data.muted);
-              setMicrophoneStatus((prev) => ({
-                ...prev,
-                muted: data.muted,
-              }));
-            }
-          };
-
-          webrtcService.on("microphoneToggled", handleMicrophoneToggled);
-
-          // Cleanup listener sau 2 giây
-          setTimeout(() => {
-            webrtcService.off("microphoneToggled", handleMicrophoneToggled);
-          }, 2000);
-        }
       } else {
         currentLogger.warn("toggleMicrophone returned false");
-        setError?.("Failed to toggle microphone");
+        if (setError) setError("Failed to toggle microphone");
       }
     } catch (error) {
       currentLogger.error("Failed to toggle microphone", error);
-      setError?.(error.message);
+      if (setError) setError(error.message);
 
-      // Show error to user
       dispatch(
         showSnackbar({
           severity: "error",
@@ -637,23 +543,12 @@ export const useCallControls = (currentCall, dependencies = {}) => {
           autoHideDuration: 3000,
         })
       );
-
-      // Không revert UI state - giữ nguyên state cũ
-      // Người dùng có thể thấy nút không thay đổi nếu thất bại
     }
-  }, [
-    isMuted,
-    currentCall?.id,
-    microphoneStatus,
-    retryWithBackoff,
-    dispatch,
-    setMicrophoneStatus,
-    setIsMuted,
-  ]);
+  }, [isMuted, currentCall?.id, dependencies, retryWithBackoff, dispatch]);
 
   const handleToggleSpeaker = useCallback(async () => {
     const currentLogger = loggerRef.current;
-    const { toggleAudioVolume, setError } = depsRef.current;
+    const { toggleAudioVolume, setError } = dependencies;
 
     currentLogger.info("Toggling speaker", {
       currentSpeakerOn: isSpeakerOn,
@@ -662,13 +557,13 @@ export const useCallControls = (currentCall, dependencies = {}) => {
 
     try {
       const newSpeakerState = !isSpeakerOn;
-
-      // Update UI state ngay lập tức cho feedback tốt hơn
       setIsSpeakerOn(newSpeakerState);
 
       await retryWithBackoff(
         async () => {
-          toggleAudioVolume?.(newSpeakerState);
+          if (toggleAudioVolume) {
+            toggleAudioVolume(newSpeakerState);
+          }
           return true;
         },
         "Toggle speaker volume",
@@ -687,53 +582,132 @@ export const useCallControls = (currentCall, dependencies = {}) => {
     } catch (error) {
       // Revert UI state on failure
       setIsSpeakerOn(!isSpeakerOn);
-      setError?.(error.message);
+      if (setError) setError(error.message);
       currentLogger.error("Failed to toggle speaker", error);
     }
-  }, [isSpeakerOn, currentCall?.id, retryWithBackoff, dispatch]);
+  }, [isSpeakerOn, currentCall?.id, dependencies, retryWithBackoff, dispatch]);
 
-  // 🔴 FIX: Thêm useEffect để sync microphone status khi call status thay đổi
-  const syncMicrophoneStatus = useCallback(() => {
-    if (depsRef.current.callStatus === CALL_STATUS.CONNECTED) {
-      // Wait a bit for WebRTC to be fully ready
-      setTimeout(() => {
-        updateMicrophoneStatus();
-      }, 1000);
+  // Setup outgoing call
+  const setupOutgoingCall = useCallback(async () => {
+    const currentLogger = loggerRef.current;
+    const { setupWebRTCAudioCall, startCallTimer } = dependencies;
+
+    if (!currentCall || currentCall?.incoming) {
+      return;
     }
-  }, [updateMicrophoneStatus]);
 
-  // Memoize return value để tránh unnecessary re-renders
+    currentLogger.info("🚀 Setting up outgoing call", {
+      roomID: currentCall.roomID,
+      callId: currentCall.id,
+      userID: dependencies.userID,
+    });
+
+    try {
+      // 1. Join room
+      currentLogger.info("Step 1: Joining call room...");
+      await retryWithBackoff(
+        async () => {
+          const joinResult = await joinCallRoom(currentCall.roomID);
+          if (!joinResult?.success) {
+            throw new Error("Failed to join room");
+          }
+          return joinResult;
+        },
+        "Join call room for outgoing",
+        2
+      );
+
+      // 2. Setup WebRTC (outgoing mode)
+      currentLogger.info("Step 2: Setting up WebRTC (outgoing mode)...");
+      await retryWithBackoff(
+        async () => {
+          if (!setupWebRTCAudioCall) {
+            throw new Error("setupWebRTCAudioCall function not available");
+          }
+
+          const success = await setupWebRTCAudioCall(false, {
+            onCallConnected: () => {
+              currentLogger.success("✅ Outgoing call WebRTC connected!");
+              if (startCallTimer) startCallTimer();
+            },
+            onLocalStream: (stream) => {
+              currentLogger.debug("Local stream ready for outgoing call");
+            },
+            onError: (error) => {
+              currentLogger.error("Outgoing WebRTC setup error", error);
+              throw error;
+            },
+          });
+
+          if (!success) {
+            throw new Error("WebRTC setup returned false");
+          }
+
+          return success;
+        },
+        "WebRTC setup for outgoing",
+        2
+      );
+
+      // 3. Send initial WebRTC offer
+      currentLogger.info("Step 3: Sending initial WebRTC offer...");
+      setTimeout(async () => {
+        try {
+          if (webRTCService.hasActiveRoom()) {
+            await webRTCService.createAndSendOffer();
+            currentLogger.success("✅ Initial WebRTC offer sent");
+          } else {
+            currentLogger.warn("No active WebRTC room to send offer");
+          }
+        } catch (error) {
+          currentLogger.error("❌ Failed to send initial offer", error);
+        }
+      }, 1000);
+
+      currentLogger.success("Outgoing call setup completed");
+    } catch (error) {
+      currentLogger.error("❌ Failed to setup outgoing call", error);
+    }
+  }, [
+    currentCall?.roomID,
+    currentCall?.id,
+    currentCall?.incoming,
+    dependencies,
+    joinCallRoom,
+    retryWithBackoff,
+  ]);
+
+  // Memoize return value
   return useMemo(
     () => ({
       isMuted,
       isSpeakerOn,
       isEnding,
+      isAccepting,
       handleEndCall,
       handleReject,
       handleAccept,
       handleToggleMute,
       handleToggleSpeaker,
-      setIsEnding,
+      setupOutgoingCall,
       acceptRetryCount,
       endRetryCount,
-      microphoneStatus,
-      updateMicrophoneStatus,
-      syncMicrophoneStatus,
+      joinCallRoom,
     }),
     [
       isMuted,
       isSpeakerOn,
       isEnding,
+      isAccepting,
       handleEndCall,
       handleReject,
       handleAccept,
       handleToggleMute,
       handleToggleSpeaker,
+      setupOutgoingCall,
       acceptRetryCount,
       endRetryCount,
-      microphoneStatus,
-      updateMicrophoneStatus,
-      syncMicrophoneStatus,
+      joinCallRoom,
     ]
   );
 };
