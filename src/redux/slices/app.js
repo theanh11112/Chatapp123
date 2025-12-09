@@ -394,15 +394,17 @@ export const FetchCallLogs = (userId) => {
 
       console.log("📞 Fetching call logs for user:", userId);
 
-      const response = await api.post("/users/call/history", {
+      const response = await api.post("users/call/history", {
         limit: 50,
         skip: 0,
         userId: userId,
       });
 
+      console.log("111111", response);
+
       console.log("✅ Call logs fetched:", response.data.calls?.length || 0);
 
-      dispatch(slice.actions.setCallLogs(response.data.calls || []));
+      dispatch(slice.actions.setCallLogs(response.data.data || []));
 
       dispatch(slice.actions.StopLoading());
       return response.data;

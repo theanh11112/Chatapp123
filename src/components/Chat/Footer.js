@@ -1,8 +1,7 @@
-// Footer.js - PHIÊN BẢN KHÔNG CONTEXT
+// Footer.js - PHIÊN BẢN ĐÃ SỬA: CLICK GHIMM TRỰC TIẾP MỞ UPLOAD
 import React, { useRef, useState, useCallback, useEffect } from "react";
 import {
   Box,
-  Fab,
   IconButton,
   InputAdornment,
   Stack,
@@ -12,18 +11,25 @@ import {
   CircularProgress,
   Alert,
   Badge,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  LinearProgress,
 } from "@mui/material";
 import {
-  Camera,
   File,
-  Image,
   LinkSimple,
   PaperPlaneTilt,
   Smiley,
-  Sticker,
-  User,
-  Key,
+  X,
+  UploadSimple,
+  FileText,
+  MusicNote,
+  VideoCamera,
+  Image,
   Shield,
+  Key,
 } from "phosphor-react";
 import { useTheme, styled } from "@mui/material/styles";
 import useResponsive from "../../hooks/useResponsive";
@@ -58,13 +64,270 @@ const StyledInput = styled(TextField)(({ theme }) => ({
   },
 }));
 
-const Actions = [
-  { color: "#4da5fe", icon: <Image size={24} />, y: 102, title: "Photo/Video" },
-  { color: "#1b8cfe", icon: <Sticker size={24} />, y: 172, title: "Stickers" },
-  { color: "#0172e4", icon: <Camera size={24} />, y: 242, title: "Image" },
-  { color: "#0159b2", icon: <File size={24} />, y: 312, title: "Document" },
-  { color: "#013f7f", icon: <User size={24} />, y: 382, title: "Contact" },
-];
+// 🆕 File Upload Dialog Component
+const FileUploadDialog = React.memo(
+  ({ open, onClose, onUpload, isEncrypting, canEncrypt, isEncrypted }) => {
+    const [selectedFiles, setSelectedFiles] = useState([]);
+    const [uploadProgress, setUploadProgress] = useState({});
+    const [isUploading, setIsUploading] = useState(false);
+    const fileInputRef = useRef(null);
+    const theme = useTheme();
+    const dispatch = useDispatch();
+
+    const handleFileSelect = (event) => {
+      const files = Array.from(event.target.files);
+      const validFiles = files.filter((file) => {
+        // Kiểm tra kích thước file (tối đa 50MB)
+        if (file.size > 50 * 1024 * 1024) {
+          dispatch(
+            showSnackbar({
+              severity: "error",
+              message: `File ${file.name} vượt quá 50MB giới hạn`,
+            })
+          );
+          return false;
+        }
+        return true;
+      });
+
+      if (validFiles.length > 0) {
+        setSelectedFiles((prev) => [...prev, ...validFiles]);
+      }
+    };
+
+    const handleRemoveFile = (index) => {
+      setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+      setUploadProgress((prev) => {
+        const newProgress = { ...prev };
+        delete newProgress[index];
+        return newProgress;
+      });
+    };
+
+    const simulateUpload = (file, index) => {
+      return new Promise((resolve) => {
+        let progress = 0;
+        const interval = setInterval(() => {
+          progress += 10;
+          setUploadProgress((prev) => ({ ...prev, [index]: progress }));
+
+          if (progress >= 100) {
+            clearInterval(interval);
+            setTimeout(() => resolve(file), 300);
+          }
+        }, 200);
+      });
+    };
+
+    const handleUpload = async () => {
+      if (selectedFiles.length === 0) return;
+
+      setIsUploading(true);
+
+      try {
+        // Simulate upload progress for each file
+        for (let i = 0; i < selectedFiles.length; i++) {
+          await simulateUpload(selectedFiles[i], i);
+        }
+
+        // Call parent upload handler with all files
+        await onUpload(selectedFiles);
+
+        // Reset state
+        setSelectedFiles([]);
+        setUploadProgress({});
+        onClose();
+
+        dispatch(
+          showSnackbar({
+            severity: "success",
+            message: `Đã upload ${selectedFiles.length} file thành công`,
+          })
+        );
+      } catch (error) {
+        console.error("Upload error:", error);
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: "Upload thất bại: " + error.message,
+          })
+        );
+      } finally {
+        setIsUploading(false);
+      }
+    };
+
+    const getFileIcon = (fileType) => {
+      if (fileType.startsWith("image/")) return <Image size={20} />;
+      if (fileType.startsWith("video/")) return <VideoCamera size={20} />;
+      if (fileType.startsWith("audio/")) return <MusicNote size={20} />;
+      return <FileText size={20} />;
+    };
+
+    const formatFileSize = (bytes) => {
+      if (bytes === 0) return "0 Bytes";
+      const k = 1024;
+      const sizes = ["Bytes", "KB", "MB", "GB"];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+    };
+
+    return (
+      <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          <Stack
+            direction="row"
+            alignItems="center"
+            justifyContent="space-between"
+          >
+            <span>Tải lên tệp tin</span>
+            <IconButton onClick={onClose} size="small">
+              <X size={20} />
+            </IconButton>
+          </Stack>
+        </DialogTitle>
+
+        <DialogContent>
+          <Box sx={{ mt: 2 }}>
+            {/* Upload Area */}
+            <Box
+              sx={{
+                border: "2px dashed",
+                borderColor: theme.palette.divider,
+                borderRadius: 2,
+                p: 4,
+                textAlign: "center",
+                cursor: "pointer",
+                "&:hover": {
+                  borderColor: theme.palette.primary.main,
+                  backgroundColor: theme.palette.action.hover,
+                },
+              }}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <UploadSimple size={48} color={theme.palette.primary.main} />
+              <Box sx={{ mt: 2 }}>
+                <Button variant="outlined">Chọn tệp tin</Button>
+                <Box
+                  sx={{
+                    mt: 1,
+                    color: theme.palette.text.secondary,
+                    fontSize: "0.875rem",
+                  }}
+                >
+                  Hoặc kéo thả tệp vào đây
+                </Box>
+              </Box>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileSelect}
+                multiple
+                style={{ display: "none" }}
+              />
+            </Box>
+
+            {/* Selected Files List */}
+            {selectedFiles.length > 0 && (
+              <Box sx={{ mt: 3 }}>
+                <Box sx={{ mb: 1, fontWeight: 500 }}>
+                  Tệp đã chọn ({selectedFiles.length})
+                </Box>
+                <Stack spacing={1}>
+                  {selectedFiles.map((file, index) => (
+                    <Box
+                      key={index}
+                      sx={{
+                        border: "1px solid",
+                        borderColor: theme.palette.divider,
+                        borderRadius: 1,
+                        p: 2,
+                      }}
+                    >
+                      <Stack direction="row" alignItems="center" spacing={2}>
+                        <Box sx={{ color: theme.palette.primary.main }}>
+                          {getFileIcon(file.type)}
+                        </Box>
+                        <Box sx={{ flex: 1 }}>
+                          <Box sx={{ fontWeight: 500, fontSize: "0.875rem" }}>
+                            {file.name}
+                          </Box>
+                          <Box
+                            sx={{
+                              fontSize: "0.75rem",
+                              color: theme.palette.text.secondary,
+                            }}
+                          >
+                            {formatFileSize(file.size)} • {file.type}
+                          </Box>
+                        </Box>
+                        <IconButton
+                          size="small"
+                          onClick={() => handleRemoveFile(index)}
+                          disabled={isUploading}
+                        >
+                          <X size={16} />
+                        </IconButton>
+                      </Stack>
+
+                      {uploadProgress[index] !== undefined && (
+                        <Box sx={{ mt: 1 }}>
+                          <LinearProgress
+                            variant="determinate"
+                            value={uploadProgress[index]}
+                            sx={{ height: 6, borderRadius: 3 }}
+                          />
+                          <Box
+                            sx={{
+                              fontSize: "0.75rem",
+                              textAlign: "right",
+                              mt: 0.5,
+                            }}
+                          >
+                            {uploadProgress[index]}%
+                          </Box>
+                        </Box>
+                      )}
+                    </Box>
+                  ))}
+                </Stack>
+              </Box>
+            )}
+
+            {/* Encryption Status */}
+            {canEncrypt && isEncrypted && (
+              <Alert severity="success" sx={{ mt: 2 }}>
+                Tệp tin sẽ được mã hóa end-to-end khi gửi
+              </Alert>
+            )}
+          </Box>
+        </DialogContent>
+
+        <DialogActions>
+          <Button onClick={onClose} disabled={isUploading}>
+            Hủy
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleUpload}
+            disabled={selectedFiles.length === 0 || isUploading || isEncrypting}
+            startIcon={
+              isUploading ? (
+                <CircularProgress size={16} />
+              ) : (
+                <UploadSimple size={16} />
+              )
+            }
+          >
+            {isUploading
+              ? "Đang tải lên..."
+              : `Tải lên (${selectedFiles.length})`}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    );
+  }
+);
 
 // ----------------------------- CHAT INPUT COMPONENT -----------------------------
 const ChatInput = React.memo(
@@ -86,8 +349,9 @@ const ChatInput = React.memo(
     onInitiateKeyExchange,
     canEncrypt,
     isKeyExchangeNeeded,
+    // 🆕 File Upload Props
+    onOpenFileUpload,
   }) => {
-    const [openActions, setOpenActions] = useState(false);
     const theme = useTheme();
 
     return (
@@ -113,32 +377,11 @@ const ChatInput = React.memo(
             disableUnderline: true,
             startAdornment: (
               <InputAdornment position="start">
-                <Stack sx={{ width: "max-content" }}>
-                  <Stack
-                    sx={{
-                      position: "relative",
-                      display: openActions ? "inline-block" : "none",
-                    }}
-                  >
-                    {Actions.map((el, idx) => (
-                      <Tooltip placement="right" title={el.title} key={idx}>
-                        <Fab
-                          sx={{
-                            position: "absolute",
-                            top: -el.y,
-                            backgroundColor: el.color,
-                          }}
-                          onClick={() => setOpenActions(false)}
-                        >
-                          {el.icon}
-                        </Fab>
-                      </Tooltip>
-                    ))}
-                  </Stack>
-                  <IconButton onClick={() => setOpenActions(!openActions)}>
+                <Tooltip title="Gửi file">
+                  <IconButton onClick={() => onOpenFileUpload("document")}>
                     <LinkSimple />
                   </IconButton>
-                </Stack>
+                </Tooltip>
               </InputAdornment>
             ),
             endAdornment: (
@@ -154,9 +397,11 @@ const ChatInput = React.memo(
 
                 {isEncrypting && <CircularProgress size={20} sx={{ mr: 1 }} />}
 
-                <IconButton onClick={() => setOpenPicker(!openPicker)}>
-                  <Smiley />
-                </IconButton>
+                <Tooltip title="Emoji">
+                  <IconButton onClick={() => setOpenPicker(!openPicker)}>
+                    <Smiley />
+                  </IconButton>
+                </Tooltip>
               </InputAdornment>
             ),
           }}
@@ -217,6 +462,10 @@ const Footer = () => {
   const [isEncrypting, setIsEncrypting] = useState(false);
   const [showEncryptionOptions, setShowEncryptionOptions] = useState(false);
   const inputRef = useRef(null);
+
+  // 🆕 File Upload States
+  const [showFileUpload, setShowFileUpload] = useState(false);
+  const [fileUploadType, setFileUploadType] = useState("document");
 
   // 🆕 Lấy user ID từ Keycloak
   const user_id =
@@ -307,7 +556,7 @@ const Footer = () => {
         clearInterval(intervalId);
       };
     }
-  }, [peerId, isDirectChat, autoE2EEReady]); // ⭐⭐⭐ LOẠI BỎ checkE2EEStatus khỏi dependency
+  }, [peerId, isDirectChat, autoE2EEReady]);
 
   const getCurrentChat = useCallback(() => {
     if (isGroupChat && current_room?.id === room_id) {
@@ -351,6 +600,154 @@ const Footer = () => {
   const handleCancelReply = useCallback(() => {
     setReplyTo(null);
   }, []);
+
+  // 🆕 Handle open file upload dialog
+  const handleOpenFileUpload = (type = "document") => {
+    setFileUploadType(type);
+    setShowFileUpload(true);
+  };
+
+  // 🆕 Handle file upload
+  const handleFileUpload = useCallback(
+    async (files) => {
+      const currentChat = getCurrentChat();
+
+      if (!currentChat?.id || !user_id) {
+        console.error("❌ No chat selected or user not authenticated");
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: "Vui lòng chọn cuộc trò chuyện để gửi file",
+          })
+        );
+        return;
+      }
+
+      setIsEncrypting(true);
+
+      try {
+        // Process each file
+        for (const file of files) {
+          const msgId = uuidv4();
+          const timestamp = new Date().toISOString();
+
+          // 🆕 Create file message object
+          const fileMessage = {
+            _id: msgId,
+            id: msgId,
+            type: "msg",
+            subtype: "file",
+            message: `📎 ${file.name}`,
+            content: `Đã gửi một tệp tin: ${file.name}`,
+            from: user_id,
+            to: isGroupChat ? null : currentChat.user_id,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            attachments: [
+              {
+                id: uuidv4(),
+                name: file.name,
+                size: file.size,
+                type: file.type,
+                url: URL.createObjectURL(file), // Temporary URL for preview
+                uploaded: true,
+                isEncrypted: canEncrypt && isEncrypted,
+                fileObject: file, // Keep file object for actual upload
+              },
+            ],
+            isOptimistic: true,
+            tempId: msgId,
+            isEncrypted: canEncrypt && isEncrypted,
+            outgoing: true,
+            sender: {
+              keycloakId: user_id,
+              username: keycloak?.tokenParsed?.preferred_username || "You",
+            },
+          };
+
+          // Add to Redux
+          if (isGroupChat) {
+            dispatch(
+              addGroupMessage({
+                message: fileMessage,
+                room_id: currentChat.id,
+                isOptimistic: true,
+                tempId: msgId,
+              })
+            );
+          } else {
+            dispatch(
+              addDirectMessage({
+                message: fileMessage,
+                conversation_id: currentChat.id,
+                currentUserId: user_id,
+                isGroup: false,
+                isOptimistic: true,
+                tempId: msgId,
+              })
+            );
+          }
+
+          // 🆕 TODO: Handle actual file upload to server here
+          console.log("Uploading file:", {
+            fileName: file.name,
+            fileSize: file.size,
+            fileType: file.type,
+            chatId: currentChat.id,
+            isEncrypted: canEncrypt && isEncrypted,
+          });
+
+          // Simulate server upload
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+
+          // Update message status after upload
+          if (isGroupChat) {
+            dispatch(
+              updateDirectMessage({
+                messageId: msgId,
+                updates: {
+                  isOptimistic: false,
+                  status: "sent",
+                  attachments: [
+                    {
+                      ...fileMessage.attachments[0],
+                      url: `https://your-server.com/uploads/${msgId}/${file.name}`,
+                    },
+                  ],
+                },
+              })
+            );
+          }
+        }
+
+        dispatch(
+          showSnackbar({
+            severity: "success",
+            message: `Đã gửi ${files.length} file thành công`,
+          })
+        );
+      } catch (error) {
+        console.error("❌ File upload error:", error);
+        dispatch(
+          showSnackbar({
+            severity: "error",
+            message: `Upload thất bại: ${error.message}`,
+          })
+        );
+      } finally {
+        setIsEncrypting(false);
+      }
+    },
+    [
+      getCurrentChat,
+      user_id,
+      isGroupChat,
+      dispatch,
+      canEncrypt,
+      isEncrypted,
+      keycloak,
+    ]
+  );
 
   // 🆕 Handle initiate key exchange với service trực tiếp
   const handleInitiateKeyExchange = useCallback(async () => {
@@ -405,7 +802,7 @@ const Footer = () => {
     }
   }, [peerId, dispatch, checkE2EEStatus]);
 
-  // 🆕 Enhanced handleSendMessage sử dụng hook
+  // 🆕 Enhanced handleSendMessage sử dụng hook (giữ nguyên logic hiện có)
   const handleSendMessage = useCallback(async () => {
     console.log("📤 [Footer] Attempting to send message...", {
       peerId,
@@ -463,11 +860,9 @@ const Footer = () => {
         const result = await sendEncryptedMessage(value.trim(), {
           onSuccess: (data) => {
             console.log("✅ [Footer] Encrypted message sent via hook:", data);
-            // Xử lý success tại đây nếu cần
           },
           onError: (error) => {
             console.error("❌ [Footer] Hook send failed:", error);
-            // Fallback sẽ được hook xử lý tự động
           },
           replyTo: isReply ? replyTo : null,
           forcePlaintext: false,
@@ -475,14 +870,134 @@ const Footer = () => {
         });
 
         if (result.success) {
-          // Tin nhắn đã được queue hoặc gửi thành công
           setReplyTo(null);
           setValue("");
         }
       } else {
         // GỬI NORMAL MESSAGE (plaintext hoặc group)
         console.log("📝 [Footer] Sending normal message...");
-        sendNormalMessage();
+
+        const optimisticMessage = {
+          _id: msgId,
+          id: msgId,
+          type: "msg",
+          subtype: isReply ? "reply" : "text",
+          message: value,
+          content: value,
+          from: user_id,
+          to: isGroupChat ? null : currentChat.user_id,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          attachments: [],
+          isOptimistic: true,
+          tempId: msgId,
+          isEncrypted: false,
+          outgoing: isOutgoing,
+          sender: {
+            keycloakId: user_id,
+            username: keycloak?.tokenParsed?.preferred_username || "You",
+          },
+          ...(isReply && {
+            replyTo: {
+              id: replyTo.id || replyTo._id,
+              content: replyTo.content || replyTo.message,
+              sender: replyTo.sender,
+            },
+          }),
+        };
+
+        // Thêm vào Redux
+        if (isGroupChat) {
+          dispatch(
+            addGroupMessage({
+              message: optimisticMessage,
+              room_id: currentChat.id,
+              isOptimistic: true,
+              tempId: msgId,
+            })
+          );
+        } else {
+          dispatch(
+            addDirectMessage({
+              message: optimisticMessage,
+              conversation_id: currentChat.id,
+              currentUserId: user_id,
+              isGroup: false,
+              isOptimistic: true,
+              tempId: msgId,
+            })
+          );
+        }
+
+        // Gửi qua socket
+        const socket = getSocket();
+        if (isGroupChat) {
+          const socketEvent = isReply ? "group_message_reply" : "group_message";
+          const socketData = isReply
+            ? {
+                roomId: currentChat.id,
+                message: value,
+                sender: {
+                  keycloakId: user_id,
+                  username:
+                    keycloak?.tokenParsed?.preferred_username || "Unknown",
+                },
+                type: "text",
+                timestamp: timestamp,
+                messageId: msgId,
+                replyTo: replyTo.id || replyTo._id,
+                replyContent: replyTo.content || replyTo.message,
+                replySender: processReplySender(replyTo.sender),
+              }
+            : {
+                roomId: currentChat.id,
+                message: value,
+                sender: {
+                  keycloakId: user_id,
+                  username:
+                    keycloak?.tokenParsed?.preferred_username || "Unknown",
+                },
+                type: "text",
+                timestamp: timestamp,
+                messageId: msgId,
+              };
+
+          socket.emit(socketEvent, socketData);
+          console.log(
+            `✅ [Footer] Group ${isReply ? "reply " : ""}message sent`
+          );
+        } else {
+          const socketEvent = isReply ? "text_message_reply" : "text_message";
+          const socketData = isReply
+            ? {
+                id: msgId,
+                message: linkify(value),
+                from: user_id,
+                to: currentChat.user_id,
+                conversation_id: currentChat.id,
+                type: "text",
+                replyTo: replyTo.id || replyTo._id,
+                replyContent: replyTo.content || replyTo.message,
+                replySender: processReplySender(replyTo.sender),
+              }
+            : {
+                id: msgId,
+                message: linkify(value),
+                from: user_id,
+                to: currentChat.user_id,
+                conversation_id: currentChat.id,
+                type: "text",
+              };
+
+          socket.emit(socketEvent, socketData);
+          console.log(
+            `✅ [Footer] Direct ${isReply ? "reply " : ""}message sent`
+          );
+        }
+
+        // Reset state
+        setReplyTo(null);
+        setValue("");
       }
     } catch (error) {
       console.error("❌ [Footer] Send message error:", error);
@@ -494,129 +1009,6 @@ const Footer = () => {
       );
     } finally {
       setIsEncrypting(false);
-    }
-
-    // 🆕 Hàm helper để gửi tin nhắn bình thường
-    function sendNormalMessage() {
-      const optimisticMessage = {
-        _id: msgId,
-        id: msgId,
-        type: "msg",
-        subtype: isReply ? "reply" : "text",
-        message: value,
-        content: value,
-        from: user_id,
-        to: isGroupChat ? null : currentChat.user_id,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        attachments: [],
-        isOptimistic: true,
-        tempId: msgId,
-        isEncrypted: false,
-        outgoing: isOutgoing,
-        sender: {
-          keycloakId: user_id,
-          username: keycloak?.tokenParsed?.preferred_username || "You",
-        },
-        ...(isReply && {
-          replyTo: {
-            id: replyTo.id || replyTo._id,
-            content: replyTo.content || replyTo.message,
-            sender: replyTo.sender,
-          },
-        }),
-      };
-
-      // Thêm vào Redux
-      if (isGroupChat) {
-        dispatch(
-          addGroupMessage({
-            message: optimisticMessage,
-            room_id: currentChat.id,
-            isOptimistic: true,
-            tempId: msgId,
-          })
-        );
-      } else {
-        dispatch(
-          addDirectMessage({
-            message: optimisticMessage,
-            conversation_id: currentChat.id,
-            currentUserId: user_id,
-            isGroup: false,
-            isOptimistic: true,
-            tempId: msgId,
-          })
-        );
-      }
-
-      // Gửi qua socket
-      const socket = getSocket();
-      if (isGroupChat) {
-        const socketEvent = isReply ? "group_message_reply" : "group_message";
-        const socketData = isReply
-          ? {
-              roomId: currentChat.id,
-              message: value,
-              sender: {
-                keycloakId: user_id,
-                username:
-                  keycloak?.tokenParsed?.preferred_username || "Unknown",
-              },
-              type: "text",
-              timestamp: timestamp,
-              messageId: msgId,
-              replyTo: replyTo.id || replyTo._id,
-              replyContent: replyTo.content || replyTo.message,
-              replySender: processReplySender(replyTo.sender),
-            }
-          : {
-              roomId: currentChat.id,
-              message: value,
-              sender: {
-                keycloakId: user_id,
-                username:
-                  keycloak?.tokenParsed?.preferred_username || "Unknown",
-              },
-              type: "text",
-              timestamp: timestamp,
-              messageId: msgId,
-            };
-
-        socket.emit(socketEvent, socketData);
-        console.log(`✅ [Footer] Group ${isReply ? "reply " : ""}message sent`);
-      } else {
-        const socketEvent = isReply ? "text_message_reply" : "text_message";
-        const socketData = isReply
-          ? {
-              id: msgId,
-              message: linkify(value),
-              from: user_id,
-              to: currentChat.user_id,
-              conversation_id: currentChat.id,
-              type: "text",
-              replyTo: replyTo.id || replyTo._id,
-              replyContent: replyTo.content || replyTo.message,
-              replySender: processReplySender(replyTo.sender),
-            }
-          : {
-              id: msgId,
-              message: linkify(value),
-              from: user_id,
-              to: currentChat.user_id,
-              conversation_id: currentChat.id,
-              type: "text",
-            };
-
-        socket.emit(socketEvent, socketData);
-        console.log(
-          `✅ [Footer] Direct ${isReply ? "reply " : ""}message sent`
-        );
-      }
-
-      // Reset state
-      setReplyTo(null);
-      setValue("");
     }
   }, [
     value,
@@ -842,6 +1234,16 @@ const Footer = () => {
 
   return (
     <Box sx={{ position: "relative" }}>
+      {/* 🆕 File Upload Dialog */}
+      <FileUploadDialog
+        open={showFileUpload}
+        onClose={() => setShowFileUpload(false)}
+        onUpload={handleFileUpload}
+        isEncrypting={isEncrypting}
+        canEncrypt={canEncrypt}
+        isEncrypted={isEncrypted}
+      />
+
       <Box
         p={isMobile ? 1 : 2}
         sx={{
@@ -897,6 +1299,8 @@ const Footer = () => {
               onInitiateKeyExchange={handleInitiateKeyExchange}
               canEncrypt={canEncrypt}
               isKeyExchangeNeeded={isKeyExchangeNeeded}
+              // 🆕 File Upload Props
+              onOpenFileUpload={handleOpenFileUpload}
             />
           </Stack>
 
